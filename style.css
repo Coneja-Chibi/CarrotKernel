@@ -1388,10 +1388,12 @@
     background: var(--SmartThemeBlurTintColor);
     border: 2px solid var(--active);
     border-radius: 16px;
-    width: 420px;
-    max-width: 90vw;
-    max-height: 70vh;
+    width: min(420px, 90vw, 90%);
+    max-width: min(420px, 90vw, 90%);
+    min-width: min(300px, 80vw);
+    max-height: min(70vh, 80%);
     overflow-y: auto;
+    box-sizing: border-box;
     box-shadow: 
         0 20px 40px color-mix(in srgb, black 40%, transparent),
         0 8px 16px color-mix(in srgb, black 20%, transparent);
@@ -1400,6 +1402,29 @@
     opacity: 0;
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     backdrop-filter: blur(5px);
+}
+
+/* Responsive sizing for small screens */
+@media (max-width: 768px) {
+    .carrot-tutorial-popup {
+        width: min(95vw, 95%);
+        max-width: min(95vw, 95%);
+        min-width: min(280px, 85vw);
+        max-height: min(80vh, 85%);
+        border-radius: 12px;
+        margin: 2.5vw;
+    }
+}
+
+@media (max-width: 480px) {
+    .carrot-tutorial-popup {
+        width: min(98vw, 98%);
+        max-width: min(98vw, 98%);
+        min-width: min(260px, 95vw);
+        max-height: min(85vh, 90%);
+        border-radius: 8px;
+        margin: 1vw;
+    }
 }
 
 .carrot-tutorial-overlay.active .carrot-tutorial-popup {

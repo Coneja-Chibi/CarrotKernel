@@ -8207,9 +8207,23 @@ window.CarrotKernel = {
         this.showTutorialStep();
     },
     
+    // Get tutorial overlay - check modal context first, then document
+    getTutorialOverlay() {
+        // First check if we're in a modal context
+        const modal = document.querySelector('.popup:not(.popup_template)');
+        if (modal) {
+            const modalOverlay = modal.querySelector('#carrot-tutorial-overlay');
+            if (modalOverlay) {
+                return modalOverlay;
+            }
+        }
+        // Fall back to document-level overlay
+        return document.getElementById('carrot-tutorial-overlay');
+    },
+
     // Show tutorial overlay - no scroll control
     showTutorialOverlay() {
-        const overlay = document.getElementById('carrot-tutorial-overlay');
+        const overlay = this.getTutorialOverlay();
         
         // Enable tutorial mode
         this.enableTutorialMode();
@@ -8262,8 +8276,8 @@ window.CarrotKernel = {
     
     // Hide tutorial overlay with proper cleanup
     closeTutorial() {
-        const overlay = document.getElementById('carrot-tutorial-overlay');
-        const spotlight = document.getElementById('carrot-tutorial-spotlight');
+        const overlay = this.getTutorialOverlay();
+        const spotlight = overlay.querySelector('#carrot-tutorial-spotlight');
         
         // Remove active classes
         overlay.classList.remove('active');
@@ -8281,7 +8295,7 @@ window.CarrotKernel = {
             spotlight.style.cssText = '';
             
             // Reset popup position and remove arrows
-            const popup = document.getElementById('carrot-tutorial-popup');
+            const popup = overlay.querySelector('#carrot-tutorial-popup');
             popup.style.cssText = '';
             popup.className = popup.className.replace(/carrot-popup-\w+/g, '');
             
@@ -8333,15 +8347,17 @@ window.CarrotKernel = {
     
     // Simple element highlighting with golden glow
     highlightElement(targetElement, step) {
+        const overlay = this.getTutorialOverlay();
+        
         // Update popup content first
-        document.getElementById('carrot-tutorial-popup-title').textContent = step.title;
-        document.getElementById('carrot-tutorial-popup-content').innerHTML = step.content;
-        document.getElementById('carrot-tutorial-progress').textContent = 
+        overlay.querySelector('#carrot-tutorial-popup-title').textContent = step.title;
+        overlay.querySelector('#carrot-tutorial-popup-content').innerHTML = step.content;
+        overlay.querySelector('#carrot-tutorial-progress').textContent = 
             `${this.currentStep + 1} / ${this.tutorialSteps.length}`;
         
         // Update navigation buttons
-        const prevBtn = document.getElementById('carrot-tutorial-prev');
-        const nextBtn = document.getElementById('carrot-tutorial-next');
+        const prevBtn = overlay.querySelector('#carrot-tutorial-prev');
+        const nextBtn = overlay.querySelector('#carrot-tutorial-next');
         
         prevBtn.style.display = this.currentStep > 0 ? 'flex' : 'none';
         nextBtn.textContent = this.currentStep === this.tutorialSteps.length - 1 ? 'Finish' : 'Next';
@@ -8351,75 +8367,144 @@ window.CarrotKernel = {
         this.positionTutorialPopup(rect);
         
         // Hide the overlay spotlight - we're just using element highlighting now
-        const spotlight = document.getElementById('carrot-tutorial-spotlight');
+        const spotlight = overlay.querySelector('#carrot-tutorial-spotlight');
         spotlight.style.display = 'none';
         
         CarrotDebug.tutorial('highlight', this.currentTutorial, step.target);
     },
     
-    // Fixed popup positioning - viewport-based calculations
+    // Responsive popup positioning - works across all screen sizes and zoom levels
     positionTutorialPopup(targetRect) {
-        const popup = document.getElementById('carrot-tutorial-popup');
-        const viewportHeight = window.innerHeight;
-        const viewportWidth = window.innerWidth;
-        const popupWidth = 420;
+        const overlay = this.getTutorialOverlay();
+        const popup = overlay.querySelector('#carrot-tutorial-popup');
         
-        // Force popup to be visible to measure height
+        // Check if we're in a modal context
+        const modal = document.querySelector('.popup:not(.popup_template)');
+        let containerRect, containerElement;
+        
+        if (modal && overlay.parentElement === modal) {
+            // Use modal as container
+            containerElement = modal;
+            containerRect = modal.getBoundingClientRect();
+        } else {
+            // Use viewport as container
+            containerElement = document.documentElement;
+            containerRect = { 
+                top: 0, 
+                left: 0, 
+                width: window.innerWidth, 
+                height: window.innerHeight 
+            };
+        }
+        
+        // Reset popup styles to get natural dimensions
+        popup.style.cssText = '';
+        popup.style.position = 'absolute';
         popup.style.visibility = 'hidden';
         popup.style.display = 'block';
-        const popupHeight = popup.offsetHeight;
-        popup.style.visibility = '';
+        popup.style.maxWidth = '90vw'; // Responsive max width
+        popup.style.width = 'min(420px, 90vw)'; // Responsive width with fallback
         
-        const margin = 20;
+        // Get actual popup dimensions after styling
+        const popupRect = popup.getBoundingClientRect();
+        const popupWidth = popupRect.width;
+        const popupHeight = popupRect.height;
+        
+        // Use percentage-based margins that scale with viewport
+        const marginPercent = 2; // 2% of container
+        const margin = Math.max(10, (containerRect.width * marginPercent) / 100); // Min 10px, scales up
         let left, top, positioning;
         
+        // Convert target rect to be relative to the container
+        let relativeTargetRect = {
+            top: targetRect.top - containerRect.top,
+            left: targetRect.left - containerRect.left,
+            right: targetRect.right - containerRect.left,
+            bottom: targetRect.bottom - containerRect.top,
+            width: targetRect.width,
+            height: targetRect.height
+        };
+        
+        // Get container dimensions
+        const containerWidth = containerRect.width;
+        const containerHeight = containerRect.height;
+        
+        // Ensure popup fits within container with margins
+        const maxWidth = containerWidth - (margin * 2);
+        const maxHeight = containerHeight - (margin * 2);
+        
+        if (popupWidth > maxWidth) {
+            popup.style.width = `${maxWidth}px`;
+            popup.style.maxWidth = `${maxWidth}px`;
+        }
+        
         // Priority 1: Right side (most preferred)
-        const spaceRight = viewportWidth - targetRect.right;
+        const spaceRight = containerWidth - relativeTargetRect.right;
         if (spaceRight >= popupWidth + margin) {
-            left = targetRect.right + margin;
+            left = Math.min(relativeTargetRect.right + margin, containerWidth - popupWidth - margin);
             top = Math.max(margin, 
-                Math.min(targetRect.top + (targetRect.height / 2) - (popupHeight / 2), 
-                         viewportHeight - popupHeight - margin));
+                Math.min(relativeTargetRect.top + (relativeTargetRect.height / 2) - (popupHeight / 2), 
+                         containerHeight - popupHeight - margin));
             positioning = 'right';
         }
         // Priority 2: Left side
-        else if (targetRect.left >= popupWidth + margin) {
-            left = targetRect.left - popupWidth - margin;
+        else if (relativeTargetRect.left >= popupWidth + margin) {
+            left = Math.max(margin, relativeTargetRect.left - popupWidth - margin);
             top = Math.max(margin, 
-                Math.min(targetRect.top + (targetRect.height / 2) - (popupHeight / 2), 
-                         viewportHeight - popupHeight - margin));
+                Math.min(relativeTargetRect.top + (relativeTargetRect.height / 2) - (popupHeight / 2), 
+                         containerHeight - popupHeight - margin));
             positioning = 'left';
         }
         // Priority 3: Bottom
-        else if (viewportHeight - targetRect.bottom >= popupHeight + margin) {
+        else if (containerHeight - relativeTargetRect.bottom >= popupHeight + margin) {
             left = Math.max(margin, 
-                Math.min(targetRect.left + (targetRect.width / 2) - (popupWidth / 2), 
-                         viewportWidth - popupWidth - margin));
-            top = targetRect.bottom + margin;
+                Math.min(relativeTargetRect.left + (relativeTargetRect.width / 2) - (popupWidth / 2), 
+                         containerWidth - popupWidth - margin));
+            top = Math.min(relativeTargetRect.bottom + margin, containerHeight - popupHeight - margin);
             positioning = 'bottom';
         }
         // Priority 4: Top
-        else if (targetRect.top >= popupHeight + margin) {
+        else if (relativeTargetRect.top >= popupHeight + margin) {
             left = Math.max(margin, 
-                Math.min(targetRect.left + (targetRect.width / 2) - (popupWidth / 2), 
-                         viewportWidth - popupWidth - margin));
-            top = targetRect.top - popupHeight - margin;
+                Math.min(relativeTargetRect.left + (relativeTargetRect.width / 2) - (popupWidth / 2), 
+                         containerWidth - popupWidth - margin));
+            top = Math.max(margin, relativeTargetRect.top - popupHeight - margin);
             positioning = 'top';
         }
-        // Fallback: Right side with viewport constraints
+        // Fallback: Center with container constraints (ensures always visible)
         else {
-            left = Math.min(targetRect.right + margin, viewportWidth - popupWidth - margin);
-            top = Math.max(margin, 
-                Math.min(targetRect.top, viewportHeight - popupHeight - margin));
-            positioning = 'right';
+            left = Math.max(margin, Math.min(
+                relativeTargetRect.left, 
+                containerWidth - popupWidth - margin
+            ));
+            top = Math.max(margin, Math.min(
+                relativeTargetRect.top - popupHeight - margin,
+                containerHeight - popupHeight - margin
+            ));
+            positioning = 'center';
         }
         
-        // Apply positioning
-        popup.style.position = 'fixed';
+        // Apply positioning - use absolute positioning within the overlay/modal
+        popup.style.position = 'absolute';
         popup.style.left = `${left}px`;
         popup.style.top = `${top}px`;
         popup.style.transform = 'none';
         popup.style.zIndex = '999999';
+        popup.style.visibility = 'visible';
+        
+        // Additional responsive constraints
+        popup.style.maxHeight = `${maxHeight}px`;
+        popup.style.overflowY = 'auto';
+        popup.style.boxSizing = 'border-box';
+        
+        // Ensure popup stays within bounds even with zoom
+        const finalRect = popup.getBoundingClientRect();
+        if (finalRect.right > containerRect.right) {
+            popup.style.left = `${containerRect.width - popupWidth - margin}px`;
+        }
+        if (finalRect.bottom > containerRect.bottom) {
+            popup.style.top = `${containerHeight - popupHeight - margin}px`;
+        }
         
         // Add positioning class for animations
         popup.className = popup.className.replace(/carrot-popup-\w+/g, '');
@@ -11015,36 +11100,39 @@ class CarrotTemplatePromptEditInterface {
             allowHorizontalScrolling: true
         });
         
-        // Add tutorial overlay to this modal if it doesn't exist
-        if (!document.getElementById('carrot-tutorial-overlay')) {
-            const tutorialHTML = `
-                <!-- Tutorial Overlay -->
-                <div class="carrot-tutorial-overlay" id="carrot-tutorial-overlay" style="display: none;">
-                    <div class="carrot-tutorial-spotlight" id="carrot-tutorial-spotlight"></div>
-                    <div class="carrot-tutorial-popup" id="carrot-tutorial-popup">
-                        <div class="carrot-tutorial-popup-header">
-                            <h4 id="carrot-tutorial-popup-title">Tutorial Step</h4>
-                            <button class="carrot-tutorial-close" onclick="CarrotKernel.closeTutorial()">
-                                <i class="fa-solid fa-times"></i>
-                            </button>
-                        </div>
-                        <div class="carrot-tutorial-popup-content" id="carrot-tutorial-popup-content">
-                            <!-- Tutorial content -->
-                        </div>
-                        <div class="carrot-tutorial-popup-nav">
-                            <button class="carrot-tutorial-prev" id="carrot-tutorial-prev" onclick="CarrotKernel.previousTutorialStep()">
-                                <i class="fa-solid fa-arrow-left"></i> Previous
-                            </button>
-                            <span class="carrot-tutorial-progress" id="carrot-tutorial-progress">1 / 5</span>
-                            <button class="carrot-tutorial-next" id="carrot-tutorial-next" onclick="CarrotKernel.nextTutorialStep()">
-                                Next <i class="fa-solid fa-arrow-right"></i>
-                            </button>
+        // Wait for modal to be created, then inject tutorial overlay into it
+        setTimeout(() => {
+            const modal = document.querySelector('.popup:not(.popup_template)');
+            if (modal && !modal.querySelector('#carrot-tutorial-overlay')) {
+                const tutorialHTML = `
+                    <!-- Tutorial Overlay -->
+                    <div class="carrot-tutorial-overlay" id="carrot-tutorial-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999999;">
+                        <div class="carrot-tutorial-spotlight" id="carrot-tutorial-spotlight"></div>
+                        <div class="carrot-tutorial-popup" id="carrot-tutorial-popup">
+                            <div class="carrot-tutorial-popup-header">
+                                <h4 id="carrot-tutorial-popup-title">Tutorial Step</h4>
+                                <button class="carrot-tutorial-close" onclick="CarrotKernel.closeTutorial()">
+                                    <i class="fa-solid fa-times"></i>
+                                </button>
+                            </div>
+                            <div class="carrot-tutorial-popup-content" id="carrot-tutorial-popup-content">
+                                <!-- Tutorial content -->
+                            </div>
+                            <div class="carrot-tutorial-popup-nav">
+                                <button class="carrot-tutorial-prev" id="carrot-tutorial-prev" onclick="CarrotKernel.previousTutorialStep()">
+                                    <i class="fa-solid fa-arrow-left"></i> Previous
+                                </button>
+                                <span class="carrot-tutorial-progress" id="carrot-tutorial-progress">1 / 5</span>
+                                <button class="carrot-tutorial-next" id="carrot-tutorial-next" onclick="CarrotKernel.nextTutorialStep()">
+                                    Next <i class="fa-solid fa-arrow-right"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            `;
-            document.body.insertAdjacentHTML('beforeend', tutorialHTML);
-        }
+                `;
+                modal.insertAdjacentHTML('beforeend', tutorialHTML);
+            }
+        }, 100);
 
         // Wait for DOM to be ready, then setup
         setTimeout(() => {
