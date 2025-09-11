@@ -1,0 +1,11 @@
+{
+    "display_name": "CarrotKernel",
+    "loading_order": 50,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "CarrotKernel Team",
+    "version": "1.0.0",
+    "description": "Modern character tag system with flexible display modes - spiritual successor to BunnyMoTags"
+}

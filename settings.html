@@ -1,0 +1,313 @@
+<div id="carrot_settings" class="carrot-extension-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>🥕 CarrotKernel</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            
+            <!-- Feature Controls -->
+            <div class="carrot-card carrot-enable-card carrot-tutorial-target" id="carrot-feature-controls"
+                 data-tutorial-step="feature-controls"
+                 data-tooltip="Master controls for CarrotKernel functionality">
+                <div class="carrot-card-header">
+                    <h3>⚡ Feature Controls</h3>
+                    <p class="carrot-card-subtitle">Character consistency tracking system</p>
+                </div>
+                <div class="carrot-card-body">
+                    <div class="carrot-settings-grid">
+                        <div class="carrot-setting-item">
+                            <label class="carrot-toggle">
+                                <input type="checkbox" id="carrot_enabled" checked>
+                                <span class="carrot-toggle-slider"></span>
+                                <span class="carrot-toggle-label">Master Enable</span>
+                            </label>
+                            <div class="carrot-help-text">Enable/disable CarrotKernel character tracking</div>
+                        </div>
+                        <div class="carrot-setting-item">
+                            <label class="carrot-toggle">
+                                <input type="checkbox" id="carrot_send_to_ai" checked>
+                                <span class="carrot-toggle-slider"></span>
+                                <span class="carrot-toggle-label">AI Injection</span>
+                            </label>
+                            <div class="carrot-help-text">Send character data to AI context for consistency</div>
+                        </div>
+                        <div class="carrot-setting-item">
+                            <label class="carrot-label">
+                                <span class="carrot-label-text">Display Mode</span>
+                                <span class="carrot-label-hint">How to show injected character data</span>
+                            </label>
+                            <select id="carrot_display_mode" class="carrot-select">
+                                <option value="none">No Display</option>
+                                <option value="thinking">Thinking Box Style</option>
+                                <option value="cards">Character Cards</option>
+                            </select>
+                        </div>
+                        <div class="carrot-setting-item">
+                            <label class="carrot-toggle">
+                                <input type="checkbox" id="carrot_auto_expand">
+                                <span class="carrot-toggle-slider"></span>
+                                <span class="carrot-toggle-label">Auto-expand thinking boxes</span>
+                            </label>
+                        </div>
+                        <div class="carrot-setting-item">
+                            <label class="carrot-toggle">
+                                <input type="checkbox" id="carrot_debug_mode">
+                                <span class="carrot-toggle-slider"></span>
+                                <span class="carrot-toggle-label">Debug Mode</span>
+                            </label>
+                            <div class="carrot-help-text">Enable detailed console logging</div>
+                        </div>
+                        <div class="carrot-setting-item">
+                            <label class="carrot-toggle">
+                                <input type="checkbox" id="carrot_filter_context">
+                                <span class="carrot-toggle-slider"></span>
+                                <span class="carrot-toggle-label">Filter tags from AI context</span>
+                            </label>
+                            <div class="carrot-help-text">Hide BunnyMoTags from AI (like ST's reasoning system)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Status Panels -->
+            <div class="carrot-status-section">
+                <div class="carrot-status-panels">
+                    <div class="carrot-status-panel carrot-status-system carrot-clickable" 
+                         data-tooltip="Click to open System Tutorial - Learn how to configure CarrotKernel settings"
+                         onclick="CarrotKernel.openSystemTutorial()">
+                        <div class="carrot-status-icon">
+                            <i class="fa-solid fa-microchip"></i>
+                        </div>
+                        <div class="carrot-status-content">
+                            <div class="carrot-status-title">System Status</div>
+                            <div class="carrot-status-value" id="carrot-system-status">Initializing...</div>
+                            <div class="carrot-status-detail" id="carrot-system-detail">Click to open tutorial</div>
+                        </div>
+                        <div class="carrot-status-indicator" id="carrot-system-indicator">
+                            <div class="carrot-pulse-dot"></div>
+                        </div>
+                        <div class="carrot-click-hint">
+                            <i class="fa-solid fa-mouse-pointer"></i>
+                        </div>
+                    </div>
+                    
+                    <div class="carrot-status-panel carrot-status-repository carrot-clickable" 
+                         data-tooltip="Click to manually scan repositories - Or learn about character indexing"
+                         onclick="CarrotKernel.openRepositoryManager()">
+                        <div class="carrot-status-icon">
+                            <i class="fa-solid fa-database"></i>
+                        </div>
+                        <div class="carrot-status-content">
+                            <div class="carrot-status-title">Character Repository</div>
+                            <div class="carrot-status-value" id="carrot-repo-status">0 characters indexed</div>
+                            <div class="carrot-status-detail" id="carrot-repo-detail">Click to manage repositories</div>
+                        </div>
+                        <div class="carrot-status-indicator" id="carrot-repo-indicator">
+                            <div class="carrot-pulse-dot"></div>
+                        </div>
+                        <div class="carrot-click-hint">
+                            <i class="fa-solid fa-mouse-pointer"></i>
+                        </div>
+                    </div>
+                    
+                    <div class="carrot-status-panel carrot-status-injection carrot-clickable" 
+                         data-tooltip="Click to learn about AI injection - How character data gets sent to AI context"
+                         onclick="CarrotKernel.openInjectionTutorial()">
+                        <div class="carrot-status-icon">
+                            <i class="fa-solid fa-syringe"></i>
+                        </div>
+                        <div class="carrot-status-content">
+                            <div class="carrot-status-title">AI Injection</div>
+                            <div class="carrot-status-value" id="carrot-injection-status">Standby</div>
+                            <div class="carrot-status-detail" id="carrot-injection-detail">Click to learn about injection</div>
+                        </div>
+                        <div class="carrot-status-indicator" id="carrot-injection-indicator">
+                            <div class="carrot-pulse-dot"></div>
+                        </div>
+                        <div class="carrot-click-hint">
+                            <i class="fa-solid fa-mouse-pointer"></i>
+                        </div>
+                        <div class="carrot-hover-tooltip" id="carrot-injection-tooltip">
+                            <div class="carrot-tooltip-header">
+                                <i class="fa-solid fa-info-circle"></i>
+                                <strong>AI Injection System</strong>
+                            </div>
+                            <div class="carrot-tooltip-content">
+                                <p><strong>How it works:</strong></p>
+                                <ul>
+                                    <li>Detects character mentions in your messages</li>
+                                    <li>Injects relevant character data at depth 4</li>
+                                    <li>Uses ST's native /inject command for consistency</li>
+                                    <li>Ephemeral injections don't clutter chat history</li>
+                                </ul>
+                                <p><strong>Current Status:</strong> <span id="carrot-injection-tooltip-status">Ready</span></p>
+                                <div class="carrot-tooltip-example">
+                                    <strong>Example injection:</strong>
+                                    <code>&lt;NAME:Alice&gt;, &lt;SPECIES:Human&gt;, &lt;PERSONALITY:Shy&gt;</code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="carrot-status-panel carrot-status-templates carrot-clickable" 
+                         data-tooltip="Click to manage prompt templates - Create custom injection templates with variable control"
+                         onclick="CarrotKernel.openTemplateManager()">
+                        <div class="carrot-status-icon">
+                            <i class="fa-solid fa-file-code"></i>
+                        </div>
+                        <div class="carrot-status-content">
+                            <div class="carrot-status-title">Template Manager</div>
+                            <div class="carrot-status-value" id="carrot-template-status">Default template</div>
+                            <div class="carrot-status-detail" id="carrot-template-detail">Click to manage templates</div>
+                        </div>
+                        <div class="carrot-status-indicator" id="carrot-template-indicator">
+                            <div class="carrot-pulse-dot"></div>
+                        </div>
+                        <div class="carrot-click-hint">
+                            <i class="fa-solid fa-mouse-pointer"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Lorebook Management -->
+            <div class="carrot-card carrot-tutorial-target" id="carrot-lorebook-management"
+                 data-tutorial-step="lorebook-management"
+                 data-tooltip="Select and configure character repositories from your lorebooks">
+                <div class="carrot-card-header">
+                    <h3>📚 Lorebook Management</h3>
+                    <p class="carrot-card-subtitle">Configure character repositories and tag libraries</p>
+                </div>
+                <div class="carrot-card-body">
+                    <div class="carrot-search-container">
+                        <input type="text" id="carrot-search-lorebooks" class="carrot-search-input" placeholder="🔍 Search lorebooks...">
+                    </div>
+                    <div class="carrot-lorebook-container">
+                        <div class="carrot-lorebook-list" id="carrot-lorebook-list">
+                            <div class="carrot-loading-state">
+                                <div class="carrot-spinner"></div>
+                                <p>Loading available lorebooks...</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="carrot-action-bar">
+                        <button id="carrot-scan-btn" class="carrot-primary-btn">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            Scan Selected Lorebooks
+                        </button>
+                        <button id="carrot-test-display" class="carrot-secondary-btn">
+                            <i class="fa-solid fa-eye"></i>
+                            Test Display
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Advanced Settings -->
+            <div class="carrot-card carrot-tutorial-target" id="carrot-advanced-settings"
+                 data-tutorial-step="advanced-settings"
+                 data-tooltip="Fine-tune injection parameters and display limits">
+                <div class="carrot-card-header">
+                    <h3>🔧 Advanced Settings</h3>
+                    <p class="carrot-card-subtitle">Fine-tune character injection and display</p>
+                </div>
+                <div class="carrot-card-body">
+                    <div class="carrot-settings-grid">
+                        <div class="carrot-setting-item">
+                            <label class="carrot-label">
+                                <span class="carrot-label-text">Max Characters Displayed</span>
+                                <span class="carrot-label-hint">Limit characters shown to prevent clutter (affects both injection and display)</span>
+                            </label>
+                            <input type="number" id="carrot_max_characters" class="carrot-input" min="1" max="20" value="6">
+                        </div>
+                        <div class="carrot-setting-item">
+                            <label class="carrot-label">
+                                <span class="carrot-label-text">Injection Depth</span>
+                                <span class="carrot-label-hint">How deep to inject character data (4 = GuidedGenerations standard)</span>
+                            </label>
+                            <input type="number" id="carrot_injection_depth" class="carrot-input" min="1" max="20" value="4">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Smart Help Section -->
+            <div class="carrot-help-section">
+                <div class="carrot-help-header">
+                    <h4>💡 Need Help?</h4>
+                    <p class="carrot-help-subtitle">Click any status panel above for contextual guidance and tutorials</p>
+                </div>
+                
+                <div class="carrot-help-flow">
+                    <div class="carrot-help-step">
+                        <div class="carrot-help-number">1</div>
+                        <div class="carrot-help-text">
+                            <strong>System Status:</strong> Click for setup tutorial
+                        </div>
+                    </div>
+                    <div class="carrot-help-arrow">→</div>
+                    <div class="carrot-help-step">
+                        <div class="carrot-help-number">2</div>
+                        <div class="carrot-help-text">
+                            <strong>Character Repository:</strong> Click to manage repositories
+                        </div>
+                    </div>
+                    <div class="carrot-help-arrow">→</div>
+                    <div class="carrot-help-step">
+                        <div class="carrot-help-number">3</div>
+                        <div class="carrot-help-text">
+                            <strong>AI Injection:</strong> Hover for technical details
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="carrot-format-example">
+                    <div class="carrot-format-header">
+                        <i class="fa-solid fa-code"></i>
+                        <strong>Character Repository Format Example</strong>
+                    </div>
+                    <div class="carrot-format-code">
+                        <code>&lt;BunnymoTags&gt;&lt;NAME:Alice Cooper&gt;, &lt;SPECIES:Human&gt;, &lt;PERSONALITY:Tsundere&gt;, &lt;TRAIT:Intelligent&gt;, &lt;APPEARANCE:Long blonde hair&gt;&lt;/BunnymoTags&gt;</code>
+                    </div>
+                    <div class="carrot-format-note">
+                        <i class="fa-solid fa-lightbulb"></i>
+                        <span>Place these blocks in your lorebook entries to create character repositories</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Popup Overlays -->
+            <div class="carrot-popup-overlay" id="carrot-popup-overlay" style="display: none;">
+                <div class="carrot-popup-container" id="carrot-popup-container">
+                    <!-- Dynamic popup content will be inserted here -->
+                </div>
+            </div>
+            
+            <!-- Tutorial Overlay -->
+            <div class="carrot-tutorial-overlay" id="carrot-tutorial-overlay" style="display: none;">
+                <div class="carrot-tutorial-spotlight" id="carrot-tutorial-spotlight"></div>
+                <div class="carrot-tutorial-popup" id="carrot-tutorial-popup">
+                    <div class="carrot-tutorial-popup-header">
+                        <h4 id="carrot-tutorial-popup-title">Tutorial Step</h4>
+                        <button class="carrot-tutorial-close" onclick="CarrotKernel.closeTutorial()">
+                            <i class="fa-solid fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="carrot-tutorial-popup-content" id="carrot-tutorial-popup-content">
+                        <!-- Tutorial content -->
+                    </div>
+                    <div class="carrot-tutorial-popup-nav">
+                        <button class="carrot-tutorial-prev" id="carrot-tutorial-prev" onclick="CarrotKernel.previousTutorialStep()">
+                            <i class="fa-solid fa-arrow-left"></i> Previous
+                        </button>
+                        <span class="carrot-tutorial-progress" id="carrot-tutorial-progress">1 / 5</span>
+                        <button class="carrot-tutorial-next" id="carrot-tutorial-next" onclick="CarrotKernel.nextTutorialStep()">
+                            Next <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
