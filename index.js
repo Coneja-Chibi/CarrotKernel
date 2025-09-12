@@ -7,6 +7,284 @@ import { getMessageTimeStamp } from '../../../RossAscends-mods.js';
 const extensionName = 'CarrotKernel';
 
 // =============================================================================
+// CARROT SHEET COMMAND SYSTEM 🥕
+// Handles !fullsheet, !tagsheet, !quicksheet commands for character sheet injection
+// =============================================================================
+
+// Sheet command detection and processing
+let pendingSheetCommand = null; // Store current sheet command if detected
+
+// Check if user message contains sheet commands
+function detectSheetCommand(messageText) {
+    if (!messageText || typeof messageText !== 'string') return null;
+    
+    const sheetCommands = [
+        { command: '!fullsheet', type: 'fullsheet' },
+        { command: '!tagsheet', type: 'tagsheet' }, 
+        { command: '!quicksheet', type: 'quicksheet' }
+    ];
+    
+    for (const { command, type } of sheetCommands) {
+        const regex = new RegExp(`${command}\\s+(.+)`, 'i');
+        const match = messageText.match(regex);
+        if (match) {
+            // Handle multiple character names separated by commas
+            const characterNames = match[1].split(',').map(name => name.trim()).filter(name => name.length > 0);
+            return {
+                type: type,
+                command: command,
+                characterNames: characterNames,
+                fullMatch: match[0]
+            };
+        }
+    }
+    
+    return null;
+}
+
+// Process sheet command and generate appropriate injection
+async function processSheetCommand(sheetData) {
+    console.log('🥕 SHEET COMMAND DEBUG: processSheetCommand called with:', sheetData);
+    
+    const { type, entry } = sheetData;
+    
+    console.log('🥕 SHEET COMMAND DEBUG: Processing sheet command type:', type);
+    
+    CarrotDebug.inject('Processing sheet command', {
+        type: type,
+        entry: !!entry
+    });
+    
+    // Create injection command
+    const settings = extension_settings[extensionName];
+    
+    // Create simple, effective mandatory prompt without duplicating macro content
+    const sheetTypeMap = {
+        'fullsheet': 'FULLSHEET',
+        'tagsheet': 'TAGSHEET', 
+        'quicksheet': 'QUICKSHEET'
+    };
+    
+    // Get the appropriate injection template
+    const templateCategoryMap = {
+        'fullsheet': 'BunnyMo Fullsheet Injection',
+        'tagsheet': 'BunnyMo Tagsheet Injection', 
+        'quicksheet': 'BunnyMo Quicksheet Injection'
+    };
+    
+    const injectionTemplate = CarrotTemplateManager.getPrimaryTemplateForCategory(templateCategoryMap[type]);
+    
+    let injectionText;
+    let depth = 4; // Default depth
+    let role = 'system'; // Default role
+    
+    if (injectionTemplate) {
+        // Use custom template - no character name needed since ST handles the targeting
+        injectionText = injectionTemplate.content;
+        
+        // Use template-specific depth and role settings
+        depth = injectionTemplate.settings?.inject_depth || injectionTemplate.depth || 4;
+        role = injectionTemplate.role || 'system';
+        
+        console.log('🥕 SHEET COMMAND DEBUG: Using template settings:', {
+            templateName: injectionTemplate.name,
+            depth: depth,
+            role: role
+        });
+    } else {
+        // Fallback to default fancy format and global settings
+        depth = settings.injectionDepth || 4;
+        role = settings.injectionRole || 'system';
+        
+        injectionText = `🚨 **MANDATORY OOC OVERRIDE** 🚨
+
+**SYSTEM DIRECTIVE:** A !${sheetTypeMap[type]} command has been detected and must be executed immediately.
+
+**INSTRUCTIONS:**
+• **CEASE** all current roleplay and narrative progression
+• **EXECUTE** the !${sheetTypeMap[type]} request as specified
+• **PROVIDE** comprehensive character sheet information
+• **RESUME** normal roleplay only after completing this request
+
+**PRIORITY:** CRITICAL - This system command takes precedence over all ongoing narrative.`;
+        
+        console.log('🥕 SHEET COMMAND DEBUG: Using fallback settings:', {
+            depth: depth,
+            role: role
+        });
+    }
+    
+    const injectionCommand = `/inject id=carrot-sheet-${type} position=chat ephemeral=true scan=true depth=${depth} role=${role} ${injectionText}`;
+    
+    CarrotDebug.inject('Executing sheet injection command', {
+        command: injectionCommand.substring(0, 100) + '...',
+        type: type,
+        promptLength: injectionText.length
+    });
+    
+    try {
+        await executeSlashCommandsWithOptions(injectionCommand, { displayCommand: false, showOutput: false });
+        
+        CarrotDebug.inject('✅ Sheet injection executed successfully', {
+            type: type,
+            injectionSize: injectionText.length
+        });
+        
+        return true;
+    } catch (error) {
+        CarrotDebug.error('❌ Sheet injection failed', {
+            error: error,
+            type: type
+        });
+        return false;
+    }
+}
+
+// Generate full character sheet
+function generateFullSheet(characterName, charData) {
+    const currentTemplate = CarrotTemplateManager.getPrimaryTemplateForCategory('BunnyMo Fullsheet Format');
+    
+    if (currentTemplate) {
+        // Use template system
+        const templateData = {
+            name: characterName,
+            tags: charData.tags
+        };
+        
+        return CarrotTemplateManager.processTemplate(currentTemplate.content, templateData);
+    }
+    
+    // Fallback to default format
+    let content = `# 📋 FULL CHARACTER SHEET: ${characterName}\n\n`;
+    
+    for (const [category, values] of charData.tags) {
+        if (values.size > 0) {
+            content += `## ${category.toUpperCase()}\n`;
+            Array.from(values).forEach(tag => {
+                content += `- ${tag}\n`;
+            });
+            content += '\n';
+        }
+    }
+    
+    return content;
+}
+
+// Generate tag-focused sheet
+function generateTagSheet(characterName, charData) {
+    const currentTemplate = CarrotTemplateManager.getPrimaryTemplateForCategory('BunnyMo Tagsheet Format');
+    
+    if (currentTemplate) {
+        // Use template system
+        const templateData = {
+            name: characterName,
+            tags: charData.tags
+        };
+        
+        return CarrotTemplateManager.processTemplate(currentTemplate.content, templateData);
+    }
+    
+    // Fallback to BunnymoTags format
+    let content = `<BunnymoTags><Name:${characterName}>`;
+    
+    // Build structured BunnymoTags format
+    const tagMap = new Map();
+    for (const [category, values] of charData.tags) {
+        if (values.size > 0) {
+            tagMap.set(category.toUpperCase(), Array.from(values));
+        }
+    }
+    
+    // Add genre if available
+    if (tagMap.has('GENRE')) {
+        content += `, <GENRE:${tagMap.get('GENRE').join(',')}>`;
+    }
+    
+    // Physical section
+    const physicalTags = ['SPECIES', 'GENDER', 'BUILD', 'SKIN', 'HAIR', 'STYLE'];
+    const physicalData = physicalTags.filter(tag => tagMap.has(tag));
+    if (physicalData.length > 0) {
+        content += ' <PHYSICAL>';
+        physicalData.forEach(tag => {
+            const values = tagMap.get(tag);
+            values.forEach(value => content += `<${tag}:${value}>, `);
+        });
+        content = content.slice(0, -2) + '</PHYSICAL>';
+    }
+    
+    // Personality section  
+    const personalityTags = ['PERSONALITY', 'TRAIT', 'DERE', 'ATTACHMENT', 'CONFLICT', 'BOUNDARIES', 'FLIRTING'];
+    const personalityData = personalityTags.filter(tag => tagMap.has(tag));
+    if (personalityData.length > 0) {
+        content += ' <PERSONALITY>';
+        personalityData.forEach(tag => {
+            const values = tagMap.get(tag);
+            values.forEach(value => content += `<${tag}:${value}>, `);
+        });
+        content = content.slice(0, -2) + '</PERSONALITY>';
+    }
+    
+    // NSFW section
+    const nsfwTags = ['ORIENTATION', 'POWER', 'KINK', 'CHEMISTRY', 'AROUSAL', 'TRAUMA', 'JEALOUSY'];
+    const nsfwData = nsfwTags.filter(tag => tagMap.has(tag));
+    if (nsfwData.length > 0) {
+        content += ' <NSFW>';
+        nsfwData.forEach(tag => {
+            const values = tagMap.get(tag);
+            values.forEach(value => content += `<${tag}:${value}>, `);
+        });
+        content = content.slice(0, -2) + '</NSFW>';
+    }
+    
+    content += ' </BunnymoTags>';
+    
+    // Add linguistics if available
+    if (tagMap.has('LING') || tagMap.has('LINGUISTICS')) {
+        const lingValues = tagMap.get('LING') || tagMap.get('LINGUISTICS') || [];
+        if (lingValues.length > 0) {
+            content += `\n\n<Linguistics> Character uses `;
+            lingValues.forEach((ling, index) => {
+                content += `<LING:${ling}>`;
+                if (index < lingValues.length - 1) content += ' and ';
+            });
+            content += ' in their speech patterns. </Linguistics>';
+        }
+    }
+    
+    return content;
+}
+
+// Generate quick reference sheet
+function generateQuickSheet(characterName, charData) {
+    const currentTemplate = CarrotTemplateManager.getPrimaryTemplateForCategory('BunnyMo Quicksheet Format');
+    
+    if (currentTemplate) {
+        // Use template system
+        const templateData = {
+            name: characterName,
+            tags: charData.tags
+        };
+        
+        return CarrotTemplateManager.processTemplate(currentTemplate.content, templateData);
+    }
+    
+    // Fallback to default format
+    let content = `# ⚡ QUICK SHEET: ${characterName}\n\n`;
+    
+    // Key categories only
+    const keyCategories = ['PHYSICAL', 'PERSONALITY', 'SPECIES', 'GENDER', 'NSFW'];
+    
+    for (const category of keyCategories) {
+        const values = charData.tags.get(category);
+        if (values && values.size > 0) {
+            content += `**${category}:** ${Array.from(values).join(', ')}\n`;
+        }
+    }
+    
+    return content;
+}
+
+// =============================================================================
 // CARROT TEMPLATE MANAGER SYSTEM 🥕
 // Simple, reliable template system inspired by qvink_memory's excellent approach
 // Avoids BunnyMoTags' overcomplicated failures - uses clean string substitution
@@ -105,6 +383,130 @@ const CarrotTemplateManager = {
                     description: 'Tags from characters currently detected in chat context',
                     enabled: true,
                     format: 'triggered_detailed'
+                }
+            },
+            settings: {
+                inject_depth: 4,
+                inject_position: 'depth',
+                auto_activate: true,
+                ephemeral: true
+            },
+            metadata: {
+                created: Date.now(),
+                modified: Date.now(),
+                usage_count: 0,
+                is_default: true,
+                is_primary: true
+            }
+        },
+        
+        'bunnymo_fullsheet_injection_default': {
+            id: 'bunnymo_fullsheet_injection_default',
+            name: 'Default Fullsheet Injection',
+            description: 'System prompt for !fullsheet commands',
+            category: 'BunnyMo Fullsheet Injection',
+            role: 'system',
+            content: `🚨 **MANDATORY OOC OVERRIDE** 🚨
+
+**SYSTEM DIRECTIVE:** A !FULLSHEET command has been detected and must be executed immediately.
+
+**INSTRUCTIONS:**
+• **CEASE** all current roleplay and narrative progression
+• **EXECUTE** the !FULLSHEET request for "{{CHARACTER_NAME}}" with complete comprehensive detail
+• **PROVIDE** ALL character categories, tags, and information in organized sections
+• **INCLUDE** physical traits, personality, background, abilities, and all available data
+• **RESUME** normal roleplay only after completing this comprehensive character sheet
+
+**PRIORITY:** CRITICAL - This system command takes precedence over all ongoing narrative.`,
+            variables: {
+                'CHARACTER_NAME': {
+                    type: 'system',
+                    description: 'Character name for the sheet request',
+                    enabled: true,
+                    format: 'text'
+                }
+            },
+            settings: {
+                inject_depth: 4,
+                inject_position: 'depth',
+                auto_activate: true,
+                ephemeral: true
+            },
+            metadata: {
+                created: Date.now(),
+                modified: Date.now(),
+                usage_count: 0,
+                is_default: true,
+                is_primary: true
+            }
+        },
+        
+        'bunnymo_tagsheet_injection_default': {
+            id: 'bunnymo_tagsheet_injection_default',
+            name: 'Default Tagsheet Injection',
+            description: 'System prompt for !tagsheet commands',
+            category: 'BunnyMo Tagsheet Injection',
+            role: 'system',
+            content: `🏷️ **MANDATORY OOC OVERRIDE** 🏷️
+
+**SYSTEM DIRECTIVE:** A !TAGSHEET command has been detected and must be executed immediately.
+
+**INSTRUCTIONS:**
+• **CEASE** all current roleplay and narrative progression
+• **EXECUTE** the !TAGSHEET request for ALL characters referenced in the message
+• **PROVIDE** complete BunnymoTags format for each character:
+  <BunnymoTags><Name:CHARACTER_NAME>, <GENRE:GENRE> <PHYSICAL><SPECIES:TYPE>, <GENDER:GENDER>, <BUILD:BUILD>, <SKIN:SKIN>, <HAIR:HAIR>, <STYLE:STYLE></PHYSICAL> <PERSONALITY><Dere:TYPE>, <TRAIT:TRAITS>, <ATTACHMENT:TYPE>, etc.</PERSONALITY> <NSFW><ORIENTATION:TYPE>, <POWER:TYPE>, <KINK:KINKS>, etc.</NSFW> </BunnymoTags>
+• **INCLUDE** <Linguistics> sections with <LING:STYLE> speech patterns
+• **RESUME** normal roleplay only after completing all character tagsheets
+
+**PRIORITY:** CRITICAL - This system command takes precedence over all ongoing narrative.`,
+            variables: {
+                'CHARACTER_NAME': {
+                    type: 'system',
+                    description: 'Character name for the sheet request',
+                    enabled: true,
+                    format: 'text'
+                }
+            },
+            settings: {
+                inject_depth: 4,
+                inject_position: 'depth',
+                auto_activate: true,
+                ephemeral: true
+            },
+            metadata: {
+                created: Date.now(),
+                modified: Date.now(),
+                usage_count: 0,
+                is_default: true,
+                is_primary: true
+            }
+        },
+        
+        'bunnymo_quicksheet_injection_default': {
+            id: 'bunnymo_quicksheet_injection_default',
+            name: 'Default Quicksheet Injection',
+            description: 'System prompt for !quicksheet commands',
+            category: 'BunnyMo Quicksheet Injection',
+            role: 'system',
+            content: `⚡ **MANDATORY OOC OVERRIDE** ⚡
+
+**SYSTEM DIRECTIVE:** A !QUICKSHEET command has been detected and must be executed immediately.
+
+**INSTRUCTIONS:**
+• **CEASE** all current roleplay and narrative progression  
+• **EXECUTE** the !QUICKSHEET request for "{{CHARACTER_NAME}}" with essential information only
+• **PROVIDE** key character details: Physical, Personality, Species, Gender, and NSFW basics
+• **FOCUS** on the most important identifying traits and characteristics
+• **RESUME** normal roleplay only after completing this quick reference
+
+**PRIORITY:** CRITICAL - This system command takes precedence over all ongoing narrative.`,
+            variables: {
+                'CHARACTER_NAME': {
+                    type: 'system',
+                    description: 'Character name for the sheet request',
+                    enabled: true,
+                    format: 'text'
                 }
             },
             settings: {
@@ -301,6 +703,8 @@ const CarrotTemplateManager = {
 
     // Compatibility method for BunnyMoTags interface
     setTemplate(id, template) {
+        console.log('🥕 SETTEMPLATE DEBUG: Input template depth:', template.depth, 'full template:', template);
+        
         // Convert BunnyMoTags template format to CarrotKernel format
         const convertedTemplate = {
             id: id,
@@ -311,8 +715,10 @@ const CarrotTemplateManager = {
             content: template.content || '',
             macros: template.macros || {},
             variables: template.variables || [],
+            depth: template.depth !== undefined ? template.depth : 4,  // Handle 0 correctly - don't treat as falsy
+            scan: template.scan !== false,
             settings: {
-                inject_depth: 4,
+                inject_depth: template.depth !== undefined ? template.depth : 4,  // Handle 0 correctly - don't treat as falsy
                 inject_position: 'depth',
                 auto_activate: true,
                 ephemeral: true
@@ -324,6 +730,8 @@ const CarrotTemplateManager = {
                 is_default: template.isDefault || false
             }
         };
+        
+        console.log('🥕 SETTEMPLATE DEBUG: Converted template depth:', convertedTemplate.depth, 'inject_depth:', convertedTemplate.settings.inject_depth);
         
         return this.updateTemplate(id, convertedTemplate);
     },
@@ -412,45 +820,39 @@ const CarrotTemplateManager = {
         saveSettingsDebounced();
     },
 
-    // Macro processing system - connects template variables to real CarrotKernel data
-    processMacros(templateContent) {
-        if (!templateContent) return '';
-        
-        let processedContent = templateContent;
-        
-        // Helper function to get currently triggered/active characters
-        const getTriggeredCharacters = () => {
-            if (!lastInjectedCharacters || lastInjectedCharacters.length === 0) {
-                return [];
-            }
-            return lastInjectedCharacters.filter(name => scannedCharacters.has(name))
-                .map(name => ({ name, data: scannedCharacters.get(name) }));
-        };
+    // Helper function to get currently triggered/active characters
+    getTriggeredCharacters() {
+        if (!lastInjectedCharacters || lastInjectedCharacters.length === 0) {
+            return [];
+        }
+        return lastInjectedCharacters.filter(name => scannedCharacters.has(name))
+            .map(name => ({ name, data: scannedCharacters.get(name) }));
+    },
 
-        // Helper function to extract tags by category from triggered characters only
-        const getTagsByCategory = (categoryKeywords) => {
-            const triggeredChars = getTriggeredCharacters();
-            if (triggeredChars.length === 0) return 'No characters triggered in conversation';
-            
-            const categoryTags = new Set();
-            for (const { name, data } of triggeredChars) {
-                if (data.tags && data.tags.size > 0) {
-                    for (const [category, tags] of data.tags) {
-                        // Check if this category matches our keywords
-                        if (categoryKeywords.some(keyword => category.toLowerCase().includes(keyword.toLowerCase()))) {
-                            const tagArray = Array.isArray(tags) ? tags : Array.from(tags);
-                            tagArray.forEach(tag => categoryTags.add(`${name}: ${tag}`));
-                        }
+    // Helper function to extract tags by category from triggered characters only
+    getTagsByCategory(categoryKeywords) {
+        const triggeredChars = this.getTriggeredCharacters();
+        if (triggeredChars.length === 0) return 'No characters triggered in conversation';
+        
+        const categoryTags = new Set();
+        for (const { name, data } of triggeredChars) {
+            if (data.tags && data.tags.size > 0) {
+                for (const [category, tags] of data.tags) {
+                    // Check if this category matches our keywords
+                    if (categoryKeywords.some(keyword => category.toLowerCase().includes(keyword.toLowerCase()))) {
+                        const tagArray = Array.isArray(tags) ? tags : Array.from(tags);
+                        tagArray.forEach(tag => categoryTags.add(`${name}: ${tag}`));
                     }
                 }
             }
-            return categoryTags.size > 0 ? Array.from(categoryTags).join(', ') : `No ${categoryKeywords[0]} tags found in triggered characters`;
-        };
+        }
+        return categoryTags.size > 0 ? Array.from(categoryTags).join(', ') : `No ${categoryKeywords[0]} tags found in triggered characters`;
+    },
 
-        // Process each macro type
-        const macroProcessors = {
+    // Macro processors - exposed as property so macro display system can access them
+    macroProcessors: {
             'CHARACTERS': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.CarrotTemplateManager.getTriggeredCharacters();
                 if (triggeredChars.length === 0) return 'No characters triggered in conversation';
                 
                 let output = '';
@@ -468,56 +870,56 @@ const CarrotTemplateManager = {
 
             // Individual character name macros
             'CHARACTER1': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length >= 1 ? triggeredChars[0].name : 'No character 1';
             },
             
             'CHARACTER2': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length >= 2 ? triggeredChars[1].name : 'No character 2';
             },
             
             'CHARACTER3': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length >= 3 ? triggeredChars[2].name : 'No character 3';
             },
             
             'CHARACTER4': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length >= 4 ? triggeredChars[3].name : 'No character 4';
             },
             
             'CHARACTER5': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length >= 5 ? triggeredChars[4].name : 'No character 5';
             },
             
             'PERSONALITY_TAGS': () => {
-                return getTagsByCategory(['personality', 'traits', 'behavior', 'mental', 'attitude', 'mind', 'dere', 'trait']);
+                return CarrotTemplateManager.getTagsByCategory(['personality', 'traits', 'behavior', 'mental', 'attitude', 'mind', 'dere', 'trait']);
             },
             
             'PHYSICAL_TAGS': () => {
-                return getTagsByCategory(['physical', 'appearance', 'body', 'species', 'gender', 'age', 'looks', 'build', 'skin', 'hair', 'style']);
+                return CarrotTemplateManager.getTagsByCategory(['physical', 'appearance', 'body', 'species', 'gender', 'age', 'looks', 'build', 'skin', 'hair', 'style']);
             },
             
             'MBTI_TAGS': () => {
-                return getTagsByCategory(['entj', 'intj', 'enfp', 'infp', 'estp', 'istp', 'esfj', 'isfj', 'entp', 'intp', 'enfj', 'infj', 'estj', 'istj', 'esfp', 'isfp', 'mbti']);
+                return CarrotTemplateManager.getTagsByCategory(['entj', 'intj', 'enfp', 'infp', 'estp', 'istp', 'esfj', 'isfj', 'entp', 'intp', 'enfj', 'infj', 'estj', 'istj', 'esfp', 'isfp', 'mbti']);
             },
             
             'COMMUNICATION_TAGS': () => {
-                return getTagsByCategory(['ling', 'linguistics', 'speech', 'language', 'communication']);
+                return CarrotTemplateManager.getTagsByCategory(['ling', 'linguistics', 'speech', 'language', 'communication']);
             },
             
             'IDENTITY_TAGS': () => {
-                return getTagsByCategory(['name', 'genre', 'context', 'identity']);
+                return CarrotTemplateManager.getTagsByCategory(['name', 'genre', 'context', 'identity']);
             },
             
             'KINK_TAGS': () => {
-                return getTagsByCategory(['kinks', 'fetish', 'sexual', 'nsfw', 'adult', 'erotic', 'kink']);
+                return CarrotTemplateManager.getTagsByCategory(['kinks', 'fetish', 'sexual', 'nsfw', 'adult', 'erotic', 'kink']);
             },
             
             'TRIGGERED_CHARACTER_TAGS': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 if (triggeredChars.length === 0) return 'No characters triggered in conversation';
                 
                 let output = '';
@@ -545,17 +947,17 @@ const CarrotTemplateManager = {
             },
             
             'CHARACTER_COUNT': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length.toString();
             },
             
             'CHARACTER_LIST': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length > 0 ? triggeredChars.map(c => c.name).join(', ') : 'No characters triggered';
             },
             
             'CHARACTERS_WITH_TYPES': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 if (triggeredChars.length === 0) return 'No characters triggered';
                 
                 return triggeredChars.map(({ name, data }) => {
@@ -645,7 +1047,7 @@ const CarrotTemplateManager = {
             },
             
             'CROSS_CHARACTER_ANALYSIS': () => {
-                const triggeredChars = getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 if (triggeredChars.length < 2) return 'Need at least 2 characters for cross-analysis';
                 
                 const commonTags = new Set();
@@ -699,7 +1101,7 @@ const CarrotTemplateManager = {
                     selectedLorebooks: selectedLorebooks.size,
                     characterRepos: characterRepoBooks.size,
                     totalCharacters: scannedCharacters.size,
-                    triggeredCharacters: getTriggeredCharacters().length,
+                    triggeredCharacters: CarrotTemplateManager.getTriggeredCharacters().length,
                     totalCategories: new Set()
                 };
                 
@@ -734,11 +1136,59 @@ const CarrotTemplateManager = {
 
 🔧 **Quick Actions:**
 ${stats.totalCharacters === 0 ? '⚠️ No characters found - scan lorebooks first' : '✅ System ready for template processing'}`;
+            },
+            
+            // Sheet format macros - usable in templates
+            'FULLSHEET_FORMAT': (charName) => {
+                if (!charName && CarrotTemplateManager.getTriggeredCharacters().length > 0) {
+                    charName = CarrotTemplateManager.getTriggeredCharacters()[0].name;
+                }
+                if (!charName) return 'No character specified for fullsheet format';
+                
+                const charData = scannedCharacters.get(charName);
+                if (!charData) return `Character ${charName} not found`;
+                
+                return generateFullSheet(charName, charData);
+            },
+            
+            'TAGSHEET_FORMAT': (charName) => {
+                if (!charName && CarrotTemplateManager.getTriggeredCharacters().length > 0) {
+                    charName = CarrotTemplateManager.getTriggeredCharacters()[0].name;
+                }
+                if (!charName) return 'No character specified for tagsheet format';
+                
+                const charData = scannedCharacters.get(charName);
+                if (!charData) return `Character ${charName} not found`;
+                
+                return generateTagSheet(charName, charData);
+            },
+            
+            'QUICKSHEET_FORMAT': (charName) => {
+                if (!charName && CarrotTemplateManager.getTriggeredCharacters().length > 0) {
+                    charName = CarrotTemplateManager.getTriggeredCharacters()[0].name;
+                }
+                if (!charName) return 'No character specified for quicksheet format';
+                
+                const charData = scannedCharacters.get(charName);
+                if (!charData) return `Character ${charName} not found`;
+                
+                return generateQuickSheet(charName, charData);
+            },
+            
+            'CHARACTER_NAME': () => {
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
+                return triggeredChars.length > 0 ? triggeredChars[0].name : 'Unknown Character';
             }
-        };
+    },
+
+    // Macro processing system - connects template variables to real CarrotKernel data
+    processMacros(templateContent) {
+        if (!templateContent) return '';
+        
+        let processedContent = templateContent;
         
         // Replace each macro with processed data
-        for (const [macro, processor] of Object.entries(macroProcessors)) {
+        for (const [macro, processor] of Object.entries(this.macroProcessors)) {
             const placeholder = `{{${macro}}}`;
             if (processedContent.includes(placeholder)) {
                 const replacement = processor();
@@ -749,6 +1199,9 @@ ${stats.totalCharacters === 0 ? '⚠️ No characters found - scan lorebooks fir
         return processedContent;
     }
 };
+
+// Expose CarrotTemplateManager globally so bunnymo_class.js can access it
+window.CarrotTemplateManager = CarrotTemplateManager;
 
 // =============================================================================
 // CARROT CONTEXT & STORAGE MANAGEMENT SYSTEM 🥕
@@ -2471,6 +2924,23 @@ window.CARROT_toggleCard = function(cardId) {
         content.style.maxHeight = '0';
         content.style.opacity = '0';
         content.style.transform = 'translateY(-10px)';
+    }
+};
+
+// Macro section toggle functionality
+window.CARROT_toggleMacroSection = function() {
+    const $macroContent = $('#macro_definitions');
+    const $indicator = $('.bmt-collapse-indicator');
+    const $header = $('.bmt-collapsible-header');
+    
+    if ($macroContent.is(':visible')) {
+        $macroContent.slideUp(300);
+        $indicator.text('▼');
+        $header.removeClass('expanded');
+    } else {
+        $macroContent.slideDown(300);
+        $indicator.text('▲');
+        $header.addClass('expanded');
     }
 };
 
@@ -5218,6 +5688,8 @@ jQuery(async () => {
         // Initialize status panels
         updateStatusPanels();
         
+        // Sheet commands are now detected via WORLD_INFO_ACTIVATED entries - much simpler!
+
         // Hook into SillyTavern's lorebook activation system (exactly like BunnyMoTags)
         eventSource.on(event_types.WORLD_INFO_ACTIVATED, async (entryList) => {
             const settings = extension_settings[extensionName];
@@ -5227,17 +5699,85 @@ jQuery(async () => {
             console.log('🔥 CARROT DEBUG: Settings enabled:', settings.enabled, 'Display mode:', settings.displayMode);
             console.log('🔥 CARROT DEBUG: Entry list:', entryList);
             
+            // Check if any activated entries are sheet commands
+            const sheetCommandEntry = entryList?.find(entry => {
+                // Check multiple possible key properties and ensure it's a string
+                const key = entry.key || entry.keys || entry.title || entry.comment || '';
+                const keyStr = (typeof key === 'string') ? key.toLowerCase() : 
+                              (Array.isArray(key)) ? key.join(' ').toLowerCase() :
+                              String(key).toLowerCase();
+                              
+                console.log('🥕 SHEET COMMAND DEBUG: Checking entry:', { entry, key, keyStr });
+                return keyStr && (keyStr.includes('!quicksheet') || keyStr.includes('!fullsheet') || keyStr.includes('!tagsheet'));
+            });
+            
+            if (sheetCommandEntry) {
+                console.log('🥕 SHEET COMMAND DEBUG: Sheet command entry detected in WORLD_INFO_ACTIVATED:', sheetCommandEntry);
+                
+                // Extract sheet command details from the entry
+                const key = sheetCommandEntry.key || sheetCommandEntry.keys || sheetCommandEntry.title || sheetCommandEntry.comment || '';
+                const keyStr = (typeof key === 'string') ? key.toLowerCase() : 
+                              (Array.isArray(key)) ? key.join(' ').toLowerCase() :
+                              String(key).toLowerCase();
+                              
+                let sheetType = null;
+                if (keyStr.includes('!quicksheet')) sheetType = 'quicksheet';
+                else if (keyStr.includes('!fullsheet')) sheetType = 'fullsheet';
+                else if (keyStr.includes('!tagsheet')) sheetType = 'tagsheet';
+                
+                console.log('🥕 SHEET COMMAND DEBUG: Detected sheet type:', sheetType);
+                
+                // Set up the sheet command - let ST's native firing system handle everything
+                pendingSheetCommand = {
+                    type: sheetType,
+                    entry: sheetCommandEntry
+                };
+                
+                console.log('🥕 SHEET COMMAND DEBUG: Set pendingSheetCommand:', pendingSheetCommand);
+            }
+            
             CarrotDebug.scan(`🔥 WORLD_INFO_ACTIVATED - ${entryList?.length || 0} entries fired`, {
                 enabled: settings.enabled,
                 displayMode: settings.displayMode,
                 selectedLorebooks: Array.from(selectedLorebooks),
-                characterRepoBooks: Array.from(characterRepoBooks)
+                characterRepoBooks: Array.from(characterRepoBooks),
+                sheetCommandDetected: !!sheetCommandEntry
             });
             
             if (!settings.enabled) {
                 CarrotDebug.scan('❌ CarrotKernel disabled, ignoring WORLD_INFO_ACTIVATED');
                 return;
             }
+            
+            // Check if we have a pending sheet command to process instead
+            if (pendingSheetCommand) {
+                console.log('🥕 SHEET COMMAND DEBUG: Processing pending sheet command instead of normal injection', pendingSheetCommand);
+                CarrotDebug.inject('Processing pending sheet command instead of normal character injection', pendingSheetCommand);
+                
+                try {
+                    const success = await processSheetCommand(pendingSheetCommand);
+                    if (success) {
+                        console.log('🥕 SHEET COMMAND DEBUG: Sheet command processed successfully', pendingSheetCommand);
+                        CarrotDebug.inject('✅ Sheet command processed successfully', pendingSheetCommand);
+                    } else {
+                        console.log('🥕 SHEET COMMAND DEBUG: Sheet command processing failed', pendingSheetCommand);
+                        CarrotDebug.error('❌ Sheet command processing failed', pendingSheetCommand);
+                    }
+                } catch (error) {
+                    console.log('🥕 SHEET COMMAND DEBUG: Error processing sheet command:', error);
+                    CarrotDebug.error('❌ Error processing sheet command:', error);
+                } finally {
+                    // Clear the pending command
+                    console.log('🥕 SHEET COMMAND DEBUG: Clearing pendingSheetCommand and returning early');
+                    pendingSheetCommand = null;
+                }
+                
+                // Skip normal character processing when sheet command is executed
+                console.log('🥕 SHEET COMMAND DEBUG: Returning early to skip normal injection');
+                return;
+            }
+            
+            console.log('🥕 SHEET COMMAND DEBUG: No pending sheet command, proceeding with normal injection');
             
             try {
                 await processActivatedLorebookEntries(entryList);
@@ -8209,21 +8749,64 @@ window.CarrotKernel = {
     
     // Get tutorial overlay - check modal context first, then document
     getTutorialOverlay() {
+        CarrotDebug.tutorial('Getting tutorial overlay', {
+            timestamp: Date.now(),
+            location: 'getTutorialOverlay'
+        });
+        
         // First check if we're in a modal context
         const modal = document.querySelector('.popup:not(.popup_template)');
+        CarrotDebug.tutorial('Modal context check', {
+            modalExists: !!modal,
+            modalSelector: '.popup:not(.popup_template)',
+            allPopups: document.querySelectorAll('.popup').length
+        });
+        
         if (modal) {
             const modalOverlay = modal.querySelector('#carrot-tutorial-overlay');
+            CarrotDebug.tutorial('Modal overlay search', {
+                modalOverlayFound: !!modalOverlay,
+                modalChildren: modal.children.length,
+                modalId: modal.id || 'no-id',
+                modalClasses: modal.className
+            });
+            
             if (modalOverlay) {
+                CarrotDebug.tutorial('✅ Using modal tutorial overlay', {
+                    overlayId: modalOverlay.id,
+                    overlayParent: modalOverlay.parentElement?.tagName || 'unknown',
+                    overlayDisplay: modalOverlay.style.display
+                });
                 return modalOverlay;
             }
         }
+        
         // Fall back to document-level overlay
-        return document.getElementById('carrot-tutorial-overlay');
+        const documentOverlay = document.getElementById('carrot-tutorial-overlay');
+        CarrotDebug.tutorial('Document overlay fallback', {
+            documentOverlayFound: !!documentOverlay,
+            documentOverlayParent: documentOverlay?.parentElement?.tagName || 'unknown',
+            documentOverlayDisplay: documentOverlay?.style.display || 'unknown'
+        });
+        
+        return documentOverlay;
     },
 
     // Show tutorial overlay - no scroll control
     showTutorialOverlay() {
         const overlay = this.getTutorialOverlay();
+        
+        CarrotDebug.tutorial('Showing tutorial overlay', {
+            overlayExists: !!overlay,
+            overlayId: overlay?.id || 'no-id',
+            overlayCurrentDisplay: overlay?.style.display || 'unknown',
+            overlayCurrentClasses: overlay?.className || 'no-classes'
+        });
+        
+        if (!overlay) {
+            CarrotDebug.error('❌ Tutorial overlay not found! Cannot show tutorial');
+            return;
+        }
         
         // Enable tutorial mode
         this.enableTutorialMode();
@@ -8232,6 +8815,13 @@ window.CarrotKernel = {
         // Force reflow to ensure display change takes effect
         overlay.offsetHeight;
         overlay.classList.add('active');
+        
+        CarrotDebug.tutorial('Tutorial overlay activated', {
+            newDisplay: overlay.style.display,
+            newClasses: overlay.className,
+            offsetHeight: overlay.offsetHeight,
+            boundingRect: overlay.getBoundingClientRect()
+        });
         
         // Add resize handler for repositioning
         this.addResizeHandler();
@@ -8264,8 +8854,20 @@ window.CarrotKernel = {
                 if (this.currentTutorial && this.tutorialSteps.length > 0) {
                     const step = this.tutorialSteps[this.currentStep];
                     const targetElement = document.querySelector(step.target);
-                    if (targetElement) {
-                        this.positionSpotlightAndPopup(targetElement, step);
+                    const overlay = this.getTutorialOverlay();
+                    const popup = overlay?.querySelector('#carrot-tutorial-popup');
+                    
+                    if (targetElement && popup) {
+                        // Reapply viewport safeguards on resize
+                        const safeguards = this.applyViewportSafeguards(popup);
+                        const rect = targetElement.getBoundingClientRect();
+                        this.positionTutorialPopupWithSafeguards(rect, safeguards);
+                        
+                        CarrotDebug.tutorial('🔄 Tutorial repositioned on resize', {
+                            newViewport: `${window.innerWidth}x${window.innerHeight}`,
+                            step: this.currentStep,
+                            tutorial: this.currentTutorial
+                        });
                     }
                 }
             }, 100);
@@ -8345,11 +8947,94 @@ window.CarrotKernel = {
         this.highlightElement(targetElement, step);
     },
     
+    // Apply comprehensive viewport safeguards to ensure tutorial popup is always viewable
+    applyViewportSafeguards(popup) {
+        if (!popup) return;
+        
+        // Get current viewport dimensions
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const scrollX = window.scrollX || window.pageXOffset || 0;
+        const scrollY = window.scrollY || window.pageYOffset || 0;
+        
+        // Detect zoom level
+        const zoomLevel = window.outerWidth / window.innerWidth;
+        const isZoomed = zoomLevel < 0.98 || zoomLevel > 1.02;
+        
+        CarrotDebug.tutorial('🛡️ Applying viewport safeguards', {
+            viewport: `${viewportWidth}x${viewportHeight}`,
+            scroll: `${scrollX}, ${scrollY}`,
+            zoomLevel: zoomLevel,
+            isZoomed: isZoomed
+        });
+        
+        // Calculate safe dimensions - more conservative for small screens and zoom
+        const isMobile = viewportWidth <= 768;
+        const isTablet = viewportWidth <= 1024 && viewportWidth > 768;
+        
+        let maxWidth, maxHeight, minMargin;
+        
+        if (isMobile) {
+            // Mobile: very conservative sizing
+            maxWidth = Math.min(viewportWidth * 0.95, 380);
+            maxHeight = Math.min(viewportHeight * 0.85, 500);
+            minMargin = 8;
+        } else if (isTablet) {
+            // Tablet: moderately conservative
+            maxWidth = Math.min(viewportWidth * 0.85, 450);
+            maxHeight = Math.min(viewportHeight * 0.80, 600);
+            minMargin = 16;
+        } else {
+            // Desktop: normal sizing with zoom adjustments
+            maxWidth = Math.min(viewportWidth * 0.75, isZoomed ? 350 : 500);
+            maxHeight = Math.min(viewportHeight * 0.75, isZoomed ? 400 : 650);
+            minMargin = isZoomed ? 8 : 20;
+        }
+        
+        // Apply safe dimensions
+        popup.style.maxWidth = `${maxWidth}px`;
+        popup.style.maxHeight = `${maxHeight}px`;
+        popup.style.width = `min(${maxWidth}px, 95vw)`;
+        popup.style.minWidth = `min(280px, 90vw)`;
+        
+        // Ensure proper box-sizing and overflow handling
+        popup.style.boxSizing = 'border-box';
+        popup.style.overflowY = 'auto';
+        popup.style.overflowX = 'hidden';
+        popup.style.wordWrap = 'break-word';
+        popup.style.hyphens = 'auto';
+        
+        // Add responsive text sizing for small viewports
+        if (viewportWidth <= 480 || isZoomed) {
+            popup.style.fontSize = '0.9em';
+            popup.style.lineHeight = '1.4';
+        }
+        
+        CarrotDebug.tutorial('🛡️ Viewport safeguards applied', {
+            appliedMaxWidth: maxWidth,
+            appliedMaxHeight: maxHeight,
+            minMargin: minMargin,
+            deviceType: isMobile ? 'mobile' : isTablet ? 'tablet' : 'desktop',
+            zoomAdjustments: isZoomed
+        });
+        
+        return { maxWidth, maxHeight, minMargin };
+    },
+
     // Simple element highlighting with golden glow
     highlightElement(targetElement, step) {
         const overlay = this.getTutorialOverlay();
+        const popup = overlay?.querySelector('#carrot-tutorial-popup');
         
-        // Update popup content first
+        if (!popup) {
+            CarrotDebug.error('Tutorial popup not found during highlight');
+            return;
+        }
+        
+        // Apply viewport safeguards first
+        const safeguards = this.applyViewportSafeguards(popup);
+        
+        // Update popup content
         overlay.querySelector('#carrot-tutorial-popup-title').textContent = step.title;
         overlay.querySelector('#carrot-tutorial-popup-content').innerHTML = step.content;
         overlay.querySelector('#carrot-tutorial-progress').textContent = 
@@ -8362,9 +9047,9 @@ window.CarrotKernel = {
         prevBtn.style.display = this.currentStep > 0 ? 'flex' : 'none';
         nextBtn.textContent = this.currentStep === this.tutorialSteps.length - 1 ? 'Finish' : 'Next';
         
-        // Position popup based on current element position
+        // Position popup based on current element position with safeguards
         const rect = targetElement.getBoundingClientRect();
-        this.positionTutorialPopup(rect);
+        this.positionTutorialPopupWithSafeguards(rect, safeguards);
         
         // Hide the overlay spotlight - we're just using element highlighting now
         const spotlight = overlay.querySelector('#carrot-tutorial-spotlight');
@@ -8373,10 +9058,107 @@ window.CarrotKernel = {
         CarrotDebug.tutorial('highlight', this.currentTutorial, step.target);
     },
     
-    // Responsive popup positioning - works across all screen sizes and zoom levels
-    positionTutorialPopup(targetRect) {
+    // Enhanced popup positioning with comprehensive viewport safeguards
+    positionTutorialPopupWithSafeguards(targetRect, safeguards) {
         const overlay = this.getTutorialOverlay();
-        const popup = overlay.querySelector('#carrot-tutorial-popup');
+        const popup = overlay?.querySelector('#carrot-tutorial-popup');
+        
+        if (!overlay || !popup || !safeguards) {
+            CarrotDebug.error('Missing elements for safe tutorial positioning');
+            return;
+        }
+        
+        const { maxWidth, maxHeight, minMargin } = safeguards;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        
+        // Force popup to render to get accurate dimensions
+        popup.style.visibility = 'hidden';
+        popup.style.display = 'block';
+        const popupRect = popup.getBoundingClientRect();
+        popup.style.visibility = 'visible';
+        
+        // Calculate safe position with multiple fallback strategies
+        let left, top, positioning = 'auto';
+        
+        // Strategy 1: Try positioning relative to target
+        if (targetRect.bottom + popupRect.height + minMargin <= viewportHeight) {
+            // Below target
+            top = Math.min(targetRect.bottom + minMargin, viewportHeight - popupRect.height - minMargin);
+            positioning = 'below-target';
+        } else if (targetRect.top - popupRect.height - minMargin >= 0) {
+            // Above target
+            top = Math.max(targetRect.top - popupRect.height - minMargin, minMargin);
+            positioning = 'above-target';
+        } else {
+            // Strategy 2: Center vertically with safe margins
+            top = Math.max(minMargin, (viewportHeight - popupRect.height) / 2);
+            positioning = 'center-vertical';
+        }
+        
+        // Horizontal positioning with viewport constraints
+        if (targetRect.right + popupRect.width + minMargin <= viewportWidth) {
+            // Right of target
+            left = Math.min(targetRect.right + minMargin, viewportWidth - popupRect.width - minMargin);
+        } else if (targetRect.left - popupRect.width - minMargin >= 0) {
+            // Left of target  
+            left = Math.max(targetRect.left - popupRect.width - minMargin, minMargin);
+        } else {
+            // Center horizontally with safe margins
+            left = Math.max(minMargin, (viewportWidth - popupRect.width) / 2);
+            positioning += '-center-horizontal';
+        }
+        
+        // Final boundary enforcement - absolutely ensure popup stays in viewport
+        left = Math.max(minMargin, Math.min(left, viewportWidth - popupRect.width - minMargin));
+        top = Math.max(minMargin, Math.min(top, viewportHeight - popupRect.height - minMargin));
+        
+        // Apply position
+        popup.style.left = `${left}px`;
+        popup.style.top = `${top}px`;
+        popup.style.position = 'fixed';
+        popup.style.zIndex = '10001';
+        
+        // Add emergency overflow protection
+        popup.style.maxWidth = `${Math.min(maxWidth, viewportWidth - (minMargin * 2))}px`;
+        popup.style.maxHeight = `${Math.min(maxHeight, viewportHeight - (minMargin * 2))}px`;
+        
+        CarrotDebug.tutorial('🛡️ Safe tutorial popup positioned', {
+            positioning: positioning,
+            finalPosition: { left, top },
+            viewport: `${viewportWidth}x${viewportHeight}`,
+            popupSize: `${popupRect.width}x${popupRect.height}`,
+            margins: minMargin,
+            safeguards: safeguards
+        });
+    },
+    
+    // Legacy popup positioning method - kept for compatibility
+    positionTutorialPopup(targetRect) {
+        CarrotDebug.tutorial('🎯 Starting tutorial popup positioning', {
+            targetRect: targetRect,
+            screenSize: `${window.innerWidth}x${window.innerHeight}`,
+            devicePixelRatio: window.devicePixelRatio,
+            zoomLevel: window.outerWidth / window.innerWidth
+        });
+        
+        const overlay = this.getTutorialOverlay();
+        const popup = overlay?.querySelector('#carrot-tutorial-popup');
+        
+        CarrotDebug.tutorial('Tutorial elements found', {
+            overlayExists: !!overlay,
+            popupExists: !!popup,
+            overlayBounds: overlay?.getBoundingClientRect() || 'not found',
+            popupBounds: popup?.getBoundingClientRect() || 'not found'
+        });
+        
+        if (!overlay || !popup) {
+            CarrotDebug.error('❌ Tutorial elements missing - cannot position popup', {
+                overlay: !!overlay,
+                popup: !!popup
+            });
+            return;
+        }
         
         // Check if we're in a modal context
         const modal = document.querySelector('.popup:not(.popup_template)');
@@ -8386,6 +9168,14 @@ window.CarrotKernel = {
             // Use modal as container
             containerElement = modal;
             containerRect = modal.getBoundingClientRect();
+            
+            CarrotDebug.tutorial('🏠 Using modal container', {
+                modalExists: true,
+                overlayIsChildOfModal: overlay.parentElement === modal,
+                modalRect: containerRect,
+                modalId: modal.id || 'no-id',
+                modalClasses: modal.className
+            });
         } else {
             // Use viewport as container
             containerElement = document.documentElement;
@@ -8395,6 +9185,13 @@ window.CarrotKernel = {
                 width: window.innerWidth, 
                 height: window.innerHeight 
             };
+            
+            CarrotDebug.tutorial('🌐 Using viewport container', {
+                modalExists: !!modal,
+                overlayParent: overlay.parentElement?.tagName || 'unknown',
+                overlayIsChildOfModal: modal ? overlay.parentElement === modal : false,
+                viewportRect: containerRect
+            });
         }
         
         // Reset popup styles to get natural dimensions
@@ -8497,13 +9294,113 @@ window.CarrotKernel = {
         popup.style.overflowY = 'auto';
         popup.style.boxSizing = 'border-box';
         
+        CarrotDebug.tutorial('📍 Initial popup positioning applied', {
+            positioning: positioning,
+            coordinates: { left, top },
+            popupSize: { width: popupWidth, height: popupHeight },
+            constraints: { maxWidth, maxHeight, margin },
+            containerSize: { width: containerWidth, height: containerHeight }
+        });
+        
         // Ensure popup stays within bounds even with zoom
         const finalRect = popup.getBoundingClientRect();
-        if (finalRect.right > containerRect.right) {
-            popup.style.left = `${containerRect.width - popupWidth - margin}px`;
+        const containerFinalRect = containerElement.getBoundingClientRect();
+        
+        CarrotDebug.tutorial('🔍 Final bounds check', {
+            popupFinalRect: finalRect,
+            containerFinalRect: containerFinalRect,
+            exceedsRight: finalRect.right > containerFinalRect.right,
+            exceedsBottom: finalRect.bottom > containerFinalRect.bottom,
+            isVisible: finalRect.width > 0 && finalRect.height > 0
+        });
+        
+        let adjustmentsMade = false;
+        if (finalRect.right > containerFinalRect.right) {
+            const newLeft = containerWidth - popupWidth - margin;
+            popup.style.left = `${newLeft}px`;
+            adjustmentsMade = true;
+            CarrotDebug.tutorial('🔧 Adjusted left position for right overflow', {
+                oldLeft: left,
+                newLeft: newLeft
+            });
         }
-        if (finalRect.bottom > containerRect.bottom) {
-            popup.style.top = `${containerHeight - popupHeight - margin}px`;
+        if (finalRect.bottom > containerFinalRect.bottom) {
+            const newTop = containerHeight - popupHeight - margin;
+            popup.style.top = `${newTop}px`;
+            adjustmentsMade = true;
+            CarrotDebug.tutorial('🔧 Adjusted top position for bottom overflow', {
+                oldTop: top,
+                newTop: newTop
+            });
+        }
+        
+        // Get final positioning info for debugging
+        const finalPositionRect = popup.getBoundingClientRect();
+        const screenBounds = {
+            width: window.innerWidth,
+            height: window.innerHeight,
+            scrollX: window.scrollX,
+            scrollY: window.scrollY
+        };
+        
+        CarrotDebug.tutorial('📊 TUTORIAL POPUP SCREEN POSITION ANALYSIS', {
+            // Popup size and position
+            popupSize: {
+                width: finalPositionRect.width,
+                height: finalPositionRect.height
+            },
+            popupPosition: {
+                left: finalPositionRect.left,
+                top: finalPositionRect.top,
+                right: finalPositionRect.right,
+                bottom: finalPositionRect.bottom
+            },
+            // Relative to screen viewport
+            relativeToScreen: {
+                leftPercent: `${((finalPositionRect.left / screenBounds.width) * 100).toFixed(1)}%`,
+                topPercent: `${((finalPositionRect.top / screenBounds.height) * 100).toFixed(1)}%`,
+                rightPercent: `${((finalPositionRect.right / screenBounds.width) * 100).toFixed(1)}%`,
+                bottomPercent: `${((finalPositionRect.bottom / screenBounds.height) * 100).toFixed(1)}%`
+            },
+            // Screen/container info
+            screenInfo: screenBounds,
+            containerInfo: {
+                rect: containerFinalRect,
+                type: modal && overlay.parentElement === modal ? 'modal' : 'viewport'
+            },
+            // Visibility checks
+            visibility: {
+                exceedsScreenRight: finalPositionRect.right > screenBounds.width,
+                exceedsScreenBottom: finalPositionRect.bottom > screenBounds.height,
+                exceedsScreenLeft: finalPositionRect.left < 0,
+                exceedsScreenTop: finalPositionRect.top < 0,
+                isFullyOnScreen: finalPositionRect.left >= 0 && 
+                                finalPositionRect.top >= 0 && 
+                                finalPositionRect.right <= screenBounds.width && 
+                                finalPositionRect.bottom <= screenBounds.height
+            },
+            // CSS positioning
+            computedStyles: {
+                position: popup.style.position,
+                left: popup.style.left,
+                top: popup.style.top,
+                zIndex: popup.style.zIndex,
+                transform: popup.style.transform
+            }
+        });
+        
+        if (adjustmentsMade) {
+            CarrotDebug.tutorial('✅ Final tutorial popup position (with adjustments)', {
+                adjustmentsMade: true,
+                finalRect: finalPositionRect,
+                isFullyVisible: finalPositionRect.right <= containerFinalRect.right && finalPositionRect.bottom <= containerFinalRect.bottom
+            });
+        } else {
+            CarrotDebug.tutorial('✅ Final tutorial popup position (no adjustments)', {
+                adjustmentsMade: false,
+                finalRect: finalPositionRect,
+                isFullyVisible: finalPositionRect.right <= containerFinalRect.right && finalPositionRect.bottom <= containerFinalRect.bottom
+            });
         }
         
         // Add positioning class for animations
@@ -9522,18 +10419,19 @@ class CarrotTemplatePromptEditInterface {
     </div>
     
     <div class="bmt-macro-section toggle-macro">
-        <div class="bmt-panel-header">
+        <div class="bmt-panel-header bmt-collapsible-header" onclick="window.CARROT_toggleMacroSection()">
             <div class="bmt-panel-title">
                 <span class="bmt-panel-icon">🔧</span>
                 <h3>Macro Configuration</h3>
+                <span class="bmt-collapse-indicator">▼</span>
             </div>
             <div class="bmt-panel-controls">
-                <button id="add_macro" class="bmt-action-btn bmt-add-btn" title="Add a new custom macro">
+                <button id="add_macro" class="bmt-action-btn bmt-add-btn" title="Add a new custom macro" onclick="event.stopPropagation();">
                     <i class="fa-solid fa-plus"></i> New Macro
                 </button>
             </div>
         </div>
-        <div id="macro_definitions" class="bmt-macro-definitions"></div>
+        <div id="macro_definitions" class="bmt-macro-definitions bmt-collapsible-content"></div>
     </div>
 </div>
 
@@ -9548,6 +10446,9 @@ class CarrotTemplatePromptEditInterface {
                 </label>
                 <select id="template_category" class="bmt-metadata-select">
                     <option value="Character Data Injection">💉 Character Data Injection</option>
+                    <option value="BunnyMo Fullsheet Injection">🚨 BunnyMo Fullsheet Injection</option>
+                    <option value="BunnyMo Tagsheet Injection">🚨 BunnyMo Tagsheet Injection</option>
+                    <option value="BunnyMo Quicksheet Injection">🚨 BunnyMo Quicksheet Injection</option>
                 </select>
             </div>
             
@@ -9589,7 +10490,7 @@ class CarrotTemplatePromptEditInterface {
         </div>
     </div>
 
-    <div class="inline-drawer-content">
+    <div class="inline-drawer-content" style="display: none;">
         <!-- Macro Documentation -->
         <div class="bmt-macro-docs">
             <div class="bmt-doc-toggle" style="cursor: pointer; padding: 8px; background: rgba(255,165,0,0.1); border-radius: 4px; margin-bottom: 8px;">
@@ -9614,6 +10515,10 @@ class CarrotTemplatePromptEditInterface {
 
         <!-- Simple Settings -->
         <div class="macro_type_simple">
+            <div class="bmt-config-header" style="cursor: pointer; padding: 6px; background: rgba(72, 209, 204, 0.1); border-radius: 4px; margin-bottom: 8px;">
+                <span class="fa-solid fa-circle-chevron-down bmt-config-toggle" style="margin-right: 8px;"></span>
+                <strong>🎯 Simple Configuration</strong>
+            </div>
             <div class="macro_simple_content">
                 <!-- Content varies by macro type - populated dynamically -->
             </div>
@@ -9621,6 +10526,10 @@ class CarrotTemplatePromptEditInterface {
 
         <!-- Advanced Settings -->
         <div class="macro_type_advanced">
+            <div class="bmt-config-header" style="cursor: pointer; padding: 6px; background: rgba(255, 99, 71, 0.1); border-radius: 4px; margin-bottom: 8px;">
+                <span class="fa-solid fa-circle-chevron-down bmt-config-toggle" style="margin-right: 8px;"></span>
+                <strong>⚡ Advanced Configuration</strong>
+            </div>
             <div class="macro_advanced_content">
                 <!-- Content varies by macro type - populated dynamically -->
             </div>
@@ -9777,25 +10686,105 @@ class CarrotTemplatePromptEditInterface {
             // Clear existing macro interfaces
             $('#macro_definitions').empty();
             
-            const macroList = this.list_macros();
+            // Get all available macros and categorize them
+            const allMacros = this.getAllAvailableMacros();
+            const carrotMacros = [];
+            const systemMacros = [];
             
-            // If no macros detected, show a helpful message and some default examples
-            if (macroList.length === 0) {
-                $('#macro_definitions').html(`
-                    <div style="text-align: center; padding: 20px; color: var(--SmartThemeQuoteColor);">
-                        <p>🔍 <strong>No macros detected in template</strong></p>
-                        <p>Add macros to your template using the format: <code>{{MACRO_NAME}}</code></p>
-                        <p>Available macros: CHARACTERS, TAG_STATISTICS, REPOSITORY_METADATA, CHARACTER_SOURCES, CROSS_CHARACTER_ANALYSIS</p>
-                        <p><em>Macros will appear here automatically when detected in the template above.</em></p>
+            // Define CarrotKernel priority macros (only functional ones from macroProcessors)
+            const priorityMacros = [];
+            
+            // Get actual functional CarrotKernel macros - use direct reference since we're in the same file
+            if (CarrotTemplateManager && CarrotTemplateManager.macroProcessors) {
+                Object.keys(CarrotTemplateManager.macroProcessors).forEach(macro => {
+                    priorityMacros.push(macro);
+                });
+            } else {
+                console.warn('CarrotTemplateManager.macroProcessors not available, using fallback list');
+                // Fallback list of known macros
+                priorityMacros.push(
+                    'TRIGGERED_CHARACTER_TAGS', 'CHARACTER_LIST', 'CHARACTERS_WITH_TYPES', 'CHARACTERS',
+                    'CHARACTER1', 'CHARACTER2', 'CHARACTER3', 'CHARACTER4', 'CHARACTER5',
+                    'CHARACTER_COUNT', 'CHARACTER_SOURCES', 'PERSONALITY_TAGS', 'PHYSICAL_TAGS', 
+                    'MBTI_TAGS', 'COMMUNICATION_TAGS', 'IDENTITY_TAGS', 'KINK_TAGS', 'ALL_TAG_CATEGORIES',
+                    'TAG_STATISTICS', 'CROSS_CHARACTER_ANALYSIS', 'REPOSITORY_METADATA',
+                    'FULLSHEET_FORMAT', 'TAGSHEET_FORMAT', 'QUICKSHEET_FORMAT',
+                    'SELECTED_LOREBOOKS', 'CHARACTER_REPO_BOOKS'
+                );
+            }
+            
+            // Categorize macros
+            allMacros.forEach(name => {
+                if (priorityMacros.includes(name)) {
+                    carrotMacros.push(name);
+                } else {
+                    systemMacros.push(name);
+                }
+            });
+            
+            // Create CarrotKernel Priority Section
+            $('#macro_definitions').append(`
+                <div class="bmt-macro-category-section">
+                    <div class="bmt-category-header expanded" data-category="carrot">
+                        <div class="bmt-category-title">
+                            <span class="bmt-category-icon">🥕</span>
+                            <h4>CarrotKernel Macros</h4>
+                            <span class="bmt-category-count">(${carrotMacros.length})</span>
+                        </div>
+                        <div class="bmt-category-toggle">
+                            <span class="fa-solid fa-chevron-up"></span>
+                        </div>
                     </div>
-                `);
-                return;
+                    <div class="bmt-category-content" id="carrot-macros" style="display: block;"></div>
+                </div>
+            `);
+            
+            // Create System Macros Section (collapsed by default)
+            $('#macro_definitions').append(`
+                <div class="bmt-macro-category-section">
+                    <div class="bmt-category-header collapsed" data-category="system">
+                        <div class="bmt-category-title">
+                            <span class="bmt-category-icon">⚙️</span>
+                            <h4>SillyTavern System Macros</h4>
+                            <span class="bmt-category-count">(${systemMacros.length})</span>
+                        </div>
+                        <div class="bmt-category-toggle">
+                            <span class="fa-solid fa-chevron-down"></span>
+                        </div>
+                    </div>
+                    <div class="bmt-category-content" id="system-macros" style="display: none;"></div>
+                </div>
+            `);
+            
+            // Create interfaces for CarrotKernel macros
+            for (let name of carrotMacros) {
+                let macro = this.get_macro(name) || {
+                    name: name,
+                    enabled: true,
+                    type: 'simple',
+                    format: false,
+                    command: '',
+                    default: false
+                };
+                this.create_macro_interface(macro, '#carrot-macros');
             }
             
-            for (let name of macroList) {
-                let macro = this.get_macro(name)
-                this.create_macro_interface(macro)
+            // Create interfaces for System macros
+            for (let name of systemMacros) {
+                let macro = this.get_macro(name) || {
+                    name: name,
+                    enabled: true,
+                    type: 'simple',
+                    format: false,
+                    command: '',
+                    default: false
+                };
+                this.create_macro_interface(macro, '#system-macros');
             }
+            
+            // Add category toggle functionality
+            this.setupCategoryToggles();
+            
         } else {
             this.create_macro_interface(macro)
         }
@@ -9810,14 +10799,38 @@ class CarrotTemplatePromptEditInterface {
         if (macro) return macro;
         return null;
     }
+
+    setupCategoryToggles() {
+        // Add click handlers for category toggles
+        $('.bmt-category-header').off('click.categorytoggle').on('click.categorytoggle', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const $header = $(e.currentTarget);
+            const $content = $header.next('.bmt-category-content');
+            const $toggle = $header.find('.bmt-category-toggle span');
+            
+            if ($content.is(':visible')) {
+                $content.slideUp(300);
+                $toggle.removeClass('fa-chevron-up').addClass('fa-chevron-down');
+                $header.removeClass('expanded').addClass('collapsed');
+            } else {
+                $content.slideDown(300);
+                $toggle.removeClass('fa-chevron-down').addClass('fa-chevron-up');
+                $header.removeClass('collapsed').addClass('expanded');
+            }
+            
+            return false;
+        });
+    }
     
-    create_macro_interface(macro) {
+    create_macro_interface(macro, container = '#macro_definitions') {
         // Create or update a macro interface item with the given settings
         let id = this.get_id(macro.name);
-        let $macro = $('#macro_definitions').find(`#${id}`);
+        let $macro = $(container).find(`#${id}`);
         
         if ($macro.length === 0) {
-            $macro = $(this.macro_definition_template).prependTo($('#macro_definitions'));
+            $macro = $(this.macro_definition_template).prependTo($(container));
             $macro.attr('id', id);
         }
 
@@ -9902,18 +10915,69 @@ class CarrotTemplatePromptEditInterface {
             toastr.success(`Inserted ${macroText} into template!`);
         });
         
-        // Documentation toggle
-        $macro.find('.bmt-doc-toggle').off('click').on('click', () => {
+        // Documentation toggle with proper event isolation
+        $macro.find('.bmt-doc-toggle').off('click.doctoggle').on('click.doctoggle', (e) => {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            
             const $description = $macro.find('.bmt-macro-description');
             const $toggle = $macro.find('.bmt-doc-toggle span');
             
-            if ($description.is(':visible')) {
-                $description.slideUp(200);
-                $toggle.removeClass('fa-circle-chevron-up').addClass('fa-circle-chevron-down');
-            } else {
-                $description.slideDown(200);
-                $toggle.removeClass('fa-circle-chevron-down').addClass('fa-circle-chevron-up');
-            }
+            setTimeout(() => {
+                if ($description.is(':visible')) {
+                    $description.slideUp(200);
+                    $toggle.removeClass('fa-circle-chevron-up').addClass('fa-circle-chevron-down');
+                } else {
+                    $description.slideDown(200);
+                    $toggle.removeClass('fa-circle-chevron-down').addClass('fa-circle-chevron-up');
+                }
+            }, 50);
+            
+            return false;
+        });
+        
+        // Main drawer toggle functionality with proper event isolation
+        $macro.find('.inline-drawer-toggle').off('click.macrotoggle').on('click.macrotoggle', (e) => {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            
+            const $content = $macro.find('.inline-drawer-content');
+            const $icon = $macro.find('.inline-drawer-icon');
+            
+            // Add slight delay to prevent double-click issues
+            setTimeout(() => {
+                if ($content.is(':visible')) {
+                    $content.slideUp(200);
+                    $icon.removeClass('fa-circle-chevron-up').addClass('fa-circle-chevron-down');
+                } else {
+                    $content.slideDown(200);
+                    $icon.removeClass('fa-circle-chevron-down').addClass('fa-circle-chevron-up');
+                }
+            }, 50);
+            
+            return false;
+        });
+        
+        // Configuration section toggles with proper event isolation
+        $macro.find('.bmt-config-header').off('click.configtoggle').on('click.configtoggle', (e) => {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            
+            const $header = $(e.currentTarget);
+            const $content = $header.next();
+            const $toggle = $header.find('.bmt-config-toggle');
+            
+            setTimeout(() => {
+                if ($content.is(':visible')) {
+                    $content.slideUp(200);
+                    $toggle.removeClass('fa-circle-chevron-up').addClass('fa-circle-chevron-down');
+                } else {
+                    $content.slideDown(200);
+                    $toggle.removeClass('fa-circle-chevron-down').addClass('fa-circle-chevron-up');
+                }
+            }, 50);
+            
+            return false;
         });
 
         $type_radios.off('change').on('change', () => {
@@ -9972,1001 +11036,178 @@ class CarrotTemplatePromptEditInterface {
     }
     
     getMacroConfiguration(macroName) {
-        const configurations = {
+        // Detailed configuration with proper examples and documentation
+        const macroConfigs = {
             'TRIGGERED_CHARACTER_TAGS': {
                 documentation: `
                     <div class="bmt-macro-doc-header" style="background: rgba(255,165,0,0.2); padding: 10px; border-radius: 6px; border: 2px solid orange;">
-                        <strong>✅ TRIGGERED_CHARACTER_TAGS Macro - THIS IS THE ONE!</strong>
+                        <strong>✅ TRIGGERED_CHARACTER_TAGS - THE MAIN ONE!</strong>
                     </div>
-                    <p><strong>Purpose:</strong> Provides ALL character tags for triggered characters - this is the main macro for character tag injections into conversation context.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        Luna: wolf, anthro, female, warrior, pack leader<br/>
-                        Marcus: human, male, knight, honorable, sword fighter
+                    <p><strong>Purpose:</strong> The heart of CarrotKernel - provides ALL character tags for characters currently active in the conversation context.</p>
+                    <p><strong>Console Example Output:</strong></p>
+                    <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; font-family: monospace; color: #00ff00; font-size: 0.8em; overflow-x: auto;">
+&lt;BunnymoTags&gt;&lt;Name:Atsu_Ibn_Oba_Al-Masri&gt;, &lt;GENRE:FANTASY&gt; &lt;PHYSICAL&gt; &lt;SPECIES:HUMAN&gt;, &lt;GENDER:MALE&gt;, &lt;BUILD:Muscular&gt;, &lt;BUILD:Tall&gt;, &lt;SKIN:FAIR&gt;, &lt;HAIR:BLACK&gt;, &lt;STYLE:ANCIENT_EGYPTIAN_ROYALTY&gt;,&lt;/PHYSICAL&gt; &lt;PERSONALITY&gt;&lt;Dere:Sadodere&gt;, &lt;Dere:Oujidere&gt;, &lt;ENTJ-U&gt;, &lt;TRAIT:CRUEL&gt;, &lt;TRAIT:INTELLIGENT&gt;, &lt;TRAIT:POWERFUL&gt;, &lt;TRAIT:DANGEROUS&gt;, &lt;TRAIT:SELFISH&gt;, &lt;TRAIT:HEDONISTIC&gt;, &lt;ATTACHMENT:FEARFUL_AVOIDANT&gt;, &lt;CONFLICT:COMPETITIVE&gt;, &lt;BOUNDARIES:RIGID&gt;,&lt;FLIRTING:AGGRESSIVE&gt;, &lt;/PERSONALITY&gt; &lt;NSFW&gt;&lt;ORIENTATION:PANSEXUAL&gt;, &lt;POWER:DOMINANT&gt;, &lt;KINK:BRAT_TAMING&gt;, &lt;KINK:PUBLIC_HUMILIATION&gt;, &lt;KINK:POWER_PLAY&gt;, &lt;KINK:EXHIBITIONISM&gt;, &lt;CHEMISTRY:ANTAGONISTIC&gt;, &lt;AROUSAL:DOMINANCE&gt;, &lt;TRAUMA:CHILDHOOD&gt;, &lt;JEALOUSY:POSSESSIVE&gt;,&lt;/NSFW&gt; &lt;/BunnymoTags&gt;<br/><br/>
+&lt;Linguistics&gt; Character uses &lt;LING:COMMANDING&gt; as his primary mode of speech, asserting authority and control. This is almost always blended with &lt;LING:SUGGESTIVE&gt;, using a tone of cruel flirtation, possessive pet names, and psychological manipulation to achieve his goals. &lt;/linguistics&gt;
                     </div>
-                    <p><strong>Use Case:</strong> Essential for maintaining character consistency - provides comprehensive trait information including personality, species, background, relationships, and more.</p>
-                    <div class="bmt-macro-use-case" style="background: rgba(255,165,0,0.1); padding: 10px; border-left: 3px solid orange;">
-                        <strong>🎯 Main Character Injection Macro:</strong> This is what you want for {{TRIGGERED_CHARACTER_TAGS}} in your template!
-                    </div>
+                    <p><strong>Perfect For:</strong> Character consistency, BunnymoTags compatibility, comprehensive trait injection</p>
                 `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Tag Display Format</span>
-                        </label>
-                        <select name="tagFormat" class="bmt-select">
-                            <option value="list">Character: tag, tag, tag</option>
-                            <option value="grouped">Character: [Category] tag, tag</option>
-                            <option value="detailed">Character (Species): trait details</option>
-                        </select>
-                    </div>
-                `,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🎨 Custom Tag Template</span>
-                        </label>
-                        <textarea name="tagTemplate" class="bmt-textarea" rows="3" placeholder="{{character}}: {{tags}}" />
-                    </div>
-                `
+                simple: `<div class="bmt-form-group"><p><strong>🎯 This is the main macro for character injection!</strong><br/>No configuration needed - it automatically extracts and formats all character tags from your BunnymoTags data.</p></div>`,
+                advanced: `<div class="bmt-form-group"><p>Advanced tag filtering, formatting, and categorization options for power users.</p></div>`
             },
+            
             'CHARACTER_LIST': {
                 documentation: `
                     <div class="bmt-macro-doc-header">
-                        <strong>👥 CHARACTER_LIST Macro</strong>
+                        <strong>👥 CHARACTER_LIST - Simple Names</strong>
                     </div>
-                    <p><strong>Purpose:</strong> Simple comma-separated list of triggered character names.</p>
-                    <p><strong>Example Output:</strong> "Luna, Marcus, Aria"</p>
-                    <p><strong>Use Case:</strong> Basic character awareness - when you just need character names without additional details.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>💡 Best For:</strong> Quick character references, simple templates, or when space is limited.
+                    <p><strong>Purpose:</strong> Clean comma-separated list of character names currently active.</p>
+                    <p><strong>Console Example Output:</strong></p>
+                    <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; font-family: monospace; color: #00ff00;">
+Atsu_Ibn_Oba_Al-Masri
                     </div>
+                    <p><strong>Use Case:</strong> Simple character awareness when you just need names without tags.</p>
                 `,
-                simple: `<div class="bmt-form-group"><p>This macro has no configuration options - it simply lists character names.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>This macro outputs simple character names separated by commas.</p></div>`
+                simple: `<div class="bmt-form-group"><p>Simple character name list - no configuration needed.</p></div>`,
+                advanced: `<div class="bmt-form-group"><p>Name formatting and separator options.</p></div>`
             },
+
             'CHARACTERS_WITH_TYPES': {
                 documentation: `
                     <div class="bmt-macro-doc-header">
-                        <strong>🏷️ CHARACTERS_WITH_TYPES Macro</strong>
+                        <strong>🏷️ CHARACTERS_WITH_TYPES - Names + Species</strong>
                     </div>
-                    <p><strong>Purpose:</strong> Character names with their species/types shown in parentheses.</p>
-                    <p><strong>Example Output:</strong> "Luna (wolf anthro), Marcus (human knight), Aria (elven mage)"</p>
-                    <p><strong>Use Case:</strong> When you need basic character info with species/role context for the AI.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎯 Perfect For:</strong> Fantasy/sci-fi settings where species matters, or role-based scenarios.
+                    <p><strong>Purpose:</strong> Character names with their species/types shown for context.</p>
+                    <p><strong>Console Example Output:</strong></p>
+                    <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; font-family: monospace; color: #00ff00;">
+Atsu_Ibn_Oba_Al-Masri (HUMAN)
                     </div>
+                    <p><strong>Perfect For:</strong> Fantasy/sci-fi where species matters, role identification.</p>
                 `,
-                simple: `<div class="bmt-form-group"><p>Automatically detects character types from tags like 'anthro', 'human', 'elf', 'wolf', etc.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Searches character tags for species/role keywords and displays them in parentheses.</p></div>`
+                simple: `<div class="bmt-form-group"><p>Automatically detects character species/roles from SPECIES: tags.</p></div>`,
+                advanced: `<div class="bmt-form-group"><p>Custom type detection and formatting rules.</p></div>`
             },
-            'SELECTED_LOREBOOKS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📚 SELECTED_LOREBOOKS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists all currently selected lorebook names.</p>
-                    <p><strong>Example Output:</strong> "Fantasy Characters, Medieval Settings, Magic System"</p>
-                    <p><strong>Use Case:</strong> Reference which lorebooks are active in your current context.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>📋 Useful For:</strong> Template debugging, context awareness, or dynamic lorebook management.
-                    </div>
-                `,
-                simple: `<div class="bmt-form-group"><p>Shows the names of lorebooks currently selected in CarrotKernel.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Dynamically updates based on your lorebook selection in the main interface.</p></div>`
-            },
-            'CHARACTER_REPO_BOOKS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📖 CHARACTER_REPO_BOOKS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists character repository lorebooks available for selection.</p>
-                    <p><strong>Example Output:</strong> "Main Cast, Supporting Characters, NPCs, Villains"</p>
-                    <p><strong>Use Case:</strong> See what character repositories are available in your system.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🔍 Helpful For:</strong> Repository management, debugging, or dynamic content selection.
-                    </div>
-                `,
-                simple: `<div class="bmt-form-group"><p>Lists all character repository lorebooks detected by CarrotKernel.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Scans and displays repository lorebooks from your SillyTavern lorebooks directory.</p></div>`
-            },
-            'ALL_TAG_CATEGORIES': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🏷️ ALL_TAG_CATEGORIES Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Shows all tag categories found across scanned characters.</p>
-                    <p><strong>Example Output:</strong> "personality, physical, species, background, relationships, skills"</p>
-                    <p><strong>Use Case:</strong> Understand what types of character data are available in your repositories.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>📊 Great For:</strong> Data analysis, repository organization, or template planning.
-                    </div>
-                `,
-                simple: `<div class="bmt-form-group"><p>Automatically discovered from character data across all repositories.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Aggregates unique tag categories from all scanned character data.</p></div>`
-            },
-            'CHARACTER_SOURCES': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📚 CHARACTER_SOURCES Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists the sources/origins of scanned characters.</p>
-                    <p><strong>Example Output:</strong> "Fantasy Novel Series, Game Characters, Original Creations"</p>
-                    <p><strong>Use Case:</strong> Track where your characters come from for organization and attribution.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎯 Useful For:</strong> Content organization, source tracking, or creative project management.
-                    </div>
-                `,
-                simple: `<div class="bmt-form-group"><p>Extracted from character metadata and lorebook information.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Analyzes character data to identify source materials and origins.</p></div>`
-            },
-            'TAG_STATISTICS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📊 TAG_STATISTICS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Statistical breakdown of tags by category and usage.</p>
-                    <p><strong>Example Output:</strong> "personality: 45 tags (12 characters)\\nphysical: 67 tags (15 characters)"</p>
-                    <p><strong>Use Case:</strong> Analyze your character data distribution and tag usage patterns.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>📈 Perfect For:</strong> Data analysis, repository health checks, or understanding tag coverage.
-                    </div>
-                `,
-                simple: `<div class="bmt-form-group"><p>Provides detailed statistics about tag distribution across characters.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Calculates comprehensive metrics including tag counts, character coverage, and category distribution.</p></div>`
-            },
-            'CROSS_CHARACTER_ANALYSIS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🔗 CROSS_CHARACTER_ANALYSIS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Analyzes relationships and connections between characters.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        Character similarities:<br/>
-                        Luna & Marcus: shared traits (warrior, loyal)<br/>
-                        Potential conflicts: Marcus vs Aria (order vs chaos)
-                    </div>
-                    <p><strong>Use Case:</strong> Discover character relationships, conflicts, and interaction potential.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎭 Excellent For:</strong> Story planning, character dynamics, or scene composition guidance.
-                    </div>
-                `,
-                simple: `<div class="bmt-form-group"><p>Automatically finds relationships and potential interactions between characters.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Advanced analysis of character compatibility, conflicts, and shared traits.</p></div>`
-            },
-            'REPOSITORY_METADATA': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🗂️ REPOSITORY_METADATA Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Metadata and statistics about your character repositories.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        System status: 3 repos active, 47 characters indexed, 12 tag categories, last scan: 2 min ago. Health: 94% tagged characters, 2 conflicts detected.
-                    </div>
-                    <p><strong>Use Case:</strong> High-level overview of your character database status and health.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>📋 Ideal For:</strong> System monitoring, repository management, or quick status checks.
-                    </div>
-                `,
-                simple: `<div class="bmt-form-group"><p>Comprehensive metadata about your character repository system.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Detailed statistics including character counts, update times, and repository health metrics.</p></div>`
-            },
-            'CHARACTERS': {
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📝 Character List Format</span>
-                        </label>
-                        <select name="listFormat" class="bmt-select">
-                            <option value="names">Character names only</option>
-                            <option value="brief">Names with brief descriptions</option>
-                            <option value="tagged">Names with key traits</option>
-                        </select>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🔢 Maximum Characters</span>
-                        </label>
-                        <input type="number" name="maxCount" class="bmt-input" min="1" max="10" value="6" />
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Custom Template</span>
-                            <span class="bmt-help-text">Use {{name}}, {{traits}}, {{description}} variables</span>
-                        </label>
-                        <textarea name="customTemplate" class="bmt-textarea" rows="4" placeholder="{{name}} - {{description}}&#10;Key traits: {{traits}}"></textarea>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🎯 Character Filtering</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeTriggered" checked> Include triggered characters</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeNearby"> Include nearby characters</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeRecent"> Include recently mentioned</label>
-                        </div>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🔄 Sorting Method</span>
-                        </label>
-                        <select name="sortMethod" class="bmt-select">
-                            <option value="trigger_order">Trigger order</option>
-                            <option value="relevance">Relevance score</option>
-                            <option value="alphabetical">Alphabetical</option>
-                            <option value="last_mentioned">Last mentioned</option>
-                        </select>
-                    </div>`
-            },
-            
-            'CHARACTER1': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>👤 CHARACTER1 Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Provides detailed information about the primary/first triggered character in the scene.</p>
-                    <p><strong>Example Output:</strong> "Luna - A confident wolf anthro with silver fur and amber eyes. Personality: playful, loyal, protective."</p>
-                    <p><strong>Use Case:</strong> Essential for establishing the main character's presence and traits when they're the focus of the scene.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Structures the character info with headers, organized sections, and proper spacing for better AI comprehension.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>👤 Primary Character Info</span>
-                        </label>
-                        <select name="infoLevel" class="bmt-select">
-                            <option value="name">Name only</option>
-                            <option value="basic">Name + basic traits</option>
-                            <option value="detailed">Name + detailed profile</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Character1 Template</span>
-                            <span class="bmt-help-text">First/primary triggered character format</span>
-                        </label>
-                        <textarea name="character1Template" class="bmt-textarea" rows="3" placeholder="Primary Character: {{name}}&#10;{{description}}&#10;Notable traits: {{personality_traits}}"></textarea>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🎨 Style Options</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeSpecies"> Include species info</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includePersonality"> Include personality</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includePhysical"> Include physical traits</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeBackground"> Include background</label>
-                        </div>
-                    </div>`
-            },
-            
-            'CHARACTER2': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>👥 CHARACTER2 Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Provides information about the secondary/second triggered character in multi-character scenes.</p>
-                    <p><strong>Example Output:</strong> "Marcus - A seasoned human knight with dark hair and kind eyes. Relationship to Luna: trusted companion."</p>
-                    <p><strong>Use Case:</strong> Perfect for scenes with two main characters where you need the AI to understand both characters and their relationship dynamics.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Organizes secondary character info with relationship context and clear structure for optimal AI understanding.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>👥 Secondary Character Info</span>
-                        </label>
-                        <select name="infoLevel" class="bmt-select">
-                            <option value="name">Name only</option>
-                            <option value="basic">Name + basic traits</option>
-                            <option value="detailed">Name + detailed profile</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Character2 Template</span>
-                            <span class="bmt-help-text">Second triggered character format</span>
-                        </label>
-                        <textarea name="character2Template" class="bmt-textarea" rows="3" placeholder="Secondary Character: {{name}}&#10;{{description}}&#10;Relationship: {{relationship}}"></textarea>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🔗 Relationship Context</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="showRelationship"> Show relationship to CHARACTER1</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showInteractions"> Show interaction history</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="comparativeTraits"> Compare traits with CHARACTER1</label>
-                        </div>
-                    </div>`
-            },
-            
+
             'PERSONALITY_TAGS': {
                 documentation: `
                     <div class="bmt-macro-doc-header">
-                        <strong>🧠 PERSONALITY_TAGS Macro</strong>
+                        <strong>🧠 PERSONALITY_TAGS - Character Traits</strong>
                     </div>
-                    <p><strong>Purpose:</strong> Extracts and displays personality traits from all triggered characters in a consolidated format.</p>
-                    <p><strong>Example Output:</strong> "Dominant traits: confident, playful, protective. Social: outgoing, loyal. Quirks: loves stargazing, hums when happy."</p>
-                    <p><strong>Use Case:</strong> Ideal when you want the AI to focus specifically on character personalities and behavioral patterns without physical descriptions.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Groups personality traits by category with clear headers and prioritized trait ordering for better AI role-playing accuracy.
+                    <p><strong>Purpose:</strong> Extracts personality and behavioral traits from all triggered characters.</p>
+                    <p><strong>Console Example Output:</strong></p>
+                    <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; font-family: monospace; color: #00ff00; font-size: 0.85em;">
+Atsu_Ibn_Oba_Al-Masri: Dere:Sadodere, Dere:Oujidere, ENTJ-U, TRAIT:CRUEL, TRAIT:INTELLIGENT, TRAIT:POWERFUL, TRAIT:DANGEROUS, TRAIT:SELFISH, TRAIT:HEDONISTIC, ATTACHMENT:FEARFUL_AVOIDANT, CONFLICT:COMPETITIVE, BOUNDARIES:RIGID, FLIRTING:AGGRESSIVE
                     </div>
+                    <p><strong>Use Case:</strong> Personality consistency, character depth, behavioral reference.</p>
                 `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🧠 Personality Format</span>
-                        </label>
-                        <select name="format" class="bmt-select">
-                            <option value="list">Simple trait list</option>
-                            <option value="sentences">Natural sentences</option>
-                            <option value="categories">Grouped by type</option>
-                        </select>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📊 Maximum Traits</span>
-                        </label>
-                        <input type="number" name="maxTraits" class="bmt-input" min="3" max="20" value="8" />
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🎭 Trait Categories</span>
-                            <span class="bmt-help-text">Select which personality categories to include</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="corePersonality" checked> Core personality</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="emotionalTraits" checked> Emotional traits</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="socialTraits"> Social behavior</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="quirks"> Quirks & habits</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="mentalTraits"> Mental attributes</label>
-                        </div>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Custom Format Template</span>
-                        </label>
-                        <textarea name="personalityTemplate" class="bmt-textarea" rows="4" placeholder="Personality: {{traits}}&#10;&#10;Dominant traits: {{core_traits}}&#10;Behavioral notes: {{quirks}}"></textarea>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>⚖️ Trait Priority</span>
-                        </label>
-                        <select name="priorityMethod" class="bmt-select">
-                            <option value="frequency">Most frequent traits</option>
-                            <option value="importance">Most important traits</option>
-                            <option value="recent">Recently mentioned</option>
-                            <option value="unique">Most unique traits</option>
-                        </select>
-                    </div>`
+                simple: `<div class="bmt-form-group"><p>Automatically finds personality-related tags like TRAIT:, Dere:, MBTI types from character data.</p></div>`,
+                advanced: `<div class="bmt-form-group"><p>Custom personality tag filtering and categorization.</p></div>`
             },
-            
+
             'PHYSICAL_TAGS': {
                 documentation: `
                     <div class="bmt-macro-doc-header">
-                        <strong>👁️ PHYSICAL_TAGS Macro</strong>
+                        <strong>👁️ PHYSICAL_TAGS - Appearance Traits</strong>
                     </div>
-                    <p><strong>Purpose:</strong> Displays physical appearance and visual characteristics of triggered characters.</p>
-                    <p><strong>Example Output:</strong> "Luna: Silver fur, amber eyes, athletic build, pointed ears. Marcus: Dark brown hair, green eyes, tall, knight's armor."</p>
-                    <p><strong>Use Case:</strong> Essential for scenes where physical appearance matters - combat, romance, detailed descriptions, or visual storytelling.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Organizes physical traits into logical categories (face, body, clothing, etc.) with consistent structure for vivid AI descriptions.
+                    <p><strong>Purpose:</strong> Physical appearance, species, and visual characteristics from triggered characters.</p>
+                    <p><strong>Console Example Output:</strong></p>
+                    <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; font-family: monospace; color: #00ff00; font-size: 0.85em;">
+Atsu_Ibn_Oba_Al-Masri: SPECIES:HUMAN, GENDER:MALE, BUILD:Muscular, BUILD:Tall, SKIN:FAIR, HAIR:BLACK, STYLE:ANCIENT_EGYPTIAN_ROYALTY
                     </div>
+                    <p><strong>Perfect For:</strong> Visual descriptions, appearance consistency, scene setting.</p>
                 `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>👁️ Physical Description Style</span>
-                        </label>
-                        <select name="style" class="bmt-select">
-                            <option value="basic">Basic appearance</option>
-                            <option value="detailed">Detailed description</option>
-                            <option value="highlights">Key features only</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>👀 Physical Categories</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="bodyType" checked> Body type</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="facialFeatures" checked> Facial features</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="hair" checked> Hair</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="clothing"> Clothing style</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="accessories"> Accessories</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="distinguishing"> Distinguishing marks</label>
-                        </div>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Physical Template</span>
-                        </label>
-                        <textarea name="physicalTemplate" class="bmt-textarea" rows="4" placeholder="Appearance: {{basic_description}}&#10;&#10;Notable features: {{distinguishing_features}}&#10;Style: {{clothing_style}}"></textarea>
-                    </div>`
+                simple: `<div class="bmt-form-group"><p>Finds physical and appearance tags automatically from BunnymoTags PHYSICAL sections.</p></div>`,
+                advanced: `<div class="bmt-form-group"><p>Advanced appearance categorization and formatting.</p></div>`
             },
-            
-            'CHARACTER_COUNT': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🔢 CHARACTER_COUNT Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Provides a count of how many characters are currently triggered/active in the scene.</p>
-                    <p><strong>Example Output:</strong> "3" or "Three characters present" or "Multiple characters detected: Luna, Marcus, Aria"</p>
-                    <p><strong>Use Case:</strong> Useful for templates that need to adjust behavior based on scene complexity - solo vs group interactions.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Converts raw numbers into contextual descriptions with character names and scene complexity indicators.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🔢 Count Display Format</span>
-                        </label>
-                        <select name="format" class="bmt-select">
-                            <option value="number">Number only</option>
-                            <option value="word">Written number</option>
-                            <option value="descriptive">Descriptive text</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Count Template</span>
-                        </label>
-                        <textarea name="countTemplate" class="bmt-textarea" rows="2" placeholder="{{count}} characters are present&#10;Multiple characters detected: {{names}}"></textarea>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🎯 Count Type</span>
-                        </label>
-                        <select name="countType" class="bmt-select">
-                            <option value="triggered">Only triggered characters</option>
-                            <option value="mentioned">All mentioned characters</option>
-                            <option value="total">Total repository characters</option>
-                        </select>
-                    </div>`
-            },
-            
-            'SELECTED_LOREBOOKS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📚 SELECTED_LOREBOOKS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Displays the currently enabled lorebooks from the selectedLorebooks Set.</p>
-                    <p><strong>Example Output:</strong> "Active lorebooks: Magic Academy, Character Repository, World Building Guide"</p>
-                    <p><strong>Use Case:</strong> Useful for templates that need to know which lorebooks are currently active for context.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Converts the lorebook list into formatted text with separators and optional descriptions.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📚 Display Format</span>
-                        </label>
-                        <select name="format" class="bmt-select">
-                            <option value="list">Simple list</option>
-                            <option value="count">Count only</option>
-                            <option value="detailed">Names with descriptions</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Custom Template</span>
-                        </label>
-                        <textarea name="lorebookTemplate" class="bmt-textarea" rows="3" placeholder="Active lorebooks: {{lorebook_list}}&#10;Total: {{count}}"></textarea>
-                    </div>
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🔧 Options</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeCount" checked> Include count</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeRepoMarkers"> Mark character repositories</label>
-                        </div>
-                    </div>`
-            },
-            
-            'CHARACTER_REPO_BOOKS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🏛️ CHARACTER_REPO_BOOKS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists lorebooks marked as character repositories from characterRepoBooks Set.</p>
-                    <p><strong>Example Output:</strong> "Character sources: Main Cast Repository, NPC Database"</p>
-                    <p><strong>Use Case:</strong> Helps track which lorebooks contain character data for template processing.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Organizes repository information with character counts and status indicators.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🏛️ Repository Display</span>
-                        </label>
-                        <select name="repoDisplay" class="bmt-select">
-                            <option value="names">Repository names only</option>
-                            <option value="stats">Names with character counts</option>
-                            <option value="status">Full status display</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📊 Repository Info</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="showCharacterCounts" checked> Character counts</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showScanStatus"> Scan status</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showLastUpdated"> Last updated</label>
-                        </div>
-                    </div>`
-            },
-            
-            'CHARACTER_LIST': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>👥 CHARACTER_LIST Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists all character names from the scannedCharacters Map keys.</p>
-                    <p><strong>Example Output:</strong> "Available characters: Luna, Marcus, Aria, Theron, Zephyr"</p>
-                    <p><strong>Use Case:</strong> Provides a simple list of all indexed characters for reference or selection.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Converts character names into formatted lists with optional categorization.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>👥 List Format</span>
-                        </label>
-                        <select name="listFormat" class="bmt-select">
-                            <option value="comma">Comma separated</option>
-                            <option value="bullet">Bullet points</option>
-                            <option value="numbered">Numbered list</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🎯 Character Filtering</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="triggeredOnly"> Triggered characters only</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeSource"> Include source repository</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="sortAlphabetical" checked> Sort alphabetically</label>
-                        </div>
-                    </div>`
-            },
-            
-            'TRIGGERED_CHARACTER_TAGS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header" style="background: rgba(255,165,0,0.2); padding: 10px; border-radius: 6px; border: 2px solid orange;">
-                        <strong>✅ TRIGGERED_CHARACTER_TAGS Macro - THIS IS THE ONE!</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Displays ALL character tags for characters that are currently triggered/active in the conversation - the MAIN macro for character tag injections.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00; font-size: 11px;">
-                        &lt;BunnymoTags&gt;&lt;Name:Atsu_Ibn_Oba_Al-Masri&gt;, &lt;GENRE:FANTASY&gt;<br/>
-                        &lt;PHYSICAL&gt; &lt;SPECIES:HUMAN&gt;, &lt;GENDER:MALE&gt;, &lt;BUILD:Muscular&gt;, &lt;BUILD:Tall&gt;<br/>
-                        &lt;PERSONALITY&gt;&lt;Dere:Sadodere&gt;, &lt;ENTJ-U&gt;, &lt;TRAIT:CRUEL&gt;, &lt;TRAIT:INTELLIGENT&gt;<br/>
-                        &lt;NSFW&gt;&lt;ORIENTATION:PANSEXUAL&gt;, &lt;POWER:DOMINANT&gt;, &lt;KINK:BRAT_TAMING&gt;<br/>
-                        &lt;/BunnymoTags&gt;<br/><br/>
-                        &lt;Linguistics&gt; Character uses &lt;LING:COMMANDING&gt; with &lt;LING:SUGGESTIVE&gt; tone...
-                    </div>
-                    <p><strong>Use Case:</strong> Essential for character consistency - provides ALL relevant character trait data for maintaining personality, species, and behavioral accuracy.</p>
-                    <div class="bmt-macro-use-case" style="background: rgba(255,165,0,0.1); padding: 10px; border-left: 3px solid orange; margin: 10px 0;">
-                        <strong>🎯 MAIN CHARACTER INJECTION MACRO:</strong> This is THE macro you want for {{TRIGGERED_CHARACTER_TAGS}} in your template!
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🎯 Tag Organization</span>
-                        </label>
-                        <select name="tagOrganization" class="bmt-select">
-                            <option value="combined">All tags combined</option>
-                            <option value="by_character">Grouped by character</option>
-                            <option value="by_category">Grouped by tag type</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🏷️ Tag Categories</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="includePersonality" checked> Personality traits</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includePhysical" checked> Physical traits</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeSpecies"> Species/race</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeSkills"> Skills/abilities</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeBackground"> Background info</label>
-                        </div>
-                    </div>`
-            },
-            
-            'ALL_TAG_CATEGORIES': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🗂️ ALL_TAG_CATEGORIES Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists all available tag categories found across all scanned characters.</p>
-                    <p><strong>Example Output:</strong> "Available categories: personality, physical, species, background, skills, relationships"</p>
-                    <p><strong>Use Case:</strong> Useful for understanding the data structure and available character information types.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Organizes category information with counts and usage statistics.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🗂️ Category Display</span>
-                        </label>
-                        <select name="categoryDisplay" class="bmt-select">
-                            <option value="names">Category names only</option>
-                            <option value="counts">Names with tag counts</option>
-                            <option value="detailed">Full category analysis</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📊 Category Statistics</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="showTagCounts" checked> Tag counts per category</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showCharacterCounts"> Characters using each category</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showPopularTags"> Most common tags</label>
-                        </div>
-                    </div>`
-            },
-            
-            'CHARACTER_SOURCES': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📍 CHARACTER_SOURCES Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Shows which lorebook each character originated from, revealing the data provenance.</p>
-                    <p><strong>Example Output:</strong> "Luna (from Main Cast), Marcus (from Main Cast), Aria (from NPC Database), Vendor (from World NPCs)"</p>
-                    <p><strong>Use Case:</strong> Essential for understanding data relationships and debugging character conflicts between repositories.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Cross-references character names with their source repositories for data lineage tracking.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📍 Source Display</span>
-                        </label>
-                        <select name="sourceDisplay" class="bmt-select">
-                            <option value="character_list">Characters with sources</option>
-                            <option value="repository_groups">Grouped by repository</option>
-                            <option value="source_summary">Repository summary only</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🔍 Source Analysis</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="showCharacterCounts" checked> Character counts per repo</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="highlightConflicts"> Highlight name conflicts</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showRepoTypes"> Repository types (character/tag library)</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeUIDs"> Include unique identifiers</label>
-                        </div>
-                    </div>`
-            },
-            
+
             'TAG_STATISTICS': {
                 documentation: `
                     <div class="bmt-macro-doc-header">
-                        <strong>📊 TAG_STATISTICS Macro</strong>
+                        <strong>📊 TAG_STATISTICS - System Overview</strong>
                     </div>
-                    <p><strong>Purpose:</strong> Analyzes tag usage patterns across all scanned characters for insights and optimization.</p>
-                    <p><strong>Example Output:</strong> "Most common tags: personality (47 uses), physical (23 uses). Rare categories: skills (3 chars), magic (2 chars). Coverage: 8/12 categories used."</p>
-                    <p><strong>Use Case:</strong> Perfect for understanding your character repository's completeness and identifying tagging patterns.</p>
-                    <div class="bmt-macro-use-case">
-                        <strong>🎨 Format Output:</strong> Statistical analysis of tag distribution with coverage metrics and usage recommendations.
+                    <p><strong>Purpose:</strong> Statistical breakdown of your BunnymoTags system and character data from scanned characters.</p>
+                    <p><strong>Console Example Output:</strong></p>
+                    <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; font-family: monospace; color: #00ff00; font-size: 0.85em;">
+**Tag Statistics** (247 total tags across 15 characters)<br/>
+Most common categories:<br/>
+• PHYSICAL: 89 tags (12 characters)<br/>
+• PERSONALITY: 67 tags (15 characters)<br/>
+• NSFW: 45 tags (8 characters)<br/>
+• GENRE: 23 tags (15 characters)<br/>
+• Name: 15 tags (15 characters)
                     </div>
+                    <p><strong>Use Case:</strong> System health, BunnymoTags data quality assessment, character coverage analysis.</p>
                 `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📊 Statistics Type</span>
-                        </label>
-                        <select name="statsType" class="bmt-select">
-                            <option value="overview">General overview</option>
-                            <option value="detailed">Detailed breakdown</option>
-                            <option value="insights">Usage insights</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📈 Analysis Metrics</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="showFrequency" checked> Tag frequency analysis</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showCoverage"> Category coverage rates</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showDistribution"> Character distribution</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showRecommendations"> Tagging recommendations</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="showTrends"> Usage trends</label>
-                        </div>
-                    </div>`
+                simple: `<div class="bmt-form-group"><p>Comprehensive BunnymoTags system statistics and character data health metrics.</p></div>`,
+                advanced: `<div class="bmt-form-group"><p>Custom statistical analysis and BunnymoTags reporting options.</p></div>`
             },
-            
-            'CROSS_CHARACTER_ANALYSIS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🔗 CROSS_CHARACTER_ANALYSIS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Finds connections, similarities, and contrasts between characters based on their tag data.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        === CHARACTER ANALYSIS ===<br/>
-                        ✓ Similarities: Luna & Marcus [protective, loyal]<br/>
-                        ⚡ Contrasts: Luna (magic) vs Marcus (mundane)<br/>
-                        ⭐ Unique to Luna: wolf anthro, pack leader
-                    </div>
-                    <p><strong>Use Case:</strong> Incredible for discovering character relationships, avoiding duplicates, and enhancing story dynamics.</p>
-                    <div class="bmt-macro-use-case" style="background: rgba(138,43,226,0.1); padding: 8px; border-left: 3px solid mediumpurple;">
-                        <strong>🎭 Story Enhancement:</strong> Perfect for finding unexpected character connections and potential conflicts.
-                    </div>
-                `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🔗 Analysis Focus</span>
-                        </label>
-                        <select name="analysisFocus" class="bmt-select">
-                            <option value="similarities">Character similarities</option>
-                            <option value="contrasts">Character differences</option>
-                            <option value="relationships">Potential relationships</option>
-                            <option value="comprehensive">Complete analysis</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🎯 Analysis Scope</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="includePersonality" checked> Personality overlaps</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeSpecies"> Species/race patterns</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeSkills"> Skill complementarity</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeBackground"> Background connections</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="calculateCompatibility"> Compatibility scoring</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="suggestDynamics"> Relationship suggestions</label>
-                        </div>
-                    </div>`
-            },
-            
+
             'REPOSITORY_METADATA': {
                 documentation: `
                     <div class="bmt-macro-doc-header">
-                        <strong>🗄️ REPOSITORY_METADATA Macro</strong>
+                        <strong>🗃️ REPOSITORY_METADATA - System Status</strong>
                     </div>
-                    <p><strong>Purpose:</strong> Provides comprehensive metadata about the entire CarrotKernel repository system status.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        System status: 3 repos active, 47 characters indexed, 12 tag categories<br/>
-                        Last scan: 2 min ago | Health: 94% tagged characters<br/>
-                        Conflicts detected: 2 | Memory usage: 156MB
+                    <p><strong>Purpose:</strong> Complete CarrotKernel system status and health information.</p>
+                    <p><strong>Console Example Output:</strong></p>
+                    <div style="background: #1a1a1a; padding: 10px; border-radius: 4px; font-family: monospace; color: #00ff00; font-size: 0.85em;">
+**CarrotKernel System Status**<br/>
+📊 **System Overview:**<br/>
+• Active lorebooks: 3<br/>
+• Character repositories: 2<br/>
+• Total characters indexed: 15<br/>
+• Currently triggered: 3<br/>
+• Tag categories available: 12<br/>
+<br/>
+📈 **Data Quality:**<br/>
+• Character coverage: 87% (13/15 characters have tags)<br/>
+• System health: Operational
                     </div>
-                    <p><strong>Use Case:</strong> Essential for system monitoring, troubleshooting, and understanding the current state of your character data.</p>
-                    <div class="bmt-macro-use-case" style="background: rgba(70,130,180,0.1); padding: 8px; border-left: 3px solid steelblue;">
-                        <strong>💻 Dashboard Style:</strong> Perfect for system overview templates and health monitoring displays.
-                    </div>
+                    <p><strong>Use Case:</strong> System monitoring, debugging, status reports.</p>
                 `,
-                simple: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>🗄️ Metadata Scope</span>
-                        </label>
-                        <select name="metadataScope" class="bmt-select">
-                            <option value="system_status">System status overview</option>
-                            <option value="repository_health">Repository health check</option>
-                            <option value="data_quality">Data quality metrics</option>
-                            <option value="full_diagnostic">Complete diagnostic</option>
-                        </select>
-                    </div>`,
-                advanced: `
-                    <div class="bmt-form-group">
-                        <label class="bmt-label">
-                            <span>📋 Diagnostic Components</span>
-                        </label>
-                        <div class="bmt-checkbox-grid">
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeSystemStats" checked> System statistics</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeHealthCheck"> Health diagnostics</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeDataQuality"> Data quality assessment</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includePerformance"> Performance metrics</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeRecommendations"> System recommendations</label>
-                            <label class="bmt-checkbox"><input type="checkbox" name="includeDebugInfo"> Debug information</label>
-                        </div>
-                    </div>`
+                simple: `<div class="bmt-form-group"><p>Complete system health and status overview.</p></div>`,
+                advanced: `<div class="bmt-form-group"><p>Detailed system metrics and custom reporting.</p></div>`
             }
         };
-        
-        // Fallback documentation for any missing macros
-        const fallbackDocs = {
-            'TRIGGERED_CHARACTER_TAGS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header" style="background: rgba(255,165,0,0.2); padding: 10px; border-radius: 6px; border: 2px solid orange;">
-                        <strong>✅ TRIGGERED_CHARACTER_TAGS Macro - THIS IS THE ONE!</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Provides ALL character tags for triggered characters - this is the main macro for character tag injections into conversation context.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        Luna: wolf, anthro, female, warrior, pack leader<br/>
-                        Marcus: human, male, knight, honorable, sword fighter
-                    </div>
-                    <p><strong>Use Case:</strong> Essential for maintaining character consistency - provides comprehensive trait information including personality, species, background, relationships, and more.</p>
-                    <div class="bmt-macro-use-case" style="background: rgba(255,165,0,0.1); padding: 10px; border-left: 3px solid orange; margin: 10px 0;">
-                        <strong>🎯 Main Character Injection Macro:</strong> This is what you want for {{TRIGGERED_CHARACTER_TAGS}} in your template!
-                    </div>
-                `,
-                simple: `<div class="bmt-form-group"><p>✅ This is the main macro for character tag injection - no configuration needed!</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Automatically processes all triggered character tags from CarrotKernel's character analysis system.</p></div>`
-            },
-            'CHARACTER_LIST': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>👥 CHARACTER_LIST Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Simple comma-separated list of triggered character names.</p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        Luna, Marcus, Aria
-                    </div>
-                    <p><strong>Use Case:</strong> Basic character awareness - when you just need character names without additional details.</p>
-                `,
-                simple: `<div class="bmt-form-group"><p>Simple character name list - no configuration options.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Outputs triggered character names separated by commas.</p></div>`
-            },
-            'CHARACTERS_WITH_TYPES': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🏷️ CHARACTERS_WITH_TYPES Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Character names with their species/types shown in parentheses.</p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        Luna (wolf anthro), Marcus (human knight), Aria (elven mage)
-                    </div>
-                    <p><strong>Use Case:</strong> When you need basic character info with species/role context for the AI.</p>
-                `,
-                simple: `<div class="bmt-form-group"><p>Automatically detects character types from tags.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Searches tags for species/role keywords and displays them in parentheses.</p></div>`
-            },
-            'SELECTED_LOREBOOKS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📚 SELECTED_LOREBOOKS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists all currently selected/active lorebook names in CarrotKernel.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        Fantasy Characters, Medieval Settings, Magic System, NPCs
-                    </div>
-                    <p><strong>Use Case:</strong> Reference what lorebooks are currently loaded and contributing to character data.</p>
-                `,
-                simple: `<div class="bmt-form-group"><p>Shows names of currently active lorebooks in the system.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Dynamically updates based on lorebook selection status.</p></div>`
-            },
-            'CHARACTER_REPO_BOOKS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📖 CHARACTER_REPO_BOOKS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists character repository lorebooks available in your system.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        Main Cast Repository, Supporting Characters, Villains Database, NPCs Collection
-                    </div>
-                    <p><strong>Use Case:</strong> See what character repository books are available for selection.</p>
-                `,
-                simple: `<div class="bmt-form-group"><p>Lists all detected character repository lorebooks.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Scans lorebooks directory for character repositories.</p></div>`
-            },
-            'ALL_TAG_CATEGORIES': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>🏷️ ALL_TAG_CATEGORIES Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Shows all tag categories found across all scanned characters.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        PHYSICAL, PERSONALITY, NSFW, GENRE, LINGUISTICS, RELATIONSHIPS, SKILLS
-                    </div>
-                    <p><strong>Use Case:</strong> Understand what types of character data categories are available.</p>
-                `,
-                simple: `<div class="bmt-form-group"><p>Automatically discovered from all character data.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Aggregates unique categories from character tag structures.</p></div>`
-            },
-            'CHARACTER_SOURCES': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📚 CHARACTER_SOURCES Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Lists the sources/origins where characters come from.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        Fantasy Novel Series, Original Game Characters, Custom Creations, Community Submissions
-                    </div>
-                    <p><strong>Use Case:</strong> Track character origins for organization and attribution.</p>
-                `,
-                simple: `<div class="bmt-form-group"><p>Extracted from character metadata and sources.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Analyzes character data for source attribution.</p></div>`
-            },
-            'TAG_STATISTICS': {
-                documentation: `
-                    <div class="bmt-macro-doc-header">
-                        <strong>📊 TAG_STATISTICS Macro</strong>
-                    </div>
-                    <p><strong>Purpose:</strong> Detailed statistical breakdown of tags by category and usage.</p>
-                    <p><strong>Example Output:</strong></p>
-                    <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; font-family: monospace; color: #00ff00;">
-                        === TAG STATISTICS ===<br/>
-                        PERSONALITY: 127 tags across 15 characters<br/>
-                        PHYSICAL: 89 tags across 18 characters<br/>
-                        NSFW: 67 tags across 12 characters<br/>
-                        GENRE: 23 tags across 20 characters
-                    </div>
-                    <p><strong>Use Case:</strong> Analyze tag distribution and identify gaps in character data.</p>
-                `,
-                simple: `<div class="bmt-form-group"><p>Comprehensive statistics about tag usage patterns.</p></div>`,
-                advanced: `<div class="bmt-form-group"><p>Detailed metrics with counts, percentages, and coverage analysis.</p></div>`
-            }
-        };
-        
-        return configurations[macroName] || fallbackDocs[macroName] || {
+
+        // Return specific config or generate dynamic one
+        return macroConfigs[macroName] || {
             documentation: `
                 <div class="bmt-macro-doc-header">
                     <strong>🔧 ${macroName} Macro</strong>
                 </div>
-                <p><strong>Purpose:</strong> CarrotKernel functional macro for dynamic template processing.</p>
-                <p><strong>Example Output:</strong> Depends on your configuration - can be static text, dynamic content, or processed data.</p>
-                <p><strong>Use Case:</strong> Create your own specialized macros for unique template requirements not covered by the built-in CarrotKernel macros.</p>
-                <div class="bmt-macro-use-case">
-                    <strong>🎨 Format Output:</strong> Applies CarrotKernel's formatting engine to structure your custom content with proper spacing and organization.
-                </div>
+                <p><strong>Purpose:</strong> ${macroName.toLowerCase().replace(/_/g, ' ')} processing.</p>
+                <p><strong>Use Case:</strong> Dynamic content generation for templates.</p>
             `,
-            simple: `
-                <div class="bmt-form-group">
-                    <label class="bmt-label">
-                        <span>✏️ Custom Value</span>
-                    </label>
-                    <input type="text" name="customValue" class="bmt-input" placeholder="Enter custom value for {{${macroName}}}" />
-                </div>`,
-            advanced: `
-                <div class="bmt-form-group">
-                    <label class="bmt-label">
-                        <span>📋 Advanced Template</span>
-                    </label>
-                    <textarea name="advancedTemplate" class="bmt-textarea" rows="4" placeholder="Enter advanced template for {{${macroName}}}&#10;&#10;Use variables and custom formatting"></textarea>
-                </div>
-                <div class="bmt-form-group">
-                    <label class="bmt-label">
-                        <span>🔧 Processing Options</span>
-                    </label>
-                    <div class="bmt-checkbox-grid">
-                        <label class="bmt-checkbox"><input type="checkbox" name="enableFormatting"> Apply text formatting</label>
-                        <label class="bmt-checkbox"><input type="checkbox" name="enableFiltering"> Enable content filtering</label>
-                        <label class="bmt-checkbox"><input type="checkbox" name="enableConditionals"> Use conditional logic</label>
-                    </div>
-                </div>`
+            simple: `<div class="bmt-form-group"><p>Standard macro processing options.</p></div>`,
+            advanced: `<div class="bmt-form-group"><p>Advanced configuration options.</p></div>`
         };
+    }
+
+
+    getAllAvailableMacros() {
+        const allMacros = [];
+        
+        // Get ALL functional macros from CarrotTemplateManager (direct reference)
+        if (CarrotTemplateManager && CarrotTemplateManager.macroProcessors) {
+            Object.keys(CarrotTemplateManager.macroProcessors).forEach(macro => {
+                allMacros.push(macro);
+            });
+        }
+        
+        // Add common SillyTavern system macros (these work via ST's template system)
+        const systemMacros = [
+            'CHAR_NAME', 'CHAR_PERSONA', 'CHAR_DESCRIPTION', 'CHAR_SCENARIO', 'CHAR_GREETING',
+            'CHAR_EXAMPLES', 'CHAR_TAGS', 'CHAR_AVATAR', 'CHAR_BOOK',
+            'WORLD_INFO', 'CHAT_HISTORY', 'USER_NAME', 'SYSTEM_PROMPT', 'JAILBREAK', 'NSFW_PROMPT',
+            'CURRENT_TIME', 'CURRENT_DATE', 'RANDOM_NUMBER'
+        ];
+        
+        systemMacros.forEach(macro => {
+            if (!allMacros.includes(macro)) {
+                allMacros.push(macro);
+            }
+        });
+        
+        return allMacros.sort();
     }
     
     setupMacroEventHandlers(macro, $macro) {
@@ -11103,7 +11344,17 @@ class CarrotTemplatePromptEditInterface {
         // Wait for modal to be created, then inject tutorial overlay into it
         setTimeout(() => {
             const modal = document.querySelector('.popup:not(.popup_template)');
-            if (modal && !modal.querySelector('#carrot-tutorial-overlay')) {
+            const existingOverlay = modal?.querySelector('#carrot-tutorial-overlay');
+            
+            CarrotDebug.tutorial('🔄 Modal overlay injection check', {
+                modalFound: !!modal,
+                modalId: modal?.id || 'no-id',
+                modalClasses: modal?.className || 'no-classes',
+                existingOverlay: !!existingOverlay,
+                modalChildren: modal?.children.length || 0
+            });
+            
+            if (modal && !existingOverlay) {
                 const tutorialHTML = `
                     <!-- Tutorial Overlay -->
                     <div class="carrot-tutorial-overlay" id="carrot-tutorial-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999999;">
@@ -11131,6 +11382,16 @@ class CarrotTemplatePromptEditInterface {
                     </div>
                 `;
                 modal.insertAdjacentHTML('beforeend', tutorialHTML);
+                
+                CarrotDebug.tutorial('✅ Tutorial overlay injected into modal', {
+                    modalId: modal.id || 'no-id',
+                    newOverlayExists: !!modal.querySelector('#carrot-tutorial-overlay'),
+                    modalChildrenAfter: modal.children.length
+                });
+            } else if (!modal) {
+                CarrotDebug.tutorial('❌ No modal found for overlay injection');
+            } else {
+                CarrotDebug.tutorial('ℹ️ Tutorial overlay already exists in modal');
             }
         }, 100);
 
@@ -11256,6 +11517,8 @@ class CarrotTemplatePromptEditInterface {
         const template = this.templateManager.getTemplate(templateKey);
         if (!template) return;
         
+        console.log('🥕 LOAD DEBUG: Loading template:', templateKey, 'template name:', template.name, 'template data:', template);
+        
         // Load template content  
         const templateContent = template.content || '';
         this.$prompt.val(templateContent);
@@ -11270,9 +11533,25 @@ class CarrotTemplatePromptEditInterface {
             this.$template_scan = this.$content.find('#template_scan');
         }
         
-        // Set template depth and scan values
+        // Set template depth and scan values - FORCE refresh the DOM reference first
+        this.$template_depth = $('#template_depth');  // Always get fresh reference
         if (this.$template_depth && this.$template_depth.length) {
-            this.$template_depth.val(template.depth || 4);
+            const depthValue = template.depth !== undefined ? template.depth : 4;
+            
+            // Nuclear option: Force update ALL possible ways
+            const element = document.getElementById('template_depth');
+            if (element) {
+                element.value = depthValue;  // Direct DOM manipulation
+                element.setAttribute('value', depthValue);  // Force attribute
+                $(element).val(depthValue);  // jQuery method
+                $(element).trigger('change');  // Trigger events
+            }
+            
+            // Also update our jQuery reference
+            this.$template_depth.val(depthValue).attr('value', depthValue);
+            
+            console.log('🥕 LOAD DEBUG: NUCLEAR OPTION - Set depth value:', depthValue, 'from template.depth:', template.depth);
+            console.log('🥕 LOAD DEBUG: Element value:', element?.value, 'Element attribute:', element?.getAttribute('value'));
         }
         if (this.$template_scan && this.$template_scan.length) {
             this.$template_scan.prop('checked', template.scan !== false);
@@ -11304,7 +11583,31 @@ class CarrotTemplatePromptEditInterface {
             return 'Character Data Injection';
         }
         
-        // Default fallback to the only category we support
+        if (name.includes('fullsheet') || name.includes('full sheet')) {
+            return 'BunnyMo Fullsheet Format';
+        }
+        
+        if (name.includes('tagsheet') || name.includes('tag sheet')) {
+            return 'BunnyMo Tagsheet Format';
+        }
+        
+        if (name.includes('quicksheet') || name.includes('quick sheet')) {
+            return 'BunnyMo Quicksheet Format';
+        }
+        
+        if (name.includes('fullsheet injection') || name.includes('full sheet injection')) {
+            return 'BunnyMo Fullsheet Injection';
+        }
+        
+        if (name.includes('tagsheet injection') || name.includes('tag sheet injection')) {
+            return 'BunnyMo Tagsheet Injection';
+        }
+        
+        if (name.includes('quicksheet injection') || name.includes('quick sheet injection')) {
+            return 'BunnyMo Quicksheet Injection';
+        }
+        
+        // Default fallback to character injection
         return 'Character Data Injection';
     }
     
@@ -11350,10 +11653,10 @@ class CarrotTemplatePromptEditInterface {
             $('.toggle-macro').toggle();
         });
         
-        // Add real-time macro detection
+        // Don't update macros based on template content - show all macros always
         this.$prompt.off('input.carrotmacro').on('input.carrotmacro', () => {
             this.detectMacrosFromTemplate();
-            this.update_macros();
+            // Removed: this.update_macros(); - we want consistent macro display
         });
     }
     
@@ -11394,13 +11697,27 @@ class CarrotTemplatePromptEditInterface {
         
         const isPrimary = this.$template_role.prop('checked');
         
+        // Ensure we have fresh references to DOM elements
+        if (!this.$template_depth || !this.$template_depth.length) {
+            this.$template_depth = $('#template_depth');
+        }
+        if (!this.$template_scan || !this.$template_scan.length) {
+            this.$template_scan = $('#template_scan');
+        }
+        
+        // Get depth value directly from DOM if reference fails
+        const depthValue = this.$template_depth?.val() || $('#template_depth').val() || 4;
+        const scanValue = this.$template_scan?.prop('checked') !== false || $('#template_scan').prop('checked') !== false;
+        
+        console.log('🥕 SAVE DEBUG: Depth value being saved:', depthValue, 'from element:', this.$template_depth?.val(), 'direct:', $('#template_depth').val());
+        
         const template = {
             label: this.templateManager.getTemplate(templateKey)?.label || templateKey,
             content: this.$prompt.val(),
             role: this.$template_type.val(),
             category: this.$template_category.val(),
-            depth: parseInt(this.$template_depth?.val() || 4),
-            scan: this.$template_scan?.prop('checked') !== false,
+            depth: parseInt(depthValue),
+            scan: scanValue,
             variables: this.extractVariables(this.$prompt.val()),
             isDefault: false,
             isPrimary: isPrimary,

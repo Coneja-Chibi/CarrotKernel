@@ -300,13 +300,194 @@ class TemplatePromptEditInterface {
         this.$template_selector.on('change', () => {
             this.selectedTemplate = this.$template_selector.val();
             this.from_settings(); // Reload template content
-            this.update_macros(); // Update macro list
+            // Don't update macros - they should always be the same
         });
         
-        // Add real-time macro detection
-        this.$prompt.on('input', () => {
-            this.detectMacrosFromTemplate();
-            this.update_macros();
+        // Initialize macros once and don't update based on template content
+        this.update_macros();
+    }
+
+    populateTemplateSelector() {
+        // This would be populated with actual templates
+        // For now, just add a default option to prevent errors
+        if (this.$template_selector && this.$template_selector.length) {
+            this.$template_selector.empty();
+            this.$template_selector.append('<option value="">Select a template...</option>');
+        }
+    }
+
+    from_settings() {
+        // Load settings from the extension settings or template data
+        // This would normally populate the template content and settings
+        // For now, just initialize basic values to prevent errors
+        if (this.$prompt && this.$prompt.length) {
+            // Set a default prompt if empty
+            if (!this.$prompt.val()) {
+                this.$prompt.val('Template content will appear here...');
+            }
+        }
+    }
+
+    detectMacrosFromTemplate() {
+        // Get all macros from the CarrotKernel extension
+        if (window.CarrotKernel && window.CarrotKernel.getAllAvailableMacros) {
+            const availableMacros = window.CarrotKernel.getAllAvailableMacros();
+            
+            // Add any detected macros to our macros object
+            availableMacros.forEach(macroName => {
+                if (!this.macros[macroName]) {
+                    this.macros[macroName] = {
+                        name: macroName,
+                        enabled: true,
+                        type: 'simple',
+                        format: false,
+                        command: '',
+                        default: false // User-detected macros are not default
+                    };
+                }
+            });
+        }
+    }
+
+    update_macros() {
+        // Clear existing macro definitions only once
+        this.$definitions.empty();
+        
+        // Always get ALL macros regardless of template content
+        this.detectMacrosFromTemplate();
+        
+        // Create macro cards for each macro
+        Object.values(this.macros).forEach(macro => {
+            this.create_macro_interface(macro);
+        });
+        
+        // Reinitialize collapsible functionality for new cards
+        this.initializeCollapsibleMacros();
+    }
+
+    create_macro_interface(macro) {
+        // Get macro configuration from CarrotKernel
+        let config = { documentation: '', simple: '', advanced: '' };
+        if (window.CarrotKernel && window.CarrotKernel.getMacroConfiguration) {
+            config = window.CarrotKernel.getMacroConfiguration(macro.name);
+        }
+
+        const macroHtml = `
+        <div class="bmt-macro-card" id="macro_${macro.name}">
+            <div class="bmt-macro-header" data-macro="${macro.name}">
+                <div class="bmt-macro-title">
+                    <span class="bmt-macro-icon">🔧</span>
+                    <span class="bmt-macro-name">${macro.name}</span>
+                    <span class="bmt-macro-status ${macro.enabled ? 'enabled' : 'disabled'}">${macro.enabled ? '✅' : '❌'}</span>
+                </div>
+                <div class="bmt-macro-controls">
+                    <button class="bmt-toggle-docs" title="Show/hide documentation">📖</button>
+                    <button class="bmt-toggle-drawer" title="Show/hide configuration">⬇️</button>
+                </div>
+            </div>
+
+            <div class="bmt-macro-documentation" style="display: none;">
+                ${config.documentation || `<p>Documentation for ${macro.name} macro.</p>`}
+            </div>
+
+            <div class="bmt-macro-drawer" style="display: none;">
+                <div class="bmt-configuration-tabs">
+                    <div class="bmt-tab-headers">
+                        <button class="bmt-tab-header active" data-tab="simple">🎯 Simple</button>
+                        <button class="bmt-tab-header" data-tab="advanced">⚡ Advanced</button>
+                    </div>
+                    
+                    <div class="bmt-tab-content">
+                        <div class="bmt-tab-panel active" data-panel="simple">
+                            ${config.simple || '<div class="bmt-form-group"><p>Simple configuration options will appear here.</p></div>'}
+                        </div>
+                        <div class="bmt-tab-panel" data-panel="advanced">
+                            ${config.advanced || '<div class="bmt-form-group"><p>Advanced configuration options will appear here.</p></div>'}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+
+        this.$definitions.append(macroHtml);
+    }
+
+    initializeCollapsibleMacros() {
+        // Remove any existing event handlers to prevent duplicates
+        this.$definitions.off('click.macrotoggle');
+        
+        // Add event handlers using event delegation with a longer delay to prevent conflicts
+        this.$definitions.on('click.macrotoggle', '.bmt-toggle-drawer', (e) => {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            
+            const $button = $(e.currentTarget);
+            const $card = $button.closest('.bmt-macro-card');
+            const $drawer = $card.find('.bmt-macro-drawer');
+            
+            // Add a small delay to prevent rapid clicks
+            $card.addClass('animating');
+            setTimeout(() => {
+                if ($drawer.is(':visible')) {
+                    $drawer.slideUp(300, () => {
+                        $button.html('⬇️').attr('title', 'Show configuration');
+                        $card.removeClass('animating');
+                    });
+                } else {
+                    $drawer.slideDown(300, () => {
+                        $button.html('⬆️').attr('title', 'Hide configuration');
+                        $card.removeClass('animating');
+                    });
+                }
+            }, 50);
+            
+            return false;
+        });
+
+        this.$definitions.on('click.macrotoggle', '.bmt-toggle-docs', (e) => {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            
+            const $button = $(e.currentTarget);
+            const $card = $button.closest('.bmt-macro-card');
+            const $docs = $card.find('.bmt-macro-documentation');
+            
+            $card.addClass('animating');
+            setTimeout(() => {
+                if ($docs.is(':visible')) {
+                    $docs.slideUp(300, () => {
+                        $button.html('📖').attr('title', 'Show documentation');
+                        $card.removeClass('animating');
+                    });
+                } else {
+                    $docs.slideDown(300, () => {
+                        $button.html('📕').attr('title', 'Hide documentation');
+                        $card.removeClass('animating');
+                    });
+                }
+            }, 50);
+            
+            return false;
+        });
+
+        // Tab switching
+        this.$definitions.on('click.macrotoggle', '.bmt-tab-header', (e) => {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            
+            const $button = $(e.currentTarget);
+            const $card = $button.closest('.bmt-macro-card');
+            const tabName = $button.data('tab');
+            
+            // Update active tab header
+            $card.find('.bmt-tab-header').removeClass('active');
+            $button.addClass('active');
+            
+            // Update active tab panel
+            $card.find('.bmt-tab-panel').removeClass('active');
+            $card.find(`[data-panel="${tabName}"]`).addClass('active');
+            
+            return false;
         });
     }
 }
