@@ -168,6 +168,25 @@
                             <i class="fa-solid fa-mouse-pointer"></i>
                         </div>
                     </div>
+                    
+                    <div class="carrot-status-panel carrot-status-packs carrot-clickable" 
+                         data-tooltip="Click to manage BunnyMo pack installation and updates - Main pack, themes, and expansions"
+                         onclick="CarrotKernel.openPackManager()">
+                        <div class="carrot-status-icon">
+                            <i class="fa-solid fa-box-archive"></i>
+                        </div>
+                        <div class="carrot-status-content">
+                            <div class="carrot-status-title">Pack Manager</div>
+                            <div class="carrot-status-value" id="carrot-pack-status">Scanning packs...</div>
+                            <div class="carrot-status-detail" id="carrot-pack-detail">Click to manage BunnyMo packs</div>
+                        </div>
+                        <div class="carrot-status-indicator" id="carrot-pack-indicator">
+                            <div class="carrot-pulse-dot"></div>
+                        </div>
+                        <div class="carrot-click-hint">
+                            <i class="fa-solid fa-mouse-pointer"></i>
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -307,6 +326,9 @@
                         </button>
                     </div>
                 </div>
+            </div>
+
+
             </div>
         </div>
     </div>

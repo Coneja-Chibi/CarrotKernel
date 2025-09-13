@@ -825,8 +825,9 @@ const CarrotTemplateManager = {
         if (!lastInjectedCharacters || lastInjectedCharacters.length === 0) {
             return [];
         }
-        return lastInjectedCharacters.filter(name => scannedCharacters.has(name))
-            .map(name => ({ name, data: scannedCharacters.get(name) }));
+        return lastInjectedCharacters.map(name => findCharacterByName(name))
+            .filter(result => result && result.data)
+            .map(result => ({ name: result.name, data: result.data }));
     },
 
     // Helper function to extract tags by category from triggered characters only
@@ -1145,8 +1146,11 @@ ${stats.totalCharacters === 0 ? '⚠️ No characters found - scan lorebooks fir
                 }
                 if (!charName) return 'No character specified for fullsheet format';
                 
-                const charData = scannedCharacters.get(charName);
-                if (!charData) return `Character ${charName} not found`;
+                const charResult = findCharacterByName(charName);
+                if (!charResult || !charResult.data) return `Character ${charName} not found`;
+                
+                const charData = charResult.data;
+                const actualCharName = charResult.name;
                 
                 return generateFullSheet(charName, charData);
             },
@@ -1157,8 +1161,11 @@ ${stats.totalCharacters === 0 ? '⚠️ No characters found - scan lorebooks fir
                 }
                 if (!charName) return 'No character specified for tagsheet format';
                 
-                const charData = scannedCharacters.get(charName);
-                if (!charData) return `Character ${charName} not found`;
+                const charResult = findCharacterByName(charName);
+                if (!charResult || !charResult.data) return `Character ${charName} not found`;
+                
+                const charData = charResult.data;
+                const actualCharName = charResult.name;
                 
                 return generateTagSheet(charName, charData);
             },
@@ -1169,8 +1176,11 @@ ${stats.totalCharacters === 0 ? '⚠️ No characters found - scan lorebooks fir
                 }
                 if (!charName) return 'No character specified for quicksheet format';
                 
-                const charData = scannedCharacters.get(charName);
-                if (!charData) return `Character ${charName} not found`;
+                const charResult = findCharacterByName(charName);
+                if (!charResult || !charResult.data) return `Character ${charName} not found`;
+                
+                const charData = charResult.data;
+                const actualCharName = charResult.name;
                 
                 return generateQuickSheet(charName, charData);
             },
@@ -1202,6 +1212,814 @@ ${stats.totalCharacters === 0 ? '⚠️ No characters found - scan lorebooks fir
 
 // Expose CarrotTemplateManager globally so bunnymo_class.js can access it
 window.CarrotTemplateManager = CarrotTemplateManager;
+
+// =============================================================================
+// CARROT PACK MANAGER SYSTEM 🥕  
+// Auto-sync BunnyMo packs from GitHub repository
+// =============================================================================
+
+// GitHub repository browser class with update detection
+class CarrotGitHubBrowser {
+    constructor() {
+        this.githubRepo = 'Coneja-Chibi/BunnyMo';
+        this.githubBranch = 'BunnyMo';
+        this.currentPath = '/';
+        this.currentItems = [];
+        this.pathCache = new Map();
+        this.installedPacks = this.loadInstalledPacks();
+        this.updateCache = new Map();
+    }
+    
+    // Load installed pack tracking from extension settings
+    loadInstalledPacks() {
+        const settings = extension_settings[extensionName];
+        return settings.installedBunnyMoPacks || {};
+    }
+    
+    // Save installed pack tracking to extension settings
+    saveInstalledPacks() {
+        if (!extension_settings[extensionName]) {
+            extension_settings[extensionName] = {};
+        }
+        extension_settings[extensionName].installedBunnyMoPacks = this.installedPacks;
+        saveSettingsDebounced();
+    }
+    
+    // Track a pack installation with its SHA hash
+    trackPackInstallation(filename, sha, size) {
+        this.installedPacks[filename] = {
+            sha: sha,
+            size: size,
+            installedDate: Date.now(),
+            lastChecked: Date.now()
+        };
+        this.saveInstalledPacks();
+    }
+    
+    // Check if a file has updates available (different SHA)
+    hasUpdates(filename, currentSha) {
+        const installed = this.installedPacks[filename];
+        if (!installed) return false; // Not installed, so no update needed
+        return installed.sha !== currentSha; // Different SHA = update available
+    }
+    
+    // Check if folder contains any files with updates
+    async folderHasUpdates(folderPath) {
+        try {
+            if (this.updateCache.has(folderPath)) {
+                return this.updateCache.get(folderPath);
+            }
+            
+            // Get all JSON files in this folder (recursively)
+            const folderFiles = await this.getAllJsonFilesInFolder(folderPath);
+            
+            for (const file of folderFiles) {
+                if (this.hasUpdates(file.name, file.sha)) {
+                    this.updateCache.set(folderPath, true);
+                    return true;
+                }
+            }
+            
+            this.updateCache.set(folderPath, false);
+            return false;
+        } catch (error) {
+            CarrotDebug.error('Error checking folder updates:', error);
+            return false;
+        }
+    }
+    
+    // Get all JSON files in a folder (for update checking)
+    async getAllJsonFilesInFolder(folderPath) {
+        try {
+            const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents${folderPath ? '/' + encodeURIComponent(folderPath) : ''}`;
+            const response = await fetch(apiUrl);
+            
+            if (!response.ok) return [];
+            
+            const data = await response.json();
+            let jsonFiles = [];
+            
+            for (const item of data) {
+                if (item.type === 'file' && item.name.endsWith('.json')) {
+                    jsonFiles.push(item);
+                } else if (item.type === 'dir') {
+                    // Recursively check subdirectories
+                    const subFiles = await this.getAllJsonFilesInFolder(item.path);
+                    jsonFiles = jsonFiles.concat(subFiles);
+                }
+            }
+            
+            return jsonFiles;
+        } catch (error) {
+            CarrotDebug.error('Error getting JSON files:', error);
+            return [];
+        }
+    }
+    
+    // Load repository structure
+    async loadRepository() {
+        CarrotDebug.repo('🔍 Loading BunnyMo repository structure...');
+        
+        try {
+            // Load root directory
+            await this.navigateToPath('/');
+            
+            CarrotDebug.repo('✅ Repository structure loaded successfully');
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to load repository:', error);
+            throw error;
+        }
+    }
+    
+    // Navigate to specific path in repository
+    async navigateToPath(path) {
+        // Normalize path
+        path = path === '/' ? '' : path.replace(/^\/+|\/+$/g, '');
+        this.currentPath = path ? '/' + path : '/';
+        
+        // Check cache first
+        if (this.pathCache.has(path)) {
+            this.currentItems = this.pathCache.get(path);
+            CarrotDebug.repo(`📂 Loaded ${this.currentItems.length} items from cache for: ${this.currentPath}`);
+            return;
+        }
+        
+        try {
+            const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents${path ? '/' + encodeURIComponent(path) : ''}`;
+            CarrotDebug.repo(`🌐 Fetching: ${apiUrl}`);
+            
+            const response = await fetch(apiUrl);
+            if (!response.ok) {
+                if (response.status === 403) {
+                    throw new Error(`GitHub API rate limit exceeded. Please wait and try again later.`);
+                }
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            // Process items
+            this.currentItems = Array.isArray(data) ? data.map(item => ({
+                name: item.name,
+                path: item.path,
+                type: item.type,
+                size: item.size,
+                download_url: item.download_url,
+                sha: item.sha
+            })) : [];
+            
+            // Cache the results
+            this.pathCache.set(path, this.currentItems);
+            
+            CarrotDebug.repo(`📂 Loaded ${this.currentItems.length} items for: ${this.currentPath}`);
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to navigate to path:', error);
+            throw error;
+        }
+    }
+    
+    // Get download URL for a file
+    async getDownloadUrl(path) {
+        const item = this.currentItems.find(item => item.path === path);
+        if (item && item.download_url) {
+            return item.download_url;
+        }
+        
+        // Fallback: make API call to get download URL
+        try {
+            const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(path)}`;
+            const response = await fetch(apiUrl);
+            if (!response.ok) {
+                throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            return data.download_url;
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to get download URL:', error);
+            throw error;
+        }
+    }
+    
+    // Clear cache (for refresh)
+    clearCache() {
+        this.pathCache.clear();
+    }
+}
+
+// Legacy pack manager class (keeping for backwards compatibility)
+class CarrotPackManager {
+    constructor() {
+        this.githubRepo = 'Coneja-Chibi/BunnyMo';
+        this.githubBranch = 'BunnyMo';
+        this.packsFolder = 'BunnMo Packs';
+        this.localPacks = new Map();
+        this.availablePacks = new Map();
+        this.mainPackInfo = null;
+        this.expansionPacks = new Map();
+    }
+
+    // Scan for all pack types: main pack, expansion packs, and variants
+    async scanAllPacks() {
+        try {
+            CarrotDebug.repo('🔍 Scanning all BunnyMo content from GitHub...');
+            
+            // Scan main pack
+            await this.scanMainPack();
+            
+            // Scan theme packs
+            await this.scanThemePacks();
+            
+            // Scan expansion packs
+            await this.scanExpansionPacks();
+            
+            const totalPacks = 1 + this.availablePacks.size + this.expansionPacks.size;
+            CarrotDebug.repo(`✅ Found ${totalPacks} total packs (1 main, ${this.availablePacks.size} themes, ${this.expansionPacks.size} expansions)`);
+            
+            return this.getPackSummary();
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to scan packs:', error);
+            return null;
+        }
+    }
+
+    // Scan the main BunnyMo pack
+    async scanMainPack() {
+        try {
+            const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents`;
+            const response = await fetch(apiUrl);
+            
+            if (!response.ok) {
+                if (response.status === 403) {
+                    CarrotDebug.error('GitHub API rate limit exceeded for main pack scan');
+                    return;
+                }
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+            
+            const contents = await response.json();
+            
+            // Check if contents is an array (successful response)
+            if (!Array.isArray(contents)) {
+                CarrotDebug.error('Invalid response format for main pack scan', contents);
+                return;
+            }
+            
+            // Find the main pack JSON file
+            const mainFile = contents.find(file => 
+                file.name.includes('BUNNYMO') && file.name.endsWith('.json')
+            );
+            
+            if (mainFile) {
+                this.mainPackInfo = {
+                    name: 'main',
+                    displayName: 'Main BunnyMo Pack',
+                    filename: mainFile.name,
+                    size: mainFile.size,
+                    downloadUrl: mainFile.download_url,
+                    version: mainFile.sha,
+                    type: 'main'
+                };
+            }
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to scan main pack:', error);
+        }
+    }
+
+    // Scan theme packs (existing functionality)
+    async scanThemePacks() {
+        return this.scanRemotePacks(); // Use existing method
+    }
+
+    // Scan expansion packs from each theme pack
+    async scanExpansionPacks() {
+        try {
+            this.expansionPacks.clear();
+            
+            for (const [themeName, themeInfo] of this.availablePacks) {
+                const expansionsUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(this.packsFolder)}/${encodeURIComponent(themeName)}/Expansion%20Packs%20(Seperated)`;
+                
+                try {
+                    const response = await fetch(expansionsUrl);
+                    if (response.ok) {
+                        const expansions = await response.json();
+                        const jsonExpansions = expansions.filter(item => item.name.endsWith('.json'));
+                        
+                        for (const expansion of jsonExpansions) {
+                            const expansionId = `${themeName}/${expansion.name}`;
+                            this.expansionPacks.set(expansionId, {
+                                name: expansionId,
+                                displayName: expansion.name.replace('.json', ''),
+                                parentTheme: themeName,
+                                filename: expansion.name,
+                                size: expansion.size,
+                                downloadUrl: expansion.download_url,
+                                version: expansion.sha,
+                                type: 'expansion'
+                            });
+                        }
+                    }
+                } catch (expansionError) {
+                    // Skip themes without expansion packs
+                    continue;
+                }
+            }
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to scan expansion packs:', error);
+        }
+    }
+
+    // Get pack summary for status card
+    getPackSummary() {
+        const installedMain = this.localPacks.has('main');
+        const installedThemes = Array.from(this.availablePacks.keys()).filter(key => this.localPacks.has(key)).length;
+        const installedExpansions = Array.from(this.expansionPacks.keys()).filter(key => this.localPacks.has(key)).length;
+        
+        const totalAvailable = 1 + this.availablePacks.size + this.expansionPacks.size;
+        const totalInstalled = (installedMain ? 1 : 0) + installedThemes + installedExpansions;
+        
+        return {
+            mainPack: this.mainPackInfo,
+            mainInstalled: installedMain,
+            themePacks: this.availablePacks.size,
+            themesInstalled: installedThemes,
+            expansionPacks: this.expansionPacks.size,
+            expansionsInstalled: installedExpansions,
+            totalAvailable,
+            totalInstalled,
+            hasUpdates: this.checkForAnyUpdates()
+        };
+    }
+
+    // Check if any packs have updates available
+    checkForAnyUpdates() {
+        for (const [packId, localPack] of this.localPacks) {
+            if (localPack.updateAvailable) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Install main pack
+    async installMainPack() {
+        if (!this.mainPackInfo) {
+            throw new Error('Main pack not found. Run scan first.');
+        }
+        
+        return this.installPackByInfo(this.mainPackInfo, 'main');
+    }
+
+    // Install all theme packs
+    async installAllThemes() {
+        let installed = 0;
+        let failed = 0;
+        
+        for (const [packName, packInfo] of this.availablePacks) {
+            try {
+                const success = await this.installPack(packName);
+                if (success) installed++;
+                else failed++;
+            } catch (error) {
+                failed++;
+            }
+        }
+        
+        return { installed, failed };
+    }
+
+    // Install all expansion packs
+    async installAllExpansions() {
+        let installed = 0;
+        let failed = 0;
+        
+        for (const [packId, packInfo] of this.expansionPacks) {
+            try {
+                const success = await this.installPackByInfo(packInfo, packId);
+                if (success) installed++;
+                else failed++;
+            } catch (error) {
+                failed++;
+            }
+        }
+        
+        return { installed, failed };
+    }
+
+    // Generic pack installer
+    async installPackByInfo(packInfo, packId) {
+        try {
+            CarrotDebug.repo(`📦 Installing pack: ${packInfo.displayName}`);
+            
+            // Download pack data
+            const response = await fetch(packInfo.downloadUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to download: ${response.status}`);
+            }
+            
+            const packData = await response.json();
+            
+            // Install as ST lorebook
+            const filename = `${packInfo.displayName.replace(/[^a-zA-Z0-9]/g, '_')}.json`;
+            
+            const saveResponse = await fetch('/api/worldinfo/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: filename, data: packData })
+            });
+            
+            if (!saveResponse.ok) {
+                throw new Error(`Failed to save lorebook: ${saveResponse.status}`);
+            }
+            
+            // Track installation
+            if (!extension_settings[extensionName]) extension_settings[extensionName] = {};
+            if (!extension_settings[extensionName].installedPacks) extension_settings[extensionName].installedPacks = {};
+            
+            extension_settings[extensionName].installedPacks[packId] = {
+                displayName: packInfo.displayName,
+                filename: filename,
+                version: packInfo.version,
+                installedDate: Date.now(),
+                size: packInfo.size,
+                type: packInfo.type
+            };
+            
+            this.localPacks.set(packId, extension_settings[extensionName].installedPacks[packId]);
+            saveSettingsDebounced();
+            
+            // Refresh ST's lorebook list
+            if (typeof loadWorldInfoList === 'function') {
+                loadWorldInfoList();
+            }
+            
+            CarrotDebug.repo(`✅ Pack installed: ${packInfo.displayName}`);
+            return true;
+            
+        } catch (error) {
+            CarrotDebug.error(`❌ Failed to install ${packInfo.displayName}:`, error);
+            return false;
+        }
+    }
+
+    // Scan GitHub repository for available packs
+    async scanRemotePacks() {
+        try {
+            CarrotDebug.repo('🔍 Scanning remote packs from GitHub...');
+            
+            const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(this.packsFolder)}`;
+            const response = await fetch(apiUrl);
+            
+            if (!response.ok) {
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+            
+            const contents = await response.json();
+            const packs = contents.filter(item => item.type === 'dir');
+            
+            this.availablePacks.clear();
+            
+            for (const pack of packs) {
+                const packInfo = await this.getPackInfo(pack.name);
+                if (packInfo) {
+                    this.availablePacks.set(pack.name, packInfo);
+                }
+            }
+            
+            CarrotDebug.repo(`✅ Found ${this.availablePacks.size} packs on GitHub`);
+            return Array.from(this.availablePacks.values());
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to scan remote packs:', error);
+            return [];
+        }
+    }
+
+    // Get detailed info about a specific pack
+    async getPackInfo(packName) {
+        try {
+            const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(this.packsFolder)}/${encodeURIComponent(packName)}`;
+            const response = await fetch(apiUrl);
+            
+            if (!response.ok) {
+                if (response.status === 403) {
+                    CarrotDebug.error(`GitHub API rate limit exceeded for pack: ${packName}`);
+                    return null;
+                }
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+            
+            const contents = await response.json();
+            
+            // Check if contents is an array (successful response)
+            if (!Array.isArray(contents)) {
+                CarrotDebug.error(`Invalid response format for pack: ${packName}`, contents);
+                return null;
+            }
+            
+            // Find the main pack JSON file
+            const jsonFile = contents.find(file => file.name.endsWith('.json'));
+            const readmeFile = contents.find(file => file.name.toLowerCase().includes('readme'));
+            
+            if (!jsonFile) return null;
+            
+            const packInfo = {
+                name: packName,
+                displayName: packName.replace(/\s*\([^)]*\)\s*$/, ''), // Remove theme suffix
+                theme: packName.match(/\(([^)]+)\)/)?.[1] || 'General',
+                jsonFile: jsonFile.name,
+                jsonSize: jsonFile.size || 0,
+                downloadUrl: jsonFile.download_url,
+                readmeUrl: readmeFile?.download_url,
+                lastModified: jsonFile.sha, // Use SHA as version identifier
+                installed: false,
+                needsUpdate: false
+            };
+            
+            return packInfo;
+            
+        } catch (error) {
+            CarrotDebug.error(`❌ Failed to get pack info for ${packName}:`, error);
+            return null;
+        }
+    }
+
+    // Download and install a pack as a native ST lorebook
+    async installPack(packName) {
+        try {
+            const packInfo = this.availablePacks.get(packName);
+            if (!packInfo) {
+                throw new Error(`Pack ${packName} not found in available packs`);
+            }
+            
+            CarrotDebug.repo(`📦 Installing pack: ${packInfo.displayName}`);
+            
+            // Download the main JSON file
+            const response = await fetch(packInfo.downloadUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to download pack: ${response.status}`);
+            }
+            
+            const packData = await response.json();
+            
+            // Install as native ST lorebook using ST's API
+            const filename = `${packInfo.displayName.replace(/[^a-zA-Z0-9]/g, '_')}.json`;
+            
+            // Use ST's native save lorebook functionality
+            const saveResponse = await fetch('/api/worldinfo/import', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    name: filename,
+                    data: packData
+                })
+            });
+            
+            if (!saveResponse.ok) {
+                throw new Error(`Failed to save lorebook: ${saveResponse.status}`);
+            }
+            
+            // Track installation in our metadata
+            if (!extension_settings[extensionName]) {
+                extension_settings[extensionName] = {};
+            }
+            if (!extension_settings[extensionName].installedPacks) {
+                extension_settings[extensionName].installedPacks = {};
+            }
+            
+            extension_settings[extensionName].installedPacks[packName] = {
+                displayName: packInfo.displayName,
+                theme: packInfo.theme,
+                filename: filename,
+                version: packInfo.lastModified,
+                installedDate: Date.now(),
+                size: packInfo.jsonSize
+            };
+            
+            this.localPacks.set(packName, extension_settings[extensionName].installedPacks[packName]);
+            
+            // Save settings
+            saveSettingsDebounced();
+            
+            // Refresh ST's lorebook list
+            if (typeof loadWorldInfoList === 'function') {
+                loadWorldInfoList();
+            }
+            
+            CarrotDebug.repo(`✅ Pack installed as lorebook: ${filename}`);
+            toastr.success(`Pack installed: ${packInfo.displayName}`, `Saved as ${filename}`);
+            return true;
+            
+        } catch (error) {
+            CarrotDebug.error(`❌ Failed to install pack ${packName}:`, error);
+            toastr.error(`Failed to install pack: ${error.message}`);
+            return false;
+        }
+    }
+
+    // Check for pack updates (like ST's extension update system)
+    async checkForUpdates() {
+        try {
+            CarrotDebug.repo('🔍 Checking for pack updates...');
+            
+            await this.scanRemotePacks();
+            let updatesAvailable = 0;
+            
+            for (const [packName, localPack] of this.localPacks) {
+                const remotePack = this.availablePacks.get(packName);
+                if (remotePack && localPack.version !== remotePack.lastModified) {
+                    localPack.updateAvailable = true;
+                    localPack.newVersion = remotePack.lastModified;
+                    updatesAvailable++;
+                }
+            }
+            
+            CarrotDebug.repo(`✅ Update check complete: ${updatesAvailable} updates available`);
+            
+            if (updatesAvailable > 0) {
+                this.showUpdateNotification(updatesAvailable);
+            }
+            
+            return updatesAvailable;
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to check for updates:', error);
+            return 0;
+        }
+    }
+
+    // Show update notification (like ST's extension updates)
+    showUpdateNotification(count) {
+        const message = count === 1 ? '1 pack update available' : `${count} pack updates available`;
+        
+        toastr.info(message, 'CarrotKernel Pack Updates', {
+            timeOut: 0,
+            extendedTimeOut: 0,
+            closeButton: true,
+            onclick: () => {
+                this.openPackManager();
+            }
+        });
+    }
+
+    // Auto-update all packs (like ST's "Update All Extensions")
+    async updateAllPacks() {
+        try {
+            CarrotDebug.repo('🔄 Updating all packs...');
+            
+            let updated = 0;
+            let failed = 0;
+            
+            for (const [packName, localPack] of this.localPacks) {
+                if (localPack.updateAvailable) {
+                    const success = await this.updatePack(packName);
+                    if (success) {
+                        updated++;
+                    } else {
+                        failed++;
+                    }
+                }
+            }
+            
+            const message = `Pack updates complete: ${updated} updated, ${failed} failed`;
+            CarrotDebug.repo(`✅ ${message}`);
+            
+            if (failed === 0) {
+                toastr.success(message);
+            } else {
+                toastr.warning(message);
+            }
+            
+            return { updated, failed };
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to update packs:', error);
+            toastr.error(`Pack updates failed: ${error.message}`);
+            return { updated: 0, failed: 1 };
+        }
+    }
+
+    // Update a specific pack
+    async updatePack(packName) {
+        try {
+            const localPack = this.localPacks.get(packName);
+            const remotePack = this.availablePacks.get(packName);
+            
+            if (!localPack || !remotePack) {
+                throw new Error(`Pack ${packName} not found`);
+            }
+            
+            CarrotDebug.repo(`🔄 Updating pack: ${localPack.displayName}`);
+            
+            // Download updated pack data
+            const response = await fetch(remotePack.downloadUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to download pack update: ${response.status}`);
+            }
+            
+            const packData = await response.json();
+            
+            // Update the lorebook file using ST's API
+            const updateResponse = await fetch('/api/worldinfo/import', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    name: localPack.filename,
+                    data: packData,
+                    overwrite: true
+                })
+            });
+            
+            if (!updateResponse.ok) {
+                throw new Error(`Failed to update lorebook: ${updateResponse.status}`);
+            }
+            
+            // Update our metadata
+            localPack.version = remotePack.lastModified;
+            localPack.updatedDate = Date.now();
+            localPack.updateAvailable = false;
+            delete localPack.newVersion;
+            
+            extension_settings[extensionName].installedPacks[packName] = localPack;
+            saveSettingsDebounced();
+            
+            // Refresh ST's lorebook list
+            if (typeof loadWorldInfoList === 'function') {
+                loadWorldInfoList();
+            }
+            
+            CarrotDebug.repo(`✅ Pack updated successfully: ${localPack.displayName}`);
+            return true;
+            
+        } catch (error) {
+            CarrotDebug.error(`❌ Failed to update pack ${packName}:`, error);
+            return false;
+        }
+    }
+
+    // Auto-sync all packs (install new, update existing)
+    async autoSync() {
+        try {
+            CarrotDebug.repo('🔄 Starting auto-sync process...');
+            
+            // Scan remote packs first
+            await this.scanRemotePacks();
+            
+            let installed = 0;
+            let updated = 0;
+            let skipped = 0;
+            
+            for (const [packName, remotePack] of this.availablePacks) {
+                const localPack = this.localPacks.get(packName);
+                
+                if (!localPack) {
+                    // New pack - install it
+                    const success = await this.installPack(packName);
+                    if (success) installed++;
+                } else {
+                    // Pack already installed
+                    skipped++;
+                }
+            }
+            
+            const summary = `Auto-sync complete: ${installed} installed, ${updated} updated, ${skipped} up-to-date`;
+            CarrotDebug.repo(`✅ ${summary}`);
+            toastr.success(summary);
+            
+            return { installed, updated, skipped, summary };
+            
+        } catch (error) {
+            CarrotDebug.error('❌ Auto-sync failed:', error);
+            toastr.error(`Auto-sync failed: ${error.message}`);
+            return { installed: 0, updated: 0, skipped: 0, error: error.message };
+        }
+    }
+
+    // Load locally installed packs
+    loadLocalPacks() {
+        const settings = extension_settings[extensionName] || {};
+        const packs = settings.packs || {};
+        
+        this.localPacks.clear();
+        
+        for (const [packName, packData] of Object.entries(packs)) {
+            if (packData.installed) {
+                this.localPacks.set(packName, packData);
+            }
+        }
+        
+        CarrotDebug.repo(`📁 Loaded ${this.localPacks.size} local packs`);
+    }
+}
 
 // =============================================================================
 // CARROT CONTEXT & STORAGE MANAGEMENT SYSTEM 🥕
@@ -1877,6 +2695,71 @@ async function scanSelectedLorebooks(lorebookNames) {
 }
 
 // ============================================================================
+// CHARACTER LOOKUP UTILITIES
+// ============================================================================
+
+// Flexible character name matching to handle variations in character names
+function findCharacterByName(searchName) {
+    if (!searchName) return null;
+    
+    // First try exact match
+    if (scannedCharacters.has(searchName)) {
+        return { name: searchName, data: scannedCharacters.get(searchName) };
+    }
+    
+    // Generate possible name variations for flexible matching
+    const possibleNames = [
+        searchName,
+        searchName.toLowerCase(),
+        searchName.toUpperCase(),
+        searchName.trim(),
+        searchName.replace(/'/g, "'"), // Straight to curly apostrophe
+        searchName.replace(/'/g, "'"), // Curly to straight apostrophe
+        searchName.replace(/[^\w\s]/g, ''), // Remove special chars
+        searchName.replace(/\s+/g, ' '), // Normalize whitespace
+        searchName.replace(/\s+/g, '_'), // Replace spaces with underscores
+        searchName.replace(/\s+/g, '-'), // Replace spaces with dashes
+        searchName.replace(/[^a-zA-Z0-9\s]/g, ''), // Remove all non-alphanumeric except spaces
+    ];
+    
+    // Check each available character against all possible variations
+    for (const [storedName, charData] of scannedCharacters.entries()) {
+        // Check if any variation of search name matches any variation of stored name
+        const storedVariations = [
+            storedName,
+            storedName.toLowerCase(),
+            storedName.toUpperCase(),
+            storedName.trim(),
+            storedName.replace(/'/g, "'"),
+            storedName.replace(/'/g, "'"),
+            storedName.replace(/[^\w\s]/g, ''),
+            storedName.replace(/\s+/g, ' '),
+            storedName.replace(/\s+/g, '_'),
+            storedName.replace(/\s+/g, '-'),
+            storedName.replace(/[^a-zA-Z0-9\s]/g, ''),
+        ];
+        
+        // Check for any match between search variations and stored variations
+        for (const searchVar of possibleNames) {
+            for (const storedVar of storedVariations) {
+                if (searchVar === storedVar) {
+                    CarrotDebug.ui(`✅ Found character match: "${searchName}" -> "${storedName}"`);
+                    return { name: storedName, data: charData };
+                }
+            }
+        }
+    }
+    
+    // No match found
+    CarrotDebug.error(`❌ No character match found for: "${searchName}"`, {
+        availableCharacters: Array.from(scannedCharacters.keys()),
+        searchVariations: possibleNames
+    });
+    
+    return null;
+}
+
+// ============================================================================
 // CHARACTER DATA INJECTION SYSTEM
 // ============================================================================
 // Uses SillyTavern's /inject command for proper AI context integration
@@ -1931,8 +2814,10 @@ async function injectCharacterData(activeCharacters) {
         // Process each character through the template
         const characterDataArray = [];
         charactersToInject.forEach(charName => {
-            const charData = scannedCharacters.get(charName);
-            if (charData) {
+            const charResult = findCharacterByName(charName);
+            if (charResult && charResult.data) {
+                const charData = charResult.data;
+                const actualCharName = charResult.name;
                 processedCharacters++;
                 
                 // Count total tags for debugging
@@ -1966,8 +2851,10 @@ async function injectCharacterData(activeCharacters) {
         injectionText = '[Character Consistency Data]\n\n';
         
         charactersToInject.forEach(charName => {
-            const charData = scannedCharacters.get(charName);
-            if (charData) {
+            const charResult = findCharacterByName(charName);
+            if (charResult && charResult.data) {
+                const charData = charResult.data;
+                const actualCharName = charResult.name;
                 processedCharacters++;
                 injectionText += `${charName}:\n`;
                 for (const [category, values] of charData.tags) {
@@ -2096,18 +2983,21 @@ function renderAsThinkingBox(activeCharacters) {
     });
 
     charactersToShow.forEach(charName => {
-        const charData = scannedCharacters.get(charName);
+        const charResult = findCharacterByName(charName);
         
-        if (charData) {
+        if (charResult && charResult.data) {
+            const charData = charResult.data;
+            const actualCharName = charResult.name;
             renderedCharacters++;
             
             // Add collapsible character section with simple HTML details/summary
             content += `<details open style="margin-bottom: 12px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; padding: 8px; display: block;">`;
-            content += `<summary style="cursor: pointer !important; font-weight: bold !important; color: var(--SmartThemeBodyColor) !important; font-size: 1.1em !important; text-shadow: 0 0 8px currentColor !important; margin-bottom: 8px !important; list-style: none !important; display: list-item !important; list-style-type: none !important;">🏷️ ${charName}</summary>`;
+            content += `<summary style="cursor: pointer !important; font-weight: bold !important; color: var(--SmartThemeBodyColor) !important; font-size: 1.1em !important; text-shadow: 0 0 8px currentColor !important; margin-bottom: 8px !important; list-style: none !important; display: list-item !important; list-style-type: none !important;">🏷️ ${actualCharName}${actualCharName !== charName ? ` (matched from "${charName}")` : ''}</summary>`;
             content += `<div class="character-tags-content" style="display: block;">`;
             
             // Debug the character data structure
-            CarrotDebug.ui(`🔍 DEBUG: Character data for ${charName}`, {
+            CarrotDebug.ui(`🔍 DEBUG: Character data for ${actualCharName}`, {
+                originalSearch: charName,
                 hasCharData: !!charData,
                 tagsType: typeof charData.tags,
                 tagsSize: charData.tags?.size,
@@ -2120,7 +3010,7 @@ function renderAsThinkingBox(activeCharacters) {
             let tagsToProcess = charData.tags;
             if (!(tagsToProcess instanceof Map)) {
                 // Convert object to Map if needed
-                CarrotDebug.ui(`🔧 Converting tags object to Map for ${charName}`);
+                CarrotDebug.ui(`🔧 Converting tags object to Map for ${actualCharName}`);
                 tagsToProcess = new Map(Object.entries(tagsToProcess || {}));
             }
             
@@ -2130,7 +3020,8 @@ function renderAsThinkingBox(activeCharacters) {
             
             content += `</div></details>`;
             
-            CarrotDebug.ui(`Rendered character data: ${charName}`, {
+            CarrotDebug.ui(`Rendered character data: ${actualCharName}`, {
+                originalSearch: charName,
                 categories: tagsToProcess.size,
                 totalTags: Array.from(tagsToProcess.values()).reduce((sum, vals) => sum + vals.length, 0),
                 source: charData.source
@@ -3943,11 +4834,11 @@ function createExternalCardContainer(characterData, messageIndex) {
         let formattedChar;
         if (typeof firstChar === 'string') {
             // It's just a character name, need to get data from scannedCharacters
-            const charData = scannedCharacters.get(firstChar);
-            if (charData) {
+            const charResult = findCharacterByName(firstChar);
+            if (charResult && charResult.data) {
                 formattedChar = {
-                    name: firstChar,
-                    tags: charData.tags instanceof Map ? Object.fromEntries(charData.tags) : charData.tags
+                    name: charResult.name,
+                    tags: charResult.data.tags instanceof Map ? Object.fromEntries(charResult.data.tags) : charResult.data.tags
                 };
             } else {
                 console.error(`[BMT CARDS] No data found for character: ${firstChar}`);
@@ -5664,6 +6555,17 @@ jQuery(async () => {
         
         CarrotStorage = new CarrotStorageManager(CarrotContext);
         
+        // Initialize pack manager
+        window.CarrotPackManager = new CarrotPackManager();
+        window.CarrotPackManager.loadLocalPacks();
+        
+        // Check for pack updates on startup (like ST extensions)
+        setTimeout(async () => {
+            if (extension_settings[extensionName]?.autoCheckUpdates !== false) {
+                await window.CarrotPackManager.checkForUpdates();
+            }
+        }, 5000); // Wait 5 seconds after startup
+        
         // Initialize settings
         initializeSettings();
         
@@ -6133,9 +7035,184 @@ function bindSettingsEvents() {
             $(this).toggle(lorebookName.includes(searchTerm));
         });
     });
+
+    // Pack Manager Events
+    $('#carrot_auto_check_updates').prop('checked', settings.autoCheckUpdates !== false).on('change', function() {
+        extension_settings[extensionName].autoCheckUpdates = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    // Pack manager buttons
+    $('#carrot-pack-scan').on('click', async function() {
+        const button = $(this);
+        const originalText = button.html();
+        
+        button.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i> Scanning...');
+        $('#carrot-pack-status').html('<p>🔍 Scanning GitHub repository for available packs...</p>');
+        
+        try {
+            const packs = await window.CarrotPackManager.scanRemotePacks();
+            updatePackListUI(packs);
+            $('#carrot-pack-status').html(`<p>✅ Found ${packs.length} available packs</p>`);
+        } catch (error) {
+            $('#carrot-pack-status').html(`<p>❌ Scan failed: ${error.message}</p>`);
+        } finally {
+            button.prop('disabled', false).html(originalText);
+        }
+    });
+
+    $('#carrot-pack-sync').on('click', async function() {
+        const button = $(this);
+        const originalText = button.html();
+        
+        button.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i> Installing...');
+        $('#carrot-pack-status').html('<p>📦 Installing all available packs...</p>');
+        
+        try {
+            const result = await window.CarrotPackManager.autoSync();
+            $('#carrot-pack-status').html(`<p>✅ ${result.summary}</p>`);
+            
+            // Refresh pack list to show installed status
+            const packs = Array.from(window.CarrotPackManager.availablePacks.values());
+            updatePackListUI(packs);
+        } catch (error) {
+            $('#carrot-pack-status').html(`<p>❌ Installation failed: ${error.message}</p>`);
+        } finally {
+            button.prop('disabled', false).html(originalText);
+        }
+    });
+
+    $('#carrot-pack-update').on('click', async function() {
+        const button = $(this);
+        const originalText = button.html();
+        
+        button.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i> Updating...');
+        $('#carrot-pack-status').html('<p>🔄 Updating all installed packs...</p>');
+        
+        try {
+            const result = await window.CarrotPackManager.updateAllPacks();
+            $('#carrot-pack-status').html(`<p>✅ Updates complete: ${result.updated} updated, ${result.failed} failed</p>`);
+            
+            // Refresh pack list to show updated status
+            const packs = Array.from(window.CarrotPackManager.availablePacks.values());
+            updatePackListUI(packs);
+        } catch (error) {
+            $('#carrot-pack-status').html(`<p>❌ Update failed: ${error.message}</p>`);
+        } finally {
+            button.prop('disabled', false).html(originalText);
+        }
+    });
     
     // Add loadout manager status card (4th card next to System Status, Character Repository, AI Injection)
     addLoadoutManagerCard();
+}
+
+// Update pack list UI with current pack status
+function updatePackListUI(packs) {
+    const container = $('#carrot-pack-list');
+    
+    if (!packs || packs.length === 0) {
+        container.html('<p class="carrot-help-text">No packs found. Click "Scan Available Packs" to check GitHub.</p>');
+        return;
+    }
+
+    const packListHtml = packs.map(pack => {
+        const localPack = window.CarrotPackManager.localPacks.get(pack.name);
+        const isInstalled = !!localPack;
+        const hasUpdate = isInstalled && localPack.updateAvailable;
+        
+        let statusIcon = '';
+        let statusText = '';
+        let buttonText = 'Install';
+        let buttonClass = 'carrot-primary-btn';
+        
+        if (hasUpdate) {
+            statusIcon = '🔄';
+            statusText = 'Update Available';
+            buttonText = 'Update';
+            buttonClass = 'carrot-warning-btn';
+        } else if (isInstalled) {
+            statusIcon = '✅';
+            statusText = 'Installed';
+            buttonText = 'Reinstall';
+            buttonClass = 'carrot-secondary-btn';
+        } else {
+            statusIcon = '📦';
+            statusText = 'Available';
+            buttonText = 'Install';
+            buttonClass = 'carrot-primary-btn';
+        }
+        
+        return `
+            <div class="carrot-pack-item" data-pack="${pack.name}">
+                <div class="carrot-pack-header">
+                    <div class="carrot-pack-info">
+                        <h4 class="carrot-pack-name">${pack.displayName}</h4>
+                        <p class="carrot-pack-theme">${pack.theme} Theme</p>
+                    </div>
+                    <div class="carrot-pack-status">
+                        <span class="carrot-status-icon">${statusIcon}</span>
+                        <span class="carrot-status-text">${statusText}</span>
+                    </div>
+                </div>
+                <div class="carrot-pack-details">
+                    <div class="carrot-pack-meta">
+                        <span class="carrot-pack-size">${(pack.jsonSize / 1024).toFixed(1)}KB</span>
+                        <span class="carrot-pack-file">${pack.jsonFile}</span>
+                    </div>
+                    <div class="carrot-pack-actions">
+                        <button class="carrot-pack-install-btn ${buttonClass}" data-pack="${pack.name}">
+                            ${buttonText}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.html(packListHtml);
+
+    // Bind individual pack install/update buttons
+    $('.carrot-pack-install-btn').off('click').on('click', async function(e) {
+        e.preventDefault();
+        
+        const packName = $(this).data('pack');
+        const button = $(this);
+        const originalText = button.text();
+        
+        button.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i> Processing...');
+        
+        try {
+            const localPack = window.CarrotPackManager.localPacks.get(packName);
+            let success = false;
+            
+            if (localPack && localPack.updateAvailable) {
+                success = await window.CarrotPackManager.updatePack(packName);
+            } else {
+                success = await window.CarrotPackManager.installPack(packName);
+            }
+            
+            if (success) {
+                button.removeClass('carrot-primary-btn carrot-warning-btn').addClass('carrot-success-btn');
+                button.html('✅ Done');
+                
+                // Update the pack item status
+                const packItem = button.closest('.carrot-pack-item');
+                packItem.find('.carrot-status-icon').text('✅');
+                packItem.find('.carrot-status-text').text('Installed');
+                
+                setTimeout(() => {
+                    button.removeClass('carrot-success-btn').addClass('carrot-secondary-btn');
+                    button.text('Reinstall').prop('disabled', false);
+                }, 2000);
+            } else {
+                button.prop('disabled', false).text(originalText);
+            }
+        } catch (error) {
+            console.error('Pack operation failed:', error);
+            button.prop('disabled', false).text(originalText);
+        }
+    });
 }
 
 // Add Loadout Manager status card (4th card matching ST's status card style)
@@ -6481,7 +7558,7 @@ async function buildLoadoutManagerHTML(context, currentSettings) {
                         <div class="carrot-status-panel carrot-status-tutorial carrot-clickable" 
                              data-context="tutorial" 
                              data-tooltip="Click to open comprehensive tutorial about Character vs Chat settings"
-                             onclick="openLoadoutTutorial()">
+                             onclick="CarrotKernel.openLoadoutTutorial()">
                             <div class="carrot-status-icon">
                                 <i class="fa-solid fa-graduation-cap"></i>
                             </div>
@@ -7737,6 +8814,38 @@ function updateStatusPanels() {
         if (injectionTooltipStatus.length) injectionTooltipStatus.text(`Ready to inject ${characterCount} characters`);
         $('.carrot-status-injection').removeClass('injecting');
     }
+    
+    // Pack Manager Status Panel
+    const packStatus = $('#carrot-pack-status');
+    const packDetail = $('#carrot-pack-detail');
+    const packIndicator = $('#carrot-pack-indicator');
+    
+    if (!settings.enabled) {
+        packStatus.text('Disabled');
+        packDetail.text('System disabled');
+        packIndicator.removeClass('success warning').addClass('error');
+        $('.carrot-status-packs').removeClass('initialized');
+    } else {
+        // Initialize with default ready state
+        packStatus.text('Ready for management');
+        packDetail.text('Click to install and update packs');
+        packIndicator.removeClass('error warning').addClass('success');
+        $('.carrot-status-packs').addClass('initialized');
+        
+        // If we have cached pack data, show more specific status
+        if (window.CarrotKernel && window.CarrotKernel.cachedPackSummary) {
+            const summary = window.CarrotKernel.cachedPackSummary;
+            if (summary.hasUpdates) {
+                packStatus.text('Updates available');
+                packDetail.text('Click to install updates');
+                packIndicator.removeClass('success error').addClass('warning');
+            } else if (summary.totalInstalled > 0) {
+                packStatus.text(`${summary.totalInstalled} packs installed`);
+                packDetail.text('Click to manage packs');
+                packIndicator.removeClass('error warning').addClass('success');
+            }
+        }
+    }
 }
 
 // Global CarrotKernel object for UI interactions
@@ -7753,42 +8862,46 @@ window.CarrotKernel = {
             title: 'System Configuration Tutorial',
             steps: [
                 {
-                    target: '#carrot-feature-controls',
-                    title: 'System Configuration',
+                    target: '.carrot-setting-item:first-child',
+                    title: 'Master Enable',
                     content: `
-                        <p>Welcome to <strong>CarrotKernel System Configuration</strong>! This panel controls the entire extension.</p>
-                        <ul>
-                            <li><strong>Master Enable:</strong> The main on/off switch - must be ON for all functionality</li>
-                            <li><strong>AI Injection:</strong> Controls whether character data gets sent to AI context</li>
-                            <li><strong>Display Mode:</strong> Choose how character data appears in your chats</li>
-                            <li><strong>Debug Mode:</strong> Enables detailed logging for troubleshooting</li>
-                        </ul>
-                        <p><strong>💡 Tip:</strong> Start by enabling the Master Enable toggle!</p>
+                        Turn on CarrotKernel. Must be enabled for all functionality.
                     `
                 },
                 {
-                    target: '#carrot-lorebook-management',
-                    title: 'Lorebook Management',
+                    target: '.carrot-setting-item:nth-child(2)',
+                    title: 'AI Injection',
                     content: `
-                        <p>This is where you <strong>select and configure</strong> your character repositories.</p>
-                        <ul>
-                            <li><strong>Search:</strong> Find specific lorebooks quickly</li>
-                            <li><strong>Checkbox:</strong> Enable/disable lorebooks</li>
-                            <li><strong>👤/📚 Button:</strong> Mark as character repository or tag library</li>
-                        </ul>
-                        <p>Character repositories contain <code>&lt;BunnymoTags&gt;</code> blocks with character data.</p>
+                        Send character data to AI automatically when characters are mentioned.
                     `
                 },
                 {
-                    target: '#carrot-advanced-settings',
-                    title: 'Advanced Settings',
+                    target: '.carrot-setting-item:nth-child(3)',
+                    title: 'Display Mode',
                     content: `
-                        <p>Fine-tune how CarrotKernel works with these <strong>Advanced Settings</strong>:</p>
-                        <ul>
-                            <li><strong>Max Characters:</strong> Limit how many characters are processed (prevents spam)</li>
-                            <li><strong>Injection Depth:</strong> How deep to inject in AI context (4 is standard)</li>
-                        </ul>
-                        <p>The defaults work well for most users - only change if you understand the impact!</p>
+                        How character data appears in chats:
+                        No Display (recommended), Thinking Box, or Character Cards
+                    `
+                },
+                {
+                    target: '.carrot-search-container',
+                    title: 'Search Lorebooks',
+                    content: `
+                        Type to filter your lorebook list quickly.
+                    `
+                },
+                {
+                    target: '.carrot-lorebook-item',
+                    title: 'Select Lorebooks',
+                    content: `
+                        Check boxes next to lorebooks you want to use.
+                    `
+                },
+                {
+                    target: '#carrot-scan-btn',
+                    title: 'Scan Selected',
+                    content: `
+                        Click to scan and index character data from selected lorebooks.
                     `
                 }
             ]
@@ -7798,56 +8911,35 @@ window.CarrotKernel = {
             title: 'Repository Management Tutorial',
             steps: [
                 {
+                    target: 'button#carrot-scan-btn',
+                    title: 'Start Here: Scan Button',
+                    content: `
+                        🔍 CLICK "SCAN SELECTED LOREBOOKS" to begin!
+
+                        This scans your lorebooks for character data and creates a searchable repository.
+                        After scanning, you'll see character cards that you can click to view details.
+                        
+                        ✨ The scan finds <BunnymoTags> blocks and organizes character information automatically.
+                    `
+                },
+                {
                     target: '#carrot-lorebook-management',
                     title: 'Two Types of Lorebooks',
                     content: `
-                        <p><strong>CHARACTER REPOSITORIES</strong> hold individual character data with trigger names:</p>
-                        <div style="background: rgba(255, 215, 0, 0.1); padding: 12px; border-radius: 6px; margin: 8px 0; border-left: 4px solid #ff6b35;">
-                            <code>&lt;BunnymoTags&gt;&lt;NAME:Alice Cooper&gt;, &lt;SPECIES:Human&gt;, &lt;PERSONALITY:Tsundere&gt;&lt;/BunnymoTags&gt;</code>
-                        </div>
-                        
-                        <p><strong>TAG LIBRARIES</strong> are data sources like BunnMBTI-Pack or BunnyCo-Pack:</p>
-                        <div style="background: rgba(76, 175, 80, 0.1); padding: 12px; border-radius: 6px; margin: 8px 0; border-left: 4px solid #4caf50;">
-                            <code>Contains: &lt;ELF&gt;, &lt;DWARF&gt;, &lt;TSUNDERE&gt;, &lt;INTJ&gt;, etc.</code>
-                        </div>
-                        
-                        <p>Character repos <em>pull data</em> from tag libraries when character names are mentioned!</p>
+                        👤 CHARACTER REPOSITORIES: Contain individual character data
+                        📚 TAG LIBRARIES: Contain tag definitions (species, personality, etc.)
+
+                        You need both types for complete functionality.
                     `
                 },
                 {
-                    target: '.carrot-lorebook-actions',
-                    title: 'Marking Repository Types',
+                    target: '.carrot-lorebook-item',
+                    title: 'Mark Repository Types',
                     content: `
-                        <p>Use the <strong>👤/📚 button</strong> to identify lorebook types:</p>
-                        <ul>
-                            <li><strong>👤 Character Repository:</strong> Contains characters with &lt;BunnymoTags&gt; blocks</li>
-                            <li><strong>📚 Tag Library:</strong> Contains species, personality, MBTI data (like BunnMBTI-Pack, BunnyCo-Pack)</li>
-                        </ul>
-                        
-                        <p><strong>How it works:</strong></p>
-                        <ol>
-                            <li>You mention "Alice" in chat</li>
-                            <li>Character repo triggers and finds Alice's data</li>
-                            <li>CarrotKernel pulls &lt;TSUNDERE&gt; details from BunnDere-Pack</li>
-                            <li>Combined data gets injected to AI context</li>
-                        </ol>
-                    `
-                },
-                {
-                    target: '.carrot-action-bar',
-                    title: 'Scanning and Data Flow',
-                    content: `
-                        <p><strong>IMPORTANT:</strong> Select both types for complete functionality!</p>
-                        <ul>
-                            <li><strong>Character Repositories:</strong> Mark with 👤 - these have your characters</li>
-                            <li><strong>Tag Libraries:</strong> Mark with 📚 - these provide the detailed descriptions</li>
-                        </ul>
-                        
-                        <p>When you scan, CarrotKernel builds a database linking character names to their tag data sources. This creates the "trigger mechanism" - mentioning character names fires their associated lorebook entries!</p>
-                        
-                        <div style="background: rgba(255, 193, 7, 0.1); padding: 8px; border-radius: 4px; font-size: 0.9em;">
-                            💡 Think of Character Repos as the <em>index</em> and Tag Libraries as the <em>encyclopedia</em>
-                        </div>
+                        Use the 👤/📚 buttons to mark lorebook types.
+
+                        Character repos have <BunnymoTags> blocks with character names.
+                        Tag libraries have definitions like "TSUNDERE: Hostile but caring..."
                     `
                 }
             ]
@@ -7857,109 +8949,32 @@ window.CarrotKernel = {
             title: 'Loadout Manager Tutorial',
             steps: [
                 {
-                    target: '#carrot-loadout-manager .carrot-status-panels',
-                    title: 'Character vs Chat Settings',
-                    content: `
-                        <p>Welcome to <strong>CarrotKernel Loadout Manager</strong>! This lets you create context-specific settings.</p>
-                        
-                        <p><strong>🧑 Character Settings:</strong> Apply to ALL chats with a specific character</p>
-                        <ul>
-                            <li><strong>Use case:</strong> "Eliza always needs Psychology lorebook enabled"</li>
-                            <li><strong>Scope:</strong> Every conversation with this character</li>
-                        </ul>
-                        
-                        <p><strong>💬 Chat Settings:</strong> Apply ONLY to this specific conversation</p>
-                        <ul>
-                            <li><strong>Use case:</strong> "This medieval roleplay needs different lorebooks"</li>
-                            <li><strong>Scope:</strong> This conversation only</li>
-                        </ul>
-                        
-                        <p><strong>💡 Priority:</strong> Chat Settings > Character Settings > Global Settings</p>
-                    `
-                },
-                {
-                    target: '#carrot-loadout-manager #carrot-context-controls',
+                    target: '#carrot-loadout-manager',
                     title: 'Context-Specific Settings',
                     content: `
-                        <p>Once you select Character or Chat context, you can <strong>override global settings</strong>:</p>
-                        <ul>
-                            <li><strong>Toggle OFF:</strong> Disable CarrotKernel for this context</li>
-                            <li><strong>AI Injection:</strong> Turn off character data injection</li>
-                            <li><strong>Display Mode:</strong> Change how data appears in chats</li>
-                            <li><strong>Filter Context:</strong> Hide BunnyMoTags from AI</li>
-                        </ul>
-                        
-                        <p>These settings <strong>override</strong> your global settings when you're in this specific context.</p>
-                        
-                        <div style="background: rgba(255, 193, 7, 0.1); padding: 8px; border-radius: 4px;">
-                            💡 <strong>Pro Tip:</strong> Most users leave settings ON and just change lorebooks per context
-                        </div>
+                        Create different settings for different characters and chats.
+
+                        Character Settings apply to ALL chats with that character.
+                        Chat Settings apply ONLY to this specific conversation.
                     `
                 },
                 {
-                    target: '#carrot-loadout-manager #carrot-context-lorebooks',
-                    title: 'Context-Specific Lorebooks',
+                    target: '#carrot-context-lorebooks',
+                    title: 'Different Lorebooks Per Context',
                     content: `
-                        <p>This is the <strong>main power</strong> of the Loadout Manager - different lorebooks per context!</p>
-                        
-                        <p><strong>Examples:</strong></p>
-                        <ul>
-                            <li><strong>Character "Eliza":</strong> Always enable Psychology + Therapy lorebooks</li>
-                            <li><strong>Medieval Chat:</strong> Enable Medieval + Fantasy lorebooks for this roleplay</li>
-                            <li><strong>Sci-fi Chat:</strong> Enable Space + Technology lorebooks for this story</li>
-                        </ul>
-                        
-                        <p>Select different lorebooks here, then <strong>save your profile</strong> - CarrotKernel will auto-load these when you enter this context!</p>
-                        
-                        <div style="background: rgba(76, 175, 80, 0.1); padding: 8px; border-radius: 4px;">
-                            ✅ <strong>This replaces</strong> manually enabling/disabling lorebooks every time you switch contexts
-                        </div>
+                        Select different lorebooks for each context.
+
+                        Example: Medieval Chat uses Medieval + Fantasy lorebooks.
+                        Sci-fi Chat uses Space + Technology lorebooks.
                     `
                 },
                 {
-                    target: '#carrot-loadout-manager #carrot-profile-management',
-                    title: 'Profile Management & Templates',
+                    target: '#carrot-profile-management',
+                    title: 'Save and Apply Profiles',
                     content: `
-                        <p><strong>Save your configurations!</strong> After setting up your context:</p>
-                        
-                        <ol>
-                            <li><strong>Save Profile:</strong> Store your custom context settings</li>
-                            <li><strong>Auto-loading:</strong> Settings activate when you enter this context</li>
-                            <li><strong>Export/Import:</strong> Share profiles with other users</li>
-                            <li><strong>Clear Profile:</strong> Reset to global settings</li>
-                        </ol>
-                        
-                        <div style="background: rgba(76, 175, 80, 0.1); padding: 12px; border-radius: 6px; margin: 8px 0; border-left: 4px solid #4caf50;">
-                            <strong>🚀 Profile Templates (Quick Start):</strong><br>
-                            • <strong>General Purpose:</strong> All features ON, 6 character limit, depth 4<br>
-                            • <strong>Roleplay Focus:</strong> Card display mode, 10 character limit, auto-expand<br>
-                            • <strong>Minimal Setup:</strong> Essential only, 3 character limit, basic injection
-                        </div>
-                        
-                        <div style="background: rgba(76, 175, 80, 0.1); padding: 12px; border-radius: 6px; margin: 8px 0; border-left: 4px solid #4caf50;">
-                            <strong>🎯 Current Loadout System:</strong><br>
-                            • <strong>Shows current assigned loadout</strong> for this character/chat with cool blinking indicator<br>
-                            • <strong>Assign Loadout:</strong> Choose which loadout should auto-apply to this context<br>
-                            • <strong>None Selected:</strong> Uses default/global settings when no loadout assigned
-                        </div>
-                        
-                        <div style="background: rgba(255, 193, 7, 0.1); padding: 12px; border-radius: 6px; margin: 8px 0; border-left: 4px solid #ffc107;">
-                            <strong>📚 Loadout Library:</strong><br>
-                            • <strong>Save Current Settings:</strong> Create named loadouts with all settings + lorebook selections<br>
-                            • <strong>Quick Apply:</strong> Instantly apply any loadout to current interface<br>
-                            • <strong>Manage Loadouts:</strong> Rename, copy, delete, export your saved configurations
-                        </div>
-                        
-                        <div style="background: rgba(255, 215, 0, 0.1); padding: 12px; border-radius: 6px; margin: 8px 0; border-left: 4px solid #ff6b35;">
-                            <strong>🚀 Complete Workflow:</strong><br>
-                            1. Configure settings + select lorebooks → 2. "Save Current Settings" as named loadout → 3. "Assign Loadout" to character/chat → 4. Auto-applies when you return!
-                        </div>
-                        
-                        <div style="background: rgba(156, 39, 176, 0.1); padding: 12px; border-radius: 6px; margin: 8px 0; border-left: 4px solid #9c27b0;">
-                            <strong>💡 Pro Example:</strong> Create "Medieval Roleplay" loadout with Medieval + Fantasy lorebooks. Assign to character "Eliza". Now every chat with Eliza automatically uses Medieval settings!
-                        </div>
-                        
-                        <p><strong>True loadout assignment system - your loadouts follow contexts automatically!</strong></p>
+                        Save your settings as named profiles, then assign them to characters/chats.
+
+                        Settings auto-apply when you enter that context.
                     `
                 }
             ]
@@ -7970,42 +8985,35 @@ window.CarrotKernel = {
             steps: [
                 {
                     target: '.carrot-status-injection',
-                    title: 'How AI Injection Works',
+                    title: 'How Injection Works',
                     content: `
-                        <p>CarrotKernel automatically injects character data when mentioned in chat:</p>
-                        <ul>
-                            <li><strong>Detection:</strong> Scans messages for character names</li>
-                            <li><strong>Injection:</strong> Sends relevant data to AI context</li>
-                            <li><strong>Ephemeral:</strong> Doesn't clutter your chat history</li>
-                            <li><strong>Depth 4:</strong> High priority like GuidedGenerations</li>
-                        </ul>
-                        <p>This ensures the AI maintains character consistency automatically!</p>
+                        When you mention "Alice" in chat:
+                        1. CarrotKernel detects the character name
+                        2. Sends Alice's data to AI context
+                        3. AI maintains character consistency
+                        4. Your chat stays clean (ephemeral injection)
                     `
                 },
                 {
-                    target: '#carrot_display_mode',
+                    target: 'select#carrot_display_mode',
                     title: 'Display Modes',
                     content: `
-                        <p>Choose how injected character data appears:</p>
-                        <ul>
-                            <li><strong>No Display:</strong> Inject silently (recommended for clean chats)</li>
-                            <li><strong>Thinking Box:</strong> Show in expandable reasoning boxes</li>
-                            <li><strong>Character Cards:</strong> Display as visual character cards</li>
-                        </ul>
-                        <p>Most users prefer "No Display" - the AI gets the data without visual clutter!</p>
+                        Choose how character data appears:
+
+                        NO DISPLAY: Silent injection (recommended)
+                        THINKING BOX: Shows in expandable boxes
+                        CHARACTER CARDS: Visual character cards
                     `
                 },
                 {
-                    target: '#carrot_injection_depth',
-                    title: 'Injection Depth Explained',
+                    target: 'input#carrot_injection_depth',
+                    title: 'Injection Depth',
                     content: `
-                        <p>Injection depth controls <strong>where</strong> character data appears in AI context:</p>
-                        <ul>
-                            <li><strong>Depth 4:</strong> Same as GuidedGenerations (recommended)</li>
-                            <li><strong>Lower depths:</strong> Higher priority, but may interfere</li>
-                            <li><strong>Higher depths:</strong> Lower priority, may be ignored</li>
-                        </ul>
-                        <p>Depth 4 is the sweet spot - trusted by GuidedGenerations users!</p>
+                        Controls priority in AI context.
+
+                        Depth 4 (recommended): Same as GuidedGenerations
+                        Lower = higher priority but may interfere
+                        Higher = lower priority, may be ignored
                     `
                 }
             ]
@@ -8014,101 +9022,28 @@ window.CarrotKernel = {
             title: 'Template Editor Tutorial',
             steps: [
                 {
-                    target: '#bmt_template_selector',
-                    title: 'Template Selection',
+                    target: 'select#bmt_template_selector',
+                    title: 'Select Template',
                     content: `
-                        <p>Welcome to the <strong>CarrotKernel Template Editor</strong>! This is your control center for customizing AI injection templates.</p>
-                        <p>The <strong>Template Selector</strong> lets you choose which template to edit. Templates control how character data is formatted when sent to the AI.</p>
-                        <p>Currently, only "Character Consistency" templates are supported, but more categories will be added!</p>
+                        Choose which template to edit. Templates control how character data is formatted for the AI.
                     `
                 },
                 {
-                    target: '#template_type',
-                    title: 'Template Type',
+                    target: 'textarea#prompt',
+                    title: 'Edit Template Content',
                     content: `
-                        <p>The <strong>Template Type</strong> determines where your template appears in the AI context:</p>
-                        <ul>
-                            <li><strong>⚙️ System:</strong> High priority, appears in system context</li>
-                            <li><strong>👤 Character:</strong> Character-specific context</li>
-                            <li><strong>🌍 World:</strong> World/environment context</li>
-                        </ul>
-                        <p>Most character injection templates use "System" for maximum impact.</p>
-                    `
-                },
-                {
-                    target: '#prompt',
-                    title: 'Template Content Editor',
-                    content: `
-                        <p>This is the heart of your template - the <strong>Template Content Editor</strong>!</p>
-                        <p>Write your injection prompt here using special <strong>{{MACRO_NAME}}</strong> variables that get replaced with real data:</p>
-                        <ul>
-                            <li><strong>{{TRIGGERED_CHARACTER_TAGS}}</strong> - All character tags for active characters</li>
-                            <li><strong>{{CHARACTER_LIST}}</strong> - Simple list of character names</li>
-                            <li><strong>{{REPOSITORY_METADATA}}</strong> - Repository information</li>
-                        </ul>
-                        <p>The editor is resizable - drag the bottom corner to make it larger!</p>
+                        Write your injection prompt using {{MACRO_NAME}} variables:
+                        {{TRIGGERED_CHARACTER_TAGS}} - Character data
+                        {{CHARACTER_LIST}} - Character names
                     `
                 },
                 {
                     target: '.bmt-button-group',
                     title: 'Template Actions',
                     content: `
-                        <p>These buttons help you manage your templates:</p>
-                        <ul>
-                            <li><strong>👁️ Preview:</strong> See how your template looks with real data</li>
-                            <li><strong>💾 Save:</strong> Save your changes to the template</li>
-                            <li><strong>📋 Duplicate:</strong> Create a copy of this template</li>
-                            <li><strong>🗑️ Delete:</strong> Remove custom templates (can't delete defaults)</li>
-                            <li><strong>🔄 Reset:</strong> Restore template to default content</li>
-                        </ul>
-                        <p><strong>Tip:</strong> Always Preview before Save to see your changes!</p>
-                    `
-                },
-                {
-                    target: '.bmt-macro-section',
-                    title: 'Macro Configuration',
-                    content: `
-                        <p>The <strong>Macro Configuration</strong> section shows all available macros and their settings.</p>
-                        <p>Each macro can be:</p>
-                        <ul>
-                            <li><strong>Enabled/Disabled:</strong> Toggle the ❌/✅ button</li>
-                            <li><strong>Previewed:</strong> Click the 👁️ button to see output</li>
-                            <li><strong>Customized:</strong> Expand to see Simple/Advanced options</li>
-                        </ul>
-                        <p>Macros are automatically detected when you use <strong>{{MACRO_NAME}}</strong> in your template!</p>
-                    `
-                },
-                {
-                    target: '#template_category',
-                    title: 'Template Categories',
-                    content: `
-                        <p>Template Categories organize templates by their function:</p>
-                        <p><strong>💉 Character Data Injection</strong> templates control how character information is sent to the AI.</p>
-                        <p>Future updates will add more categories like "Selected Traits Context" and "Generation Notes".</p>
-                    `
-                },
-                {
-                    target: '#template_role',
-                    title: 'Primary Template Setting',
-                    content: `
-                        <p>The <strong>Primary Template</strong> toggle marks which template CarrotKernel uses for this category.</p>
-                        <p>You can create multiple templates for the same category, but only one can be "Primary" (active).</p>
-                        <p>This allows you to experiment with different templates without losing your working version!</p>
-                    `
-                },
-                {
-                    target: '#bmt_template_prompt_interface',
-                    title: 'Template System Complete!',
-                    content: `
-                        <p><strong>🎉 Congratulations!</strong> You now understand the CarrotKernel Template System!</p>
-                        <p><strong>Quick Tips:</strong></p>
-                        <ul>
-                            <li>Start with the default template and modify it gradually</li>
-                            <li>Use Preview frequently to test your changes</li>
-                            <li>Duplicate templates before major changes</li>
-                            <li>Check macro documentation for examples</li>
-                        </ul>
-                        <p>Happy templating! Your AI interactions just got a lot more powerful! 🥕</p>
+                        👁️ Preview: See template with real data
+                        💾 Save: Save your changes
+                        📋 Duplicate: Copy template for experiments
                     `
                 }
             ]
@@ -8155,71 +9090,729 @@ window.CarrotKernel = {
         const selectedCount = selectedLorebooks.size;
         
         let content = `
-            <h4>📊 Repository Status</h4>
-            <div style="background: rgba(var(--active-rgb), 0.1); padding: 16px; border-radius: 8px; margin: 12px 0;">
-                <p><strong>Characters Indexed:</strong> ${characterCount}</p>
-                <p><strong>Selected Lorebooks:</strong> ${selectedCount}</p>
-                <p><strong>Character Repositories:</strong> ${characterRepoBooks.size}</p>
+            <div style="
+                background: linear-gradient(135deg, var(--SmartThemeEmColor) 0%, var(--SmartThemeEmColor) 50%, var(--SmartThemeEmColor) 100%);
+                padding: 20px;
+                border-radius: 12px;
+                margin-bottom: 16px;
+                box-shadow: 0 8px 32px rgba(var(--SmartThemeEmColorRGB), 0.3);
+            ">
+                <div style="
+                    display: grid; 
+                    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); 
+                    gap: 16px;
+                    margin-bottom: 16px;
+                ">
+                    <div style="
+                        background: rgba(255, 255, 255, 0.15);
+                        backdrop-filter: blur(10px);
+                        border: 1px solid rgba(255, 255, 255, 0.2);
+                        border-radius: 8px;
+                        padding: 16px;
+                        text-align: center;
+                        transition: all 0.3s ease;
+                    ">
+                        <div style="font-size: 28px; font-weight: 700; color: white; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">${characterCount}</div>
+                        <div style="font-size: 11px; color: rgba(255,255,255,0.9); margin-top: 4px; font-weight: 500;">Characters Indexed</div>
+                    </div>
+                    <div style="
+                        background: rgba(255, 255, 255, 0.15);
+                        backdrop-filter: blur(10px);
+                        border: 1px solid rgba(255, 255, 255, 0.2);
+                        border-radius: 8px;
+                        padding: 16px;
+                        text-align: center;
+                        transition: all 0.3s ease;
+                    ">
+                        <div style="font-size: 28px; font-weight: 700; color: white; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">${selectedCount}</div>
+                        <div style="font-size: 11px; color: rgba(255,255,255,0.9); margin-top: 4px; font-weight: 500;">Selected Lorebooks</div>
+                    </div>
+                    <div style="
+                        background: rgba(255, 255, 255, 0.15);
+                        backdrop-filter: blur(10px);
+                        border: 1px solid rgba(255, 255, 255, 0.2);
+                        border-radius: 8px;
+                        padding: 16px;
+                        text-align: center;
+                        transition: all 0.3s ease;
+                    ">
+                        <div style="font-size: 28px; font-weight: 700; color: white; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">${characterRepoBooks.size}</div>
+                        <div style="font-size: 11px; color: rgba(255,255,255,0.9); margin-top: 4px; font-weight: 500;">Character Repositories</div>
+                    </div>
+                </div>
+                
+                <div style="display: flex; gap: 12px;">
+                    <button onclick="CarrotKernel.closePopup(); CarrotKernel.openRepositoryTutorial()" style="
+                        flex: 1;
+                        padding: 12px 20px; 
+                        background: rgba(255, 255, 255, 0.2); 
+                        color: white;
+                        border: 1px solid rgba(255, 255, 255, 0.3);
+                        border-radius: 8px; 
+                        cursor: pointer;
+                        font-size: 14px;
+                        font-weight: 600;
+                        transition: all 0.2s ease;
+                        backdrop-filter: blur(5px);
+                        text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                    " onmouseover="this.style.background='rgba(255, 255, 255, 0.3)'" 
+                       onmouseout="this.style.background='rgba(255, 255, 255, 0.2)'">
+                        📚 Repository Tutorial
+                    </button>
             </div>
-        `;
-        
-        content += `
-            <div style="text-align: center; margin: 16px 0;">
-                <button onclick="CarrotKernel.closePopup(); CarrotKernel.openRepositoryTutorial()" style="
-                    background: linear-gradient(135deg, #4caf50 0%, rgba(76, 175, 80, 0.85) 100%);
-                    color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer;
-                    font-weight: 500; transition: all 0.3s ease; margin-right: 12px;">
-                    📚 Repository Tutorial
-                </button>
         `;
         
         if (characterCount === 0) {
             content += `
-                <button onclick="CarrotKernel.manualScan()" style="
-                    background: linear-gradient(135deg, var(--active) 0%, rgba(var(--active-rgb), 0.85) 100%);
-                    color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer;
-                    font-weight: 500; transition: all 0.3s ease;">
-                    🔍 Setup Repositories
-                </button>
+                    <button onclick="CarrotKernel.manualScan()" style="
+                        flex: 1;
+                        padding: 12px 20px; 
+                        background: rgba(255, 255, 255, 0.2); 
+                        color: white;
+                        border: 1px solid rgba(255, 255, 255, 0.3);
+                        border-radius: 8px; 
+                        cursor: pointer;
+                        font-size: 14px;
+                        font-weight: 600;
+                        transition: all 0.2s ease;
+                        backdrop-filter: blur(5px);
+                        text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                    " onmouseover="this.style.background='rgba(255, 255, 255, 0.3)'" 
+                       onmouseout="this.style.background='rgba(255, 255, 255, 0.2)'">
+                        🔍 Setup Repositories
+                    </button>
+                </div>
             </div>
             
-                <h5>🚀 Getting Started</h5>
-                <p>No characters indexed yet. Here's how to set up your repositories:</p>
-                <ol>
-                    <li>Select lorebooks in the <strong>glowing section below</strong></li>
-                    <li>Mark character repositories with the 👤 button</li>
-                    <li>Click <strong>"Setup Repositories"</strong> button above</li>
+            <div style="
+                background: linear-gradient(135deg, #2a2a2a 0%, #3a3a3a 100%);
+                border: 1px solid #555;
+                border-radius: 12px; 
+                padding: 20px; 
+                margin-top: 12px;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            ">
+                <h5 style="margin: 0 0 12px 0; color: var(--SmartThemeEmColor); font-size: 18px; font-weight: 600;">Getting Started</h5>
+                <p style="margin: 0 0 12px 0; color: #e0e0e0; line-height: 1.4;">No characters indexed yet. Here's how to set up your repositories:</p>
+                <ol style="margin: 0; padding-left: 20px; color: #d0d0d0; line-height: 1.6;">
+                    <li style="margin-bottom: 8px;">Select lorebooks in the main interface</li>
+                    <li style="margin-bottom: 8px;">Mark character repositories with the 👤 button</li>
+                    <li style="margin-bottom: 8px;">Click "Setup Repositories" button above</li>
                 </ol>
+            </div>
             `;
             
-            // Highlight the lorebook management section
-            setTimeout(() => {
-                $('#carrot-lorebook-management').addClass('carrot-tutorial-highlight');
-                setTimeout(() => {
-                    $('#carrot-lorebook-management').removeClass('carrot-tutorial-highlight');
-                }, 3000);
-            }, 500);
         } else {
             content += `
-                <button onclick="CarrotKernel.manualScan()" style="
-                    background: linear-gradient(135deg, var(--active) 0%, rgba(var(--active-rgb), 0.85) 100%);
-                    color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer;
-                    font-weight: 500; transition: all 0.3s ease;">
-                    🔄 Rescan Repositories
-                </button>
+                    <button onclick="CarrotKernel.manualScan()" style="
+                        flex: 1;
+                        padding: 12px 20px; 
+                        background: rgba(255, 255, 255, 0.2); 
+                        color: white;
+                        border: 1px solid rgba(255, 255, 255, 0.3);
+                        border-radius: 8px; 
+                        cursor: pointer;
+                        font-size: 14px;
+                        font-weight: 600;
+                        transition: all 0.2s ease;
+                        backdrop-filter: blur(5px);
+                        text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                    " onmouseover="this.style.background='rgba(255, 255, 255, 0.3)'" 
+                       onmouseout="this.style.background='rgba(255, 255, 255, 0.2)'">
+                        🔄 Rescan Repositories
+                    </button>
+                </div>
             </div>
             
-                <h5>✅ Repository Active</h5>
-                <p>Your character repositories are working! CarrotKernel will automatically:</p>
-                <ul>
-                    <li>Detect when you mention these ${characterCount} characters</li>
-                    <li>Inject their data into AI context for consistency</li>
-                    <li>Display results based on your chosen display mode</li>
+            <div style="
+                background: linear-gradient(135deg, #2a2a2a 0%, #3a3a3a 100%);
+                border: 1px solid #555;
+                border-radius: 12px; 
+                padding: 20px; 
+                margin-top: 12px;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            ">
+                <h5 style="margin: 0 0 12px 0; color: var(--SmartThemeEmColor); font-size: 18px; font-weight: 600;">✅ Repository Active</h5>
+                <p style="margin: 0 0 12px 0; color: #e0e0e0; line-height: 1.4;">Your character repositories are working! CarrotKernel will automatically:</p>
+                <ul style="margin: 0; padding-left: 20px; color: #d0d0d0; line-height: 1.6;">
+                    <li style="margin-bottom: 8px;">Detect when you mention these ${characterCount} characters</li>
+                    <li style="margin-bottom: 8px;">Inject their data into AI context for consistency</li>
+                    <li style="margin-bottom: 8px;">Display results based on your chosen display mode</li>
                 </ul>
+                
+                <div style="margin-top: 20px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                        <h6 style="margin: 0; color: var(--SmartThemeEmColor); font-size: 16px; font-weight: 500;">Character Cards</h6>
+                        <button onclick="CarrotKernel.toggleCharacterCards()" style="
+                            padding: 6px 12px;
+                            background: rgba(255, 255, 255, 0.1);
+                            color: #e0e0e0;
+                            border: 1px solid rgba(255, 255, 255, 0.2);
+                            border-radius: 6px;
+                            cursor: pointer;
+                            font-size: 12px;
+                            transition: all 0.2s ease;
+                        " onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'" 
+                           onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'">
+                            👁️ View Cards
+                        </button>
+                    </div>
+                    <div id="carrot-character-cards" style="display: none;">
+                        ${this.generateCharacterCardsHTML()}
+                    </div>
+                </div>
+            </div>
             `;
         }
         
         this.showPopup('Character Repository Manager', content);
+    },
+    
+    // Update repository manager content without closing popup
+    updateRepositoryManagerContent() {
+        const popupContainer = document.getElementById('carrot-popup-container');
+        if (!popupContainer) {
+            return; // Popup is not open
+        }
+        
+        const characterCount = scannedCharacters.size;
+        const selectedCount = selectedLorebooks.size;
+        
+        // Update statistics cards
+        const statsCards = popupContainer.querySelectorAll('[style*="font-size: 28px"]');
+        if (statsCards.length >= 3) {
+            statsCards[0].textContent = characterCount;
+            statsCards[1].textContent = selectedCount;
+            statsCards[2].textContent = characterRepoBooks.size;
+        }
+        
+        // Note: Character cards section will be handled by forceShowCharacterCards()
+        // Just update the Getting Started section to show it's now active
+        if (characterCount > 0) {
+            const gettingStarted = popupContainer.querySelector('h5[style*="Getting Started"]');
+            if (gettingStarted) {
+                const gettingStartedContainer = gettingStarted.closest('div[style*="background: linear-gradient"]');
+                if (gettingStartedContainer) {
+                    // Just update the title and text, don't add character cards here
+                    gettingStartedContainer.innerHTML = `
+                        <h5 style="margin: 0 0 12px 0; color: var(--SmartThemeEmColor); font-size: 18px; font-weight: 600;">✅ Repository Active</h5>
+                        <p style="margin: 0 0 12px 0; color: #e0e0e0; line-height: 1.4;">Your character repositories are working! CarrotKernel will automatically:</p>
+                        <ul style="margin: 0; padding-left: 20px; color: #d0d0d0; line-height: 1.6;">
+                            <li style="margin-bottom: 8px;">Detect when you mention these ${characterCount} characters</li>
+                            <li style="margin-bottom: 8px;">Inject their data into AI context for consistency</li>
+                            <li style="margin-bottom: 8px;">Display results based on your chosen display mode</li>
+                        </ul>
+                    `;
+                }
+            }
+        }
+    },
+    
+    // Force show character cards - simple inline approach
+    forceShowCharacterCards() {
+        const popupContainer = document.getElementById('carrot-popup-container');
+        if (!popupContainer || scannedCharacters.size === 0) {
+            console.log('Cannot show character cards:', { popupContainer: !!popupContainer, characterCount: scannedCharacters.size });
+            return;
+        }
+        
+        // Update the existing character count stats
+        this.updateCharacterCountStats();
+        
+        // Add a simple character list after the purple header section
+        this.addCharactersList();
+        
+        // Hide getting started since user completed setup
+        this.hideGettingStartedSection();
+        
+        console.log(`✅ Character data updated - ${scannedCharacters.size} characters available`);
+    },
+    
+    // Add simple characters list
+    addCharactersList() {
+        const popupContainer = document.getElementById('carrot-popup-container');
+        if (!popupContainer || scannedCharacters.size === 0) return;
+        
+        // Remove existing character list if any
+        const existingList = popupContainer.querySelector('#carrot-characters-list');
+        if (existingList) {
+            existingList.remove();
+        }
+        
+        // Create new character list
+        const charactersList = document.createElement('div');
+        charactersList.id = 'carrot-characters-list';
+        charactersList.style.cssText = `
+            background: linear-gradient(135deg, #2a2a2a 0%, #3a3a3a 100%);
+            border: 1px solid #555;
+            border-radius: 12px;
+            padding: 16px;
+            margin: 16px 0;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        `;
+        
+        let listHTML = `
+            <h5 style="margin: 0 0 16px 0; color: var(--SmartThemeEmColor); font-size: 16px; font-weight: 600;">
+                ✅ Found ${scannedCharacters.size} Characters
+            </h5>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+        `;
+        
+        scannedCharacters.forEach((characterData, characterName) => {
+            let tagCount = 0;
+            
+            // Debug character data during list generation
+            console.log(`🔍 LIST GEN - Character: ${characterName}`);
+            console.log('🔍 LIST GEN - Data:', characterData);
+            console.log('🔍 LIST GEN - Tags:', characterData?.tags);
+            console.log('🔍 LIST GEN - Tags type:', typeof characterData?.tags);
+            console.log('🔍 LIST GEN - Is Map:', characterData?.tags instanceof Map);
+            console.log('🔍 LIST GEN - Is Set:', characterData?.tags instanceof Set);
+            
+            if (characterData && characterData.tags) {
+                if (characterData.tags instanceof Map) {
+                    tagCount = characterData.tags.size;
+                } else if (characterData.tags instanceof Set) {
+                    tagCount = characterData.tags.size;
+                } else if (Array.isArray(characterData.tags)) {
+                    tagCount = characterData.tags.length;
+                } else if (typeof characterData.tags === 'object') {
+                    tagCount = Object.keys(characterData.tags).length;
+                }
+            }
+            
+            listHTML += `
+                <div style="
+                    background: rgba(255, 255, 255, 0.1);
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                    border-radius: 8px;
+                    padding: 12px;
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                " onclick="CarrotKernel.showCharacterDetails('${characterName}')"
+                   onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'"
+                   onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'">
+                    <div style="
+                        width: 40px;
+                        height: 40px;
+                        background: var(--SmartThemeEmColor);
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        color: white;
+                        font-weight: bold;
+                        font-size: 18px;
+                    ">${characterName.charAt(0).toUpperCase()}</div>
+                    <div>
+                        <div style="color: white; font-weight: 500; font-size: 14px;">${characterName}</div>
+                        <div style="color: #bbb; font-size: 12px;">${tagCount} tags</div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        listHTML += '</div>';
+        charactersList.innerHTML = listHTML;
+        
+        // Insert after the purple header section
+        const purpleSection = popupContainer.querySelector('div[style*="background: linear-gradient"][style*="SmartThemeEmColor"]');
+        if (purpleSection) {
+            purpleSection.parentNode.insertBefore(charactersList, purpleSection.nextSibling);
+        } else {
+            popupContainer.appendChild(charactersList);
+        }
+    },
+    
+    // Update character count in stats
+    updateCharacterCountStats() {
+        const popupContainer = document.getElementById('carrot-popup-container');
+        if (!popupContainer) return;
+        
+        // Update the first stats card (Characters Indexed)
+        const statsCards = popupContainer.querySelectorAll('[style*="font-size: 28px"]');
+        if (statsCards.length >= 1) {
+            statsCards[0].textContent = scannedCharacters.size;
+        }
+    },
+    
+    
+    // Show character details inline with collapse
+    showCharacterDetails(characterName) {
+        const characterData = scannedCharacters.get(characterName);
+        if (!characterData) {
+            alert('Character data not found for: ' + characterName);
+            return;
+        }
+        
+        console.log('🔍 Showing character details for:', characterName, characterData);
+        
+        // Store the current repository manager state before changing views
+        const popupContainer = document.getElementById('carrot-popup-container');
+        if (popupContainer) {
+            this._previousRepositoryState = popupContainer.innerHTML;
+            console.log('💾 Stored repository manager state for restoration');
+        }
+        
+        try {
+            // Create back button container
+            const backButtonHTML = `
+                <div style="margin-bottom: 16px;">
+                    <button onclick="CarrotKernel.returnToRepositoryManager()" style="
+                        background: var(--SmartThemeQuoteColor);
+                        color: var(--SmartThemeEmColor);
+                        border: 1px solid var(--SmartThemeBorderColor);
+                        padding: 8px 16px;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        font-size: 14px;
+                        transition: all 0.2s ease;
+                    " onmouseover="this.style.opacity='0.8';" onmouseout="this.style.opacity='1';">
+                        <i class="fa-solid fa-arrow-left" style="margin-right: 8px;"></i>
+                        Back to Repository
+                    </button>
+                </div>`;
+            
+            // Convert Map-based tags to object format expected by createExternalCardContainer
+            const tagsObject = {};
+            if (characterData.tags && characterData.tags instanceof Map) {
+                characterData.tags.forEach((value, key) => {
+                    // Convert Set values to arrays
+                    if (value instanceof Set) {
+                        tagsObject[key] = Array.from(value);
+                    } else if (Array.isArray(value)) {
+                        tagsObject[key] = value;
+                    } else {
+                        tagsObject[key] = [String(value)];
+                    }
+                });
+            }
+            
+            console.log('🔍 DEBUG: Converted tags for character card:', tagsObject);
+            
+            // Use existing CarrotKernel character card system
+            const characterForCard = {
+                name: characterName,
+                tags: tagsObject,
+                source: characterData.source
+            };
+            
+            const cardContainer = createExternalCardContainer([characterForCard], Date.now());
+            
+            // Show in repository manager popup
+            const popupContainer = document.getElementById('carrot-popup-container');
+            if (popupContainer && cardContainer) {
+                popupContainer.innerHTML = backButtonHTML;
+                popupContainer.appendChild(cardContainer);
+                
+                // Auto-activate first tab in each character card
+                setTimeout(() => {
+                    const tabs = cardContainer.querySelectorAll('.carrot-tab');
+                    const personalityTabs = cardContainer.querySelectorAll('.carrot-tab[data-tab="personality"]');
+                    
+                    console.log('🔍 DEBUG: Found tabs:', tabs.length);
+                    console.log('🔍 DEBUG: Found personality tabs:', personalityTabs.length);
+                    
+                    // Click the first personality tab to ensure it's active and content is shown
+                    personalityTabs.forEach((tab, index) => {
+                        if (!tab.classList.contains('active')) {
+                            tab.click();
+                            console.log(`🔓 Auto-activated personality tab ${index + 1}`);
+                        }
+                    });
+                }, 200); // Slightly longer delay to ensure tabs are ready
+            }
+            
+        } catch (error) {
+            console.error('Character details error:', error, characterData);
+            alert('Error displaying character details: ' + error.message);
+        }
+    },
+    
+    // Return to repository manager from character details
+    returnToRepositoryManager() {
+        console.log('🔄 Returning to repository manager');
+        // Simply restore the stored repository manager state
+        if (this._previousRepositoryState) {
+            const popupContainer = document.getElementById('carrot-popup-container');
+            if (popupContainer) {
+                popupContainer.innerHTML = this._previousRepositoryState;
+                console.log('✅ Restored exact previous repository manager state');
+            }
+        } else {
+            // Fallback to regenerating if no stored state
+            this.openRepositoryManager();
+        }
+    },
+    
+    // Hide Getting Started section when character cards are visible
+    hideGettingStartedSection() {
+        const popupContainer = document.getElementById('carrot-popup-container');
+        if (!popupContainer) {
+            console.log('❌ No popup container found');
+            return;
+        }
+        
+        // Debug: log all h5 elements to see what we have
+        const allH5s = popupContainer.querySelectorAll('h5');
+        console.log('🔍 All h5 elements found:', Array.from(allH5s).map(h5 => h5.textContent));
+        
+        // Try multiple ways to find the section
+        let sectionToHide = null;
+        
+        // Method 1: Look for exact text match
+        Array.from(allH5s).forEach(h5 => {
+            if (h5.textContent.includes('Getting Started') || h5.textContent.includes('Repository Active')) {
+                sectionToHide = h5.closest('div');
+                console.log('✅ Found section by text:', h5.textContent);
+            }
+        });
+        
+        // Method 2: Look for specific styling if Method 1 failed
+        if (!sectionToHide) {
+            sectionToHide = popupContainer.querySelector('div[style*="background: linear-gradient"][style*="#2a2a2a"]');
+            if (sectionToHide) {
+                console.log('✅ Found section by gradient styling');
+            }
+        }
+        
+        if (sectionToHide) {
+            console.log('🎯 Hiding section:', sectionToHide);
+            
+            // Immediate hide - no animation to avoid issues
+            sectionToHide.style.display = 'none';
+            
+            // Or remove entirely after a brief delay
+            setTimeout(() => {
+                if (sectionToHide.parentNode) {
+                    sectionToHide.remove();
+                    console.log('✅ Getting Started section removed - user has completed setup');
+                }
+            }, 100);
+        } else {
+            console.log('❌ Could not find Getting Started section to hide');
+        }
+    },
+    
+    // Generate HTML for character cards display
+    generateCharacterCardsHTML() {
+        if (scannedCharacters.size === 0) {
+            return '<p style="color: #888; text-align: center; padding: 20px;">No characters scanned yet</p>';
+        }
+        
+        let html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px;">';
+        
+        scannedCharacters.forEach((characterData, characterName) => {
+            // Handle different possible data structures
+            let tags = [];
+            
+            console.log('Character data for', characterName, ':', characterData);
+            
+            if (characterData && characterData.tags) {
+                if (characterData.tags instanceof Map) {
+                    // Convert Map to array of "key: value" strings
+                    tags = Array.from(characterData.tags.entries()).map(([key, value]) => `${key}: ${value}`);
+                } else if (Array.isArray(characterData.tags)) {
+                    tags = characterData.tags;
+                } else if (typeof characterData.tags === 'object') {
+                    // Convert object to array of "key: value" strings
+                    tags = Object.entries(characterData.tags).map(([key, value]) => `${key}: ${value}`);
+                }
+            } else if (Array.isArray(characterData)) {
+                tags = characterData;
+            } else if (characterData && typeof characterData === 'object') {
+                // Try to find other array properties
+                tags = characterData.processedTags || characterData.allTags || [];
+            }
+            
+            const tagCount = tags.length;
+            const firstFewTags = tags.slice(0, 3).map(tag => {
+                if (typeof tag === 'string') {
+                    return tag.split(':')[1] || tag;
+                } else {
+                    return String(tag);
+                }
+            }).join(', ');
+            
+            html += `
+                <div style="
+                    background: linear-gradient(135deg, #3a3a3a 0%, #4a4a4a 100%);
+                    border: 1px solid #666;
+                    border-radius: 8px;
+                    padding: 16px;
+                    transition: all 0.2s ease;
+                " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(0,0,0,0.3)'" 
+                   onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                        <div style="
+                            width: 40px; 
+                            height: 40px; 
+                            background: var(--SmartThemeEmColor); 
+                            border-radius: 50%; 
+                            display: flex; 
+                            align-items: center; 
+                            justify-content: center; 
+                            color: white; 
+                            font-weight: bold;
+                            font-size: 18px;
+                        ">${characterName.charAt(0).toUpperCase()}</div>
+                        <div>
+                            <div style="color: white; font-weight: 600; font-size: 16px;">${characterName}</div>
+                            <div style="color: #bbb; font-size: 12px;">${tagCount} tags indexed</div>
+                        </div>
+                    </div>
+                    
+                    ${tagCount > 0 ? `
+                        <div style="margin-bottom: 8px;">
+                            <div style="color: #ccc; font-size: 13px; margin-bottom: 4px;">Sample Tags:</div>
+                            <div style="color: #aaa; font-size: 12px; font-style: italic;">${firstFewTags}${tagCount > 3 ? '...' : ''}</div>
+                        </div>
+                    ` : ''}
+                    
+                    <button onclick="CarrotKernel.toggleCharacterDetails('${characterName}')" style="
+                        width: 100%;
+                        padding: 8px;
+                        background: rgba(255, 255, 255, 0.1);
+                        color: #e0e0e0;
+                        border: 1px solid rgba(255, 255, 255, 0.2);
+                        border-radius: 6px;
+                        cursor: pointer;
+                        font-size: 12px;
+                        transition: all 0.2s ease;
+                    " onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'" 
+                       onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'">
+                        📋 View Profile
+                    </button>
+                    <div id="character-details-${characterName}" style="display: none; margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 6px; border: 1px solid #555;">
+                        <!-- Character details will be loaded here -->
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        return html;
+    },
+    
+    // Toggle character cards visibility
+    toggleCharacterCards() {
+        const cardsDiv = document.getElementById('carrot-character-cards');
+        const button = document.querySelector('button[onclick="CarrotKernel.toggleCharacterCards()"]');
+        
+        if (cardsDiv && button) {
+            if (cardsDiv.style.display === 'none') {
+                cardsDiv.style.display = 'block';
+                button.innerHTML = '👁️ Hide Cards';
+                // Update the content in case new characters were added
+                cardsDiv.innerHTML = this.generateCharacterCardsHTML();
+            } else {
+                cardsDiv.style.display = 'none';
+                button.innerHTML = '👁️ View Cards';
+            }
+        }
+    },
+    
+    // Toggle detailed character profile inline
+    toggleCharacterDetails(characterName) {
+        const detailsDiv = document.getElementById(`character-details-${characterName}`);
+        const button = document.querySelector(`button[onclick="CarrotKernel.toggleCharacterDetails('${characterName}')"]`);
+        
+        if (!detailsDiv || !button) {
+            console.error('Character details elements not found');
+            return;
+        }
+        
+        if (detailsDiv.style.display === 'none') {
+            // Show details - generate content if not already loaded
+            if (!detailsDiv.innerHTML.trim() || detailsDiv.innerHTML.includes('Character details will be loaded here')) {
+                const characterData = scannedCharacters.get(characterName);
+                if (!characterData) {
+                    detailsDiv.innerHTML = '<p style="color: #ff6666;">Character data not found</p>';
+                } else {
+                    detailsDiv.innerHTML = this.generateCharacterDetailsHTML(characterName, characterData);
+                }
+            }
+            detailsDiv.style.display = 'block';
+            button.innerHTML = '📋 Hide Profile';
+        } else {
+            // Hide details
+            detailsDiv.style.display = 'none';
+            button.innerHTML = '📋 View Profile';
+        }
+    },
+    
+    // Generate detailed character profile HTML
+    generateCharacterDetailsHTML(characterName, characterData) {
+        // Handle different possible data structures
+        let tags = [];
+        
+        if (characterData && characterData.tags) {
+            if (characterData.tags instanceof Map) {
+                // Convert Map to array of "key: value" strings
+                tags = Array.from(characterData.tags.entries()).map(([key, value]) => `${key}: ${value}`);
+            } else if (Array.isArray(characterData.tags)) {
+                tags = characterData.tags;
+            } else if (typeof characterData.tags === 'object') {
+                // Convert object to array of "key: value" strings
+                tags = Object.entries(characterData.tags).map(([key, value]) => `${key}: ${value}`);
+            }
+        } else if (Array.isArray(characterData)) {
+            tags = characterData;
+        } else if (characterData && typeof characterData === 'object') {
+            // Try to find other array properties
+            tags = characterData.processedTags || characterData.allTags || [];
+        }
+        
+        if (tags.length === 0) {
+            return '<p style="color: #aaa;">No tags found for this character</p>';
+        }
+        
+        // Group tags by category (basic grouping)
+        const grouped = {};
+        tags.forEach(tag => {
+            const tagStr = typeof tag === 'string' ? tag : String(tag);
+            const parts = tagStr.split(':');
+            const category = parts[0] ? parts[0].trim() : 'Other';
+            const value = parts[1] ? parts[1].trim() : tagStr;
+            
+            if (!grouped[category]) {
+                grouped[category] = [];
+            }
+            grouped[category].push(value);
+        });
+        
+        let html = '<div style="max-height: 300px; overflow-y: auto;">';
+        
+        Object.entries(grouped).forEach(([category, values]) => {
+            html += `
+                <div style="margin-bottom: 12px;">
+                    <div style="color: var(--SmartThemeEmColor); font-weight: 600; font-size: 13px; margin-bottom: 6px; text-transform: uppercase;">
+                        ${category}
+                    </div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+            `;
+            
+            values.forEach(value => {
+                html += `
+                    <span style="
+                        background: rgba(255, 255, 255, 0.1);
+                        color: #ddd;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                        font-size: 12px;
+                        border: 1px solid rgba(255, 255, 255, 0.1);
+                    ">${value}</span>
+                `;
+            });
+            
+            html += '</div></div>';
+        });
+        
+        html += '</div>';
+        return html;
     },
     
     // Open template manager - beautiful UI with reliable functionality
@@ -8234,6 +9827,20 @@ window.CarrotKernel = {
         }
         
         this.showTemplateManagerInterface();
+    },
+    
+    // Open pack manager for BunnyMo pack installation and updates
+    async openPackManager() {
+        const settings = extension_settings[extensionName];
+        if (!settings.enabled) {
+            this.showPopup('CarrotKernel Disabled', `
+                <p>CarrotKernel is currently disabled. Please enable it first to manage packs.</p>
+                <p>Click the <strong>Master Enable</strong> toggle in the Feature Controls section.</p>
+            `);
+            return;
+        }
+        
+        await this.showPackManagerInterface();
     },
     
     // Show BunnyMoTags template manager (copied from your BunnyMoTags code)
@@ -8273,6 +9880,1116 @@ window.CarrotKernel = {
         
         this.carrotTemplatePromptEditInterface.selectedTemplate = selectedKey;
         this.carrotTemplatePromptEditInterface.show();
+    },
+    
+    // Show GitHub repository browser interface
+    async showPackManagerInterface() {
+        // Show loading popup while scanning
+        this.showPopup('BunnyMo Repository Browser', `
+            <div class="carrot-github-browser">
+                <div class="carrot-loading-state">
+                    <div class="carrot-spinner"></div>
+                    <p>Loading BunnyMo repository...</p>
+                    <div class="carrot-scan-progress">
+                        <div>🔍 Connecting to GitHub</div>
+                        <div>📂 Reading repository structure</div>
+                        <div>🏷️ Checking for updates</div>
+                    </div>
+                </div>
+            </div>
+        `);
+        
+        try {
+            // Initialize the GitHub browser
+            if (!this.githubBrowser) {
+                this.githubBrowser = new CarrotGitHubBrowser();
+            }
+            
+            // Load the repository structure
+            await this.githubBrowser.loadRepository();
+            
+            // Show the browser interface
+            await this.showGitHubBrowserContent();
+            
+        } catch (error) {
+            CarrotDebug.error('GitHub browser error:', error);
+            this.showPopup('Repository Connection Error', `
+                <div class="carrot-error-panel">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <h3>Unable to Connect to BunnyMo Repository</h3>
+                    <p>Failed to load repository structure from GitHub:</p>
+                    <div class="carrot-error-details">${error.message}</div>
+                    <div class="carrot-error-actions">
+                        <button class="carrot-primary-btn" onclick="CarrotKernel.openPackManager()">
+                            <i class="fa-solid fa-rotate-right"></i> Retry
+                        </button>
+                    </div>
+                </div>
+            `);
+        }
+    },
+    
+    // Show GitHub repository browser content - CarrotKernel Style
+    async showGitHubBrowserContent() {
+        const content = `
+            <div class="carrot-repo-browser">
+                <!-- Repository Header Card -->
+                <div class="carrot-repo-header-card">
+                    <div class="carrot-repo-header-content">
+                        <div class="carrot-repo-title-section">
+                            <div class="carrot-repo-icon">🥕</div>
+                            <div class="carrot-repo-title-text">
+                                <h2>BunnyMo Repository</h2>
+                                <div class="carrot-repo-subtitle">GitHub Pack Browser</div>
+                            </div>
+                        </div>
+                        <div class="carrot-repo-controls">
+                            <button class="carrot-icon-btn carrot-refresh-btn" onclick="CarrotKernel.refreshRepository()" data-tooltip="Refresh repository">
+                                <i class="fa-solid fa-sync-alt"></i>
+                            </button>
+                            <button class="carrot-icon-btn carrot-home-btn" onclick="CarrotKernel.navigateToRoot()" data-tooltip="Repository root">
+                                <i class="fa-solid fa-home"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="carrot-repo-breadcrumb-container" id="carrot-breadcrumbs">
+                        <!-- Breadcrumb navigation will be inserted here -->
+                    </div>
+                </div>
+                
+                <!-- Main Content Area -->
+                <div class="carrot-repo-main-content">
+                    <!-- File Browser Card -->
+                    <div class="carrot-repo-browser-card">
+                        <div class="carrot-card-header">
+                            <h3><i class="fa-solid fa-folder-open"></i> Repository Contents</h3>
+                            <div class="carrot-card-subtitle" id="carrot-browser-stats">Loading...</div>
+                        </div>
+                        <div class="carrot-repo-file-list" id="carrot-file-list">
+                            <!-- File/folder listing will be inserted here -->
+                        </div>
+                    </div>
+                    
+                    <!-- Preview Card -->
+                    <div class="carrot-repo-preview-card">
+                        <div class="carrot-card-header">
+                            <h3><i class="fa-solid fa-eye"></i> Preview</h3>
+                            <div class="carrot-card-subtitle">Pack information and contents</div>
+                        </div>
+                        <div class="carrot-repo-preview-content" id="carrot-file-preview">
+                            <div class="carrot-preview-placeholder">
+                                <div class="carrot-placeholder-icon">📂</div>
+                                <div class="carrot-placeholder-text">
+                                    <h4>Select a pack to preview</h4>
+                                    <p>Click on any JSON file to see its contents and install it directly to your lorebooks</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Action Footer -->
+                <div class="carrot-repo-footer">
+                    <div class="carrot-repo-footer-content">
+                        <div class="carrot-repo-status">
+                            <i class="fa-brands fa-github"></i>
+                            <span>Connected to Coneja-Chibi/BunnyMo</span>
+                        </div>
+                        <div class="carrot-repo-actions">
+                            <button class="carrot-secondary-btn" onclick="CarrotKernel.closePopup()">
+                                <i class="fa-solid fa-times"></i> Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        this.showPopup('🥕 BunnyMo Repository Browser', content);
+        
+        // Load the root directory content
+        await this.githubBrowser.navigateToPath('/');
+        await this.updateBrowserContent();
+    },
+    
+    // Update browser content with current directory listing
+    async updateBrowserContent() {
+        const fileList = document.getElementById('carrot-file-list');
+        const breadcrumbs = document.getElementById('carrot-breadcrumbs');
+        const statsEl = document.getElementById('carrot-browser-stats');
+        
+        if (!this.githubBrowser || !fileList) return;
+        
+        const currentPath = this.githubBrowser.currentPath;
+        const items = this.githubBrowser.currentItems || [];
+        
+        // Update breadcrumbs
+        if (breadcrumbs) {
+            breadcrumbs.innerHTML = this.generateBreadcrumbs(currentPath);
+        }
+        
+        // Show loading while generating file list with update detection
+        fileList.innerHTML = `
+            <div class="carrot-loading-state">
+                <div class="carrot-spinner"></div>
+                <p>Checking for updates...</p>
+            </div>
+        `;
+        
+        // Update file listing with update detection (async)
+        fileList.innerHTML = await this.generateFileList(items);
+        
+        // Update stats with update info
+        if (statsEl) {
+            const folders = items.filter(item => item.type === 'dir').length;
+            const files = items.filter(item => item.type === 'file').length;
+            const jsonFiles = items.filter(item => item.type === 'file' && item.name.endsWith('.json'));
+            
+            let updatesAvailable = 0;
+            let installedPacks = 0;
+            
+            for (const file of jsonFiles) {
+                const isInstalled = this.githubBrowser.installedPacks[file.name];
+                if (isInstalled) {
+                    installedPacks++;
+                    if (this.githubBrowser.hasUpdates(file.name, file.sha)) {
+                        updatesAvailable++;
+                    }
+                }
+            }
+            
+            let statsText = `${folders} folders, ${files} files`;
+            if (jsonFiles.length > 0) {
+                statsText += ` • ${installedPacks}/${jsonFiles.length} packs installed`;
+                if (updatesAvailable > 0) {
+                    statsText += ` • ${updatesAvailable} update${updatesAvailable === 1 ? '' : 's'} available`;
+                }
+            }
+            
+            statsEl.innerHTML = `<span>${statsText}</span>`;
+        }
+    },
+    
+    // Generate breadcrumb navigation with back button
+    generateBreadcrumbs(path) {
+        const parts = path.split('/').filter(part => part.length > 0);
+        let breadcrumbPath = '';
+        
+        // Add back button if not at root
+        let html = '';
+        if (parts.length > 0) {
+            const parentPath = parts.length > 1 ? '/' + parts.slice(0, -1).join('/') : '/';
+            html += `
+                <button class="carrot-breadcrumb-btn carrot-back-btn" onclick="CarrotKernel.navigateToPath('${parentPath}')" data-tooltip="Go back">
+                    <i class="fa-solid fa-arrow-left"></i>
+                </button>
+                <span class="carrot-breadcrumb-separator">|</span>
+            `;
+        }
+        
+        // Add home button
+        html += `<button class="carrot-breadcrumb-btn ${parts.length === 0 ? 'active' : ''}" onclick="CarrotKernel.navigateToPath('/')" ${parts.length === 0 ? 'disabled' : ''}>
+            <i class="fa-solid fa-home"></i> BunnyMo
+        </button>`;
+        
+        // Add folder hierarchy
+        parts.forEach((part, index) => {
+            breadcrumbPath += '/' + part;
+            const isLast = index === parts.length - 1;
+            
+            html += `
+                <span class="carrot-breadcrumb-separator">/</span>
+                <button class="carrot-breadcrumb-btn ${isLast ? 'active' : ''}" 
+                        onclick="CarrotKernel.navigateToPath('${breadcrumbPath}')"
+                        ${isLast ? 'disabled' : ''}>
+                    📁 ${part}
+                </button>
+            `;
+        });
+        
+        return html;
+    },
+    
+    // Generate file/folder listing with update detection
+    async generateFileList(items) {
+        if (!items || items.length === 0) {
+            return `
+                <div class="carrot-empty-folder">
+                    <div class="carrot-placeholder-icon">📁</div>
+                    <div class="carrot-placeholder-text">
+                        <h4>This folder is empty</h4>
+                        <p>No files or folders found in this directory</p>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Sort items: folders first, then files, both alphabetically
+        const sortedItems = [...items].sort((a, b) => {
+            if (a.type === 'dir' && b.type !== 'dir') return -1;
+            if (a.type !== 'dir' && b.type === 'dir') return 1;
+            return a.name.localeCompare(b.name);
+        });
+        
+        let html = '';
+        
+        for (const item of sortedItems) {
+            const isFile = item.type === 'file';
+            const isJsonFile = isFile && item.name.toLowerCase().endsWith('.json');
+            const isReadmeFile = isFile && item.name.toLowerCase().startsWith('readme');
+            const size = item.size ? this.formatFileSize(item.size) : '';
+            
+            let fileTypeClass = isFile ? 'file' : 'folder';
+            if (isJsonFile) fileTypeClass += ' json-file';
+            if (isReadmeFile) fileTypeClass += ' readme-file';
+            
+            // Check for updates
+            let hasUpdates = false;
+            let isInstalled = false;
+            let updateIndicator = '';
+            
+            if (isJsonFile) {
+                isInstalled = await this.checkPackInstalled(item.name);
+                hasUpdates = this.githubBrowser.hasUpdates(item.name, item.sha);
+                
+                if (hasUpdates) {
+                    fileTypeClass += ' has-updates';
+                    updateIndicator = '<div class="carrot-update-badge" data-tooltip="Update Available">🔄</div>';
+                } else if (isInstalled) {
+                    fileTypeClass += ' is-installed';
+                    updateIndicator = '<div class="carrot-installed-badge" data-tooltip="Installed">✅</div>';
+                }
+            } else if (item.type === 'dir') {
+                // Check if folder contains files with updates
+                const folderHasUpdates = await this.githubBrowser.folderHasUpdates(item.path);
+                if (folderHasUpdates) {
+                    fileTypeClass += ' folder-has-updates';
+                    updateIndicator = '<div class="carrot-folder-update-glow" data-tooltip="Contains Updates">✨</div>';
+                }
+            }
+            
+            let fileIcon = '<i class="fa-solid fa-folder"></i>';
+            if (isFile) {
+                if (isJsonFile) fileIcon = '<i class="fa-solid fa-file-code"></i>';
+                else if (isReadmeFile) fileIcon = '<i class="fa-solid fa-file-text"></i>';
+                else fileIcon = '<i class="fa-solid fa-file"></i>';
+            }
+            
+            let fileTypeLabel = '';
+            if (item.type === 'dir') fileTypeLabel = 'Folder';
+            else if (isJsonFile) {
+                if (hasUpdates) fileTypeLabel = 'Update Available';
+                else if (isInstalled) fileTypeLabel = 'Installed Pack';
+                else fileTypeLabel = 'BunnyMo Pack';
+            } else if (isReadmeFile) fileTypeLabel = 'Documentation';
+            else fileTypeLabel = 'File';
+            
+            html += `
+                <div class="carrot-repo-file-item ${fileTypeClass}" 
+                     data-path="${item.path}" 
+                     data-type="${item.type}"
+                     onclick="CarrotKernel.handleFileClick('${item.path}', '${item.type}', '${item.name}')">
+                    
+                    <div class="carrot-file-icon">
+                        ${fileIcon}
+                        ${updateIndicator}
+                    </div>
+                    
+                    <div class="carrot-file-info">
+                        <div class="carrot-file-name">${item.name}</div>
+                        <div class="carrot-file-details">
+                            ${size ? `<span class="carrot-file-size">${size}</span>` : ''}
+                            <span class="carrot-file-type">${fileTypeLabel}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="carrot-file-actions">
+                        ${isJsonFile ? `
+                            <button class="carrot-icon-btn ${hasUpdates ? 'update-btn' : ''}" 
+                                    onclick="event.stopPropagation(); event.preventDefault(); CarrotKernel.installPackDirectly('${item.path}', '${item.name}'); return false;" 
+                                    data-tooltip="${hasUpdates ? 'Update Pack' : isInstalled ? 'Reinstall Pack' : 'Install Pack'}">
+                                <i class="fa-solid fa-${hasUpdates ? 'sync-alt' : 'download'}"></i>
+                            </button>
+                        ` : ''}
+                        ${(isFile && !isJsonFile) ? `
+                            <button class="carrot-icon-btn" onclick="event.stopPropagation(); CarrotKernel.previewFile('${item.path}', '${item.name}')" 
+                                    data-tooltip="View File">
+                                <i class="fa-solid fa-eye"></i>
+                            </button>
+                        ` : ''}
+                        ${item.type === 'dir' ? `
+                            <button class="carrot-icon-btn" onclick="event.stopPropagation(); CarrotKernel.navigateToPath('${item.path}')" 
+                                    data-tooltip="Open Folder">
+                                <i class="fa-solid fa-folder-open"></i>
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        
+        return html;
+    },
+    
+    // Handle file/folder clicks
+    async handleFileClick(path, type, name) {
+        if (type === 'dir') {
+            await this.navigateToPath(path);
+        } else if (type === 'file') {
+            // Preview any file type - JSON packs or README files
+            await this.previewFile(path, name);
+        }
+    },
+    
+    // Navigate to specific path
+    async navigateToPath(path) {
+        try {
+            await this.githubBrowser.navigateToPath(path);
+            await this.updateBrowserContent();
+        } catch (error) {
+            CarrotDebug.error('Navigation error:', error);
+            toastr.error('Failed to navigate to folder: ' + error.message);
+        }
+    },
+    
+    // Navigate to repository root
+    async navigateToRoot() {
+        await this.navigateToPath('/');
+    },
+    
+    // Refresh repository
+    async refreshRepository() {
+        try {
+            await this.githubBrowser.loadRepository();
+            await this.updateBrowserContent();
+            toastr.success('Repository refreshed');
+        } catch (error) {
+            CarrotDebug.error('Refresh error:', error);
+            toastr.error('Failed to refresh repository: ' + error.message);
+        }
+    },
+    
+    // Show installation dialog and install pack
+    async downloadFile(path, filename) {
+        // Show beautiful installation dialog
+        this.showPackInstallDialog(path, filename);
+    },
+    
+    // Beautiful pack installation dialog
+    async showPackInstallDialog(path, filename) {
+        const cleanName = filename.replace('.json', '');
+        
+        // Create installation dialog
+        const dialogContent = `
+            <div class="carrot-install-dialog">
+                <div class="carrot-install-header">
+                    <div class="carrot-install-icon">🎯</div>
+                    <div class="carrot-install-title">
+                        <h3>Install BunnyMo Pack</h3>
+                        <div class="carrot-install-subtitle">Adding to your SillyTavern lorebooks</div>
+                    </div>
+                </div>
+                
+                <div class="carrot-install-content">
+                    <div class="carrot-pack-info">
+                        <div class="carrot-pack-name">${cleanName}</div>
+                        <div class="carrot-pack-status">
+                            <i class="fa-solid fa-download"></i>
+                            <span>Ready to install</span>
+                        </div>
+                    </div>
+                    
+                    <div class="carrot-install-progress" id="carrot-install-progress" style="display: none;">
+                        <div class="carrot-progress-bar">
+                            <div class="carrot-progress-fill" id="carrot-progress-fill"></div>
+                        </div>
+                        <div class="carrot-progress-text" id="carrot-progress-text">Preparing installation...</div>
+                    </div>
+                </div>
+                
+                <div class="carrot-install-actions">
+                    <button class="carrot-secondary-btn" onclick="CarrotKernel.closeInstallDialog()" id="carrot-cancel-btn">
+                        Cancel
+                    </button>
+                    <button class="carrot-primary-btn" onclick="CarrotKernel.executeInstall('${path}', '${filename}')" id="carrot-install-btn">
+                        <i class="fa-solid fa-download"></i> Install Pack
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        this.showPopup('🥕 Pack Installation', dialogContent);
+    },
+    
+    // Check if a pack is already installed in ST's lorebooks
+    async checkPackInstalled(filename) {
+        console.log('🥕🔍 === PACK DETECTION STARTED ===');
+        console.log('🥕 Checking pack installation for:', filename);
+        
+        try {
+            // Dynamically import ST's world-info functions
+            const worldInfoModule = await import('../../../world-info.js');
+            console.log('🥕 World-info module imported:', Object.keys(worldInfoModule));
+            
+            const { world_names } = worldInfoModule;
+            console.log('🥕 Available world_names type:', typeof world_names);
+            console.log('🥕 Available world_names length:', world_names?.length);
+            console.log('🥕 Available world_names:', world_names);
+            
+            // Remove .json extension and check various name formats
+            const baseName = filename.replace('.json', '');
+            const possibleNames = [
+                baseName,
+                filename,
+                baseName.toLowerCase(),
+                filename.toLowerCase(),
+                baseName.replace(/[^\w\s-]/g, ''), // Remove special chars
+                baseName.replace(/\s+/g, '_'), // Replace spaces with underscores
+                baseName.replace(/\s+/g, '-'), // Replace spaces with dashes
+                baseName.replace(/[^a-zA-Z0-9]/g, ''), // Remove all non-alphanumeric
+            ];
+            
+            console.log('🥕 Checking possible names:', possibleNames);
+            
+            // Check each possible name individually for better debugging
+            const matches = [];
+            for (const name of possibleNames) {
+                const found = world_names.includes(name);
+                if (found) {
+                    matches.push(name);
+                }
+                console.log(`🥕 "${name}" found: ${found}`);
+            }
+            
+            const isInstalled = matches.length > 0;
+            console.log('🥕 Pack installed?', isInstalled);
+            console.log('🥕 Matching names:', matches);
+            
+            return isInstalled;
+            
+        } catch (error) {
+            console.error('🥕 ❌ Pack detection failed:', error);
+            console.error('🥕 Error stack:', error.stack);
+            CarrotDebug.error('Failed to check pack installation status:', error);
+            return false;
+        } finally {
+            console.log('🥕🔍 === PACK DETECTION ENDED ===');
+        }
+    },
+
+    // Install pack using native ST lorebook system
+    async installPackNative(downloadUrl, filename) {
+        console.log('🥕🔧 === NATIVE INSTALLATION STARTED ===');
+        console.log('🥕 installPackNative called:', { downloadUrl, filename });
+        
+        try {
+            CarrotDebug.repo(`🚀 Installing pack: ${filename}`);
+            
+            console.log('🥕 Step A: Downloading JSON file...');
+            // Download the JSON file
+            const response = await fetch(downloadUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to download: ${response.status}`);
+            }
+            
+            const jsonData = await response.text();
+            console.log('🥕 Downloaded data length:', jsonData.length);
+            console.log('🥕 First 200 chars:', jsonData.substring(0, 200));
+            
+            console.log('🥕 Step B: Creating File object...');
+            // Create a File object (simulating file upload)
+            const blob = new Blob([jsonData], { type: 'application/json' });
+            const file = new File([blob], filename, { type: 'application/json' });
+            console.log('🥕 Created File object:', { name: file.name, size: file.size, type: file.type });
+            
+            console.log('🥕 Step C: Importing world-info module...');
+            // Dynamically import ST's world-info functions
+            const worldInfoModule = await import('../../../world-info.js');
+            console.log('🥕 World-info module imported:', Object.keys(worldInfoModule));
+            
+            const { importWorldInfo, updateWorldInfoList } = worldInfoModule;
+            console.log('🥕 Functions available:', { 
+                importWorldInfo: typeof importWorldInfo, 
+                updateWorldInfoList: typeof updateWorldInfoList 
+            });
+            
+            console.log('🥕 Step D: Calling importWorldInfo...');
+            // Import using ST's native system
+            const importResult = await importWorldInfo(file);
+            console.log('🥕 Import result:', importResult);
+            
+            console.log('🥕 Step E: Updating world info list...');
+            // Refresh ST's lorebook list
+            const updateResult = await updateWorldInfoList();
+            console.log('🥕 Update result:', updateResult);
+            
+            console.log('🥕 ✅ Native installation completed successfully');
+            CarrotDebug.repo(`✅ Successfully installed: ${filename}`);
+            toastr.success(`Installed ${filename} to your lorebooks!`);
+            
+            return true;
+            
+        } catch (error) {
+            console.error('🥕 ❌ Native installation failed:', error);
+            console.error('🥕 Error stack:', error.stack);
+            CarrotDebug.error(`Failed to install pack: ${error.message}`, error);
+            toastr.error(`Installation failed: ${error.message}`);
+            return false;
+        } finally {
+            console.log('🥕🔧 === NATIVE INSTALLATION ENDED ===');
+        }
+    },
+
+    // Install pack directly from GitHub (bypassing dialog)
+    async installPackDirectly(path, filename) {
+        console.log('🥕🚀 === DIRECT INSTALLATION STARTED ===');
+        console.log('🥕 installPackDirectly called:', { path, filename });
+        console.log('🥕 User Agent:', navigator.userAgent);
+        console.log('🥕 Current URL:', window.location.href);
+        
+        try {
+            console.log('🥕 Step 1: Getting download URL...');
+            const downloadUrl = await this.githubBrowser.getDownloadUrl(path);
+            console.log('🥕 Download URL obtained:', downloadUrl);
+            
+            console.log('🥕 Step 2: Calling installPackNative...');
+            const success = await this.installPackNative(downloadUrl, filename);
+            console.log('🥕 Installation result:', success);
+            
+            if (success) {
+                console.log('🥕 Step 3: Refreshing browser content...');
+                // Refresh the file list to update status indicators
+                await this.updateBrowserContent();
+                console.log('🥕 ✅ Direct installation completed successfully');
+            } else {
+                console.log('🥕 ❌ Installation reported failure');
+            }
+            
+        } catch (error) {
+            console.error('🥕 ❌ Direct installation failed:', error);
+            console.error('🥕 Error stack:', error.stack);
+            CarrotDebug.error('Direct installation failed:', error);
+            toastr.error(`Failed to install ${filename}: ${error.message}`);
+        }
+        
+        console.log('🥕🏁 === DIRECT INSTALLATION ENDED ===');
+    },
+
+    // Execute the actual installation
+    async executeInstall(path, filename) {
+        const progressEl = document.getElementById('carrot-install-progress');
+        const progressFillEl = document.getElementById('carrot-progress-fill');
+        const progressTextEl = document.getElementById('carrot-progress-text');
+        const installBtn = document.getElementById('carrot-install-btn');
+        const cancelBtn = document.getElementById('carrot-cancel-btn');
+        
+        try {
+            // Show progress
+            progressEl.style.display = 'block';
+            installBtn.disabled = true;
+            cancelBtn.disabled = true;
+            
+            // Step 1: Download
+            progressTextEl.textContent = 'Downloading pack from GitHub...';
+            progressFillEl.style.width = '25%';
+            
+            const downloadUrl = await this.githubBrowser.getDownloadUrl(path);
+            const response = await fetch(downloadUrl);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            // Step 2: Parse
+            progressTextEl.textContent = 'Processing pack data...';
+            progressFillEl.style.width = '50%';
+            
+            const data = await response.json();
+            const entries = data.entries || [];
+            
+            // Step 3: Install
+            progressTextEl.textContent = 'Installing to SillyTavern lorebooks...';
+            progressFillEl.style.width = '75%';
+            
+            const cleanName = filename.replace('.json', '');
+            const saveResponse = await fetch('/api/worldinfo/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    name: cleanName,
+                    data: data 
+                })
+            });
+            
+            if (!saveResponse.ok) {
+                throw new Error(`Failed to install lorebook: ${saveResponse.status}`);
+            }
+            
+            // Step 4: Track installation with SHA
+            const currentItem = this.githubBrowser.currentItems.find(item => item.path === path);
+            if (currentItem) {
+                this.githubBrowser.trackPackInstallation(filename, currentItem.sha, currentItem.size);
+                CarrotDebug.repo(`✅ Tracked installation: ${filename} (SHA: ${currentItem.sha})`);
+            }
+            
+            progressTextEl.textContent = 'Installation complete!';
+            progressFillEl.style.width = '100%';
+            
+            // Show success state
+            setTimeout(() => {
+                const dialogContent = `
+                    <div class="carrot-install-dialog">
+                        <div class="carrot-install-header carrot-success">
+                            <div class="carrot-install-icon">✅</div>
+                            <div class="carrot-install-title">
+                                <h3>Pack Installed Successfully!</h3>
+                                <div class="carrot-install-subtitle">${cleanName} is now available in your lorebooks</div>
+                            </div>
+                        </div>
+                        
+                        <div class="carrot-install-content">
+                            <div class="carrot-success-info">
+                                <div class="carrot-success-stat">
+                                    <div class="carrot-stat-number">${entries.length}</div>
+                                    <div class="carrot-stat-label">Entries Added</div>
+                                </div>
+                                <div class="carrot-success-stat">
+                                    <div class="carrot-stat-number">${Math.round(JSON.stringify(data).length / 1024)}KB</div>
+                                    <div class="carrot-stat-label">Data Size</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="carrot-install-actions">
+                            <button class="carrot-primary-btn" onclick="CarrotKernel.closePopup()">
+                                <i class="fa-solid fa-check"></i> Done
+                            </button>
+                        </div>
+                    </div>
+                `;
+                
+                this.showPopup('🎉 Installation Complete', dialogContent);
+            }, 500);
+            
+            // Refresh ST's lorebook list
+            if (typeof loadWorldInfoList === 'function') {
+                loadWorldInfoList();
+            }
+            
+        } catch (error) {
+            CarrotDebug.error('Installation error:', error);
+            
+            // Show error state
+            const dialogContent = `
+                <div class="carrot-install-dialog">
+                    <div class="carrot-install-header carrot-error">
+                        <div class="carrot-install-icon">❌</div>
+                        <div class="carrot-install-title">
+                            <h3>Installation Failed</h3>
+                            <div class="carrot-install-subtitle">Unable to install the pack</div>
+                        </div>
+                    </div>
+                    
+                    <div class="carrot-install-content">
+                        <div class="carrot-error-details">
+                            <strong>Error:</strong> ${error.message}
+                        </div>
+                    </div>
+                    
+                    <div class="carrot-install-actions">
+                        <button class="carrot-secondary-btn" onclick="CarrotKernel.showPackInstallDialog('${path}', '${filename}')">
+                            <i class="fa-solid fa-redo"></i> Try Again
+                        </button>
+                        <button class="carrot-primary-btn" onclick="CarrotKernel.closePopup()">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            this.showPopup('❌ Installation Failed', dialogContent);
+        }
+    },
+    
+    // Close installation dialog
+    closeInstallDialog() {
+        this.closePopup();
+        // Return to the browser
+        this.showPackManagerInterface();
+    },
+    
+    // Preview file content - supports JSON packs and README files
+    async previewFile(path, filename) {
+        const previewEl = document.getElementById('carrot-file-preview');
+        if (!previewEl) return;
+        
+        const isJsonFile = filename.toLowerCase().endsWith('.json');
+        const isReadmeFile = filename.toLowerCase().startsWith('readme');
+        
+        try {
+            previewEl.innerHTML = `
+                <div class="carrot-loading-state">
+                    <div class="carrot-spinner"></div>
+                    <p>Loading preview...</p>
+                </div>
+            `;
+            
+            const downloadUrl = await this.githubBrowser.getDownloadUrl(path);
+            const response = await fetch(downloadUrl);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            if (isJsonFile) {
+                // Handle JSON pack preview
+                const data = await response.json();
+                
+                // Handle SillyTavern's actual lorebook structure
+                let entries = [];
+                
+                if (data.entries && typeof data.entries === 'object') {
+                    // SillyTavern format: {"entries": {"0": {...}, "1": {...}, ...}}
+                    entries = Object.values(data.entries);
+                } else if (Array.isArray(data.entries)) {
+                    // Array format: {"entries": [{...}, {...}, ...]}
+                    entries = data.entries;
+                } else if (Array.isArray(data)) {
+                    // Direct array: [{...}, {...}, ...]
+                    entries = data;
+                } else if (data.world_info && data.world_info.entries && typeof data.world_info.entries === 'object') {
+                    // Nested object format
+                    entries = Object.values(data.world_info.entries);
+                } else if (data.world_info && Array.isArray(data.world_info.entries)) {
+                    // Nested array format
+                    entries = data.world_info.entries;
+                } else {
+                    // Last resort: look for any object with numbered keys or array
+                    for (const key in data) {
+                        if (typeof data[key] === 'object' && data[key] !== null) {
+                            if (Array.isArray(data[key]) && data[key].length > 0) {
+                                entries = data[key];
+                                break;
+                            } else if (typeof data[key] === 'object') {
+                                const values = Object.values(data[key]);
+                                if (values.length > 0 && values[0] && typeof values[0] === 'object' && (values[0].key || values[0].keys || values[0].content)) {
+                                    entries = values;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                previewEl.innerHTML = `
+                    <div class="carrot-pack-preview">
+                        <div class="carrot-preview-header">
+                            <div class="carrot-preview-title">
+                                <div class="carrot-preview-icon">🎯</div>
+                                <div class="carrot-preview-title-text">
+                                    <h3>${filename.replace('.json', '')}</h3>
+                                    <div class="carrot-preview-subtitle">BunnyMo Pack Preview</div>
+                                </div>
+                            </div>
+                            <button class="carrot-primary-btn" onclick="CarrotKernel.downloadFile('${path}', '${filename}')">
+                                <i class="fa-solid fa-download"></i> Install
+                            </button>
+                        </div>
+                        
+                        <div class="carrot-preview-stats">
+                            <div class="carrot-stat-card">
+                                <div class="carrot-stat-number">${entries.length}</div>
+                                <div class="carrot-stat-label">Entries</div>
+                            </div>
+                            <div class="carrot-stat-card">
+                                <div class="carrot-stat-number">${Math.round(JSON.stringify(data).length / 1024)}KB</div>
+                                <div class="carrot-stat-label">Size</div>
+                            </div>
+                        </div>
+                        
+                        <div class="carrot-preview-content">
+                            <h4><i class="fa-solid fa-list"></i> Pack Contents</h4>
+                            ${entries.length > 0 ? `
+                                <div class="carrot-entry-grid">
+                                    ${entries.slice(0, 8).map(entry => {
+                                        // Handle different entry structures
+                                        const keys = entry.key || entry.keys || entry.triggers || [];
+                                        const keyText = Array.isArray(keys) ? keys[0] : keys || 'Unnamed Entry';
+                                        const content = entry.content || entry.text || entry.description || '';
+                                        
+                                        return `
+                                            <div class="carrot-entry-card">
+                                                <div class="carrot-entry-key">${keyText}</div>
+                                                <div class="carrot-entry-preview">${content.substring(0, 80)}${content.length > 80 ? '...' : ''}</div>
+                                                ${entry.probability !== undefined ? `<div class="carrot-entry-prob">Trigger: ${entry.probability}%</div>` : ''}
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                                ${entries.length > 8 ? `<div class="carrot-more-entries">+ ${entries.length - 8} more entries</div>` : ''}
+                            ` : `
+                                <div class="carrot-empty-preview">
+                                    <div class="carrot-empty-icon">📭</div>
+                                    <h4>No Entries Found</h4>
+                                    <p>This JSON file might be empty, corrupted, or use an unsupported format.</p>
+                                    <details class="carrot-debug-info">
+                                        <summary>Debug Info (click to expand)</summary>
+                                        <pre>${JSON.stringify(data, null, 2).substring(0, 500)}${JSON.stringify(data, null, 2).length > 500 ? '...' : ''}</pre>
+                                    </details>
+                                </div>
+                            `}
+                        </div>
+                    </div>
+                `;
+                
+            } else if (isReadmeFile) {
+                // Handle README file preview
+                const textContent = await response.text();
+                
+                previewEl.innerHTML = `
+                    <div class="carrot-readme-preview">
+                        <div class="carrot-preview-header">
+                            <div class="carrot-preview-title">
+                                <div class="carrot-preview-icon">📖</div>
+                                <div class="carrot-preview-title-text">
+                                    <h3>${filename}</h3>
+                                    <div class="carrot-preview-subtitle">Repository Documentation</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="carrot-readme-content">
+                            <pre>${textContent}</pre>
+                        </div>
+                    </div>
+                `;
+                
+            } else {
+                // Handle other file types
+                const textContent = await response.text();
+                
+                previewEl.innerHTML = `
+                    <div class="carrot-file-preview">
+                        <div class="carrot-preview-header">
+                            <div class="carrot-preview-title">
+                                <div class="carrot-preview-icon">📄</div>
+                                <div class="carrot-preview-title-text">
+                                    <h3>${filename}</h3>
+                                    <div class="carrot-preview-subtitle">File Preview</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="carrot-text-content">
+                            <pre>${textContent.substring(0, 2000)}${textContent.length > 2000 ? '\n\n... (truncated)' : ''}</pre>
+                        </div>
+                    </div>
+                `;
+            }
+            
+        } catch (error) {
+            CarrotDebug.error('Preview error:', error);
+            previewEl.innerHTML = `
+                <div class="carrot-error-state">
+                    <div class="carrot-error-icon">⚠️</div>
+                    <div class="carrot-error-text">
+                        <h4>Failed to load preview</h4>
+                        <p>${error.message}</p>
+                    </div>
+                </div>
+            `;
+        }
+    },
+    
+    // Format file size
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    },
+    
+    // Remove old pack manager functions and replace with browser navigation functions
+    async populatePackGrids(packManager) {
+        const themeContainer = document.getElementById('carrot-theme-packs');
+        const expansionContainer = document.getElementById('carrot-expansion-packs');
+        
+        // Populate theme packs
+        if (themeContainer && packManager.availablePacks.size > 0) {
+            const themeGrid = Array.from(packManager.availablePacks.entries()).map(([id, pack]) => {
+                const isInstalled = packManager.localPacks.has(id);
+                return `
+                    <div class="carrot-pack-item carrot-pack-theme-item">
+                        <div class="carrot-pack-info">
+                            <div class="carrot-pack-name">${pack.displayName}</div>
+                            <div class="carrot-pack-desc">${pack.description || 'Theme pack with specialized character tags'}</div>
+                            <div class="carrot-pack-details">
+                                <span class="carrot-pack-size">${pack.size ? Math.round(pack.size / 1024) : '~200'}KB</span>
+                                <span class="carrot-pack-variants">${pack.variants || 1} variant${pack.variants === 1 ? '' : 's'}</span>
+                            </div>
+                        </div>
+                        <div class="carrot-pack-actions">
+                            ${isInstalled ? 
+                                `<button class="carrot-secondary-btn" onclick="CarrotKernel.updatePack('${id}')">
+                                    <i class="fa-solid fa-sync-alt"></i> Update
+                                </button>` :
+                                `<button class="carrot-primary-btn" onclick="CarrotKernel.installPack('${id}')">
+                                    <i class="fa-solid fa-download"></i> Install
+                                </button>`
+                            }
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            themeContainer.innerHTML = themeGrid;
+        }
+        
+        // Populate expansion packs
+        if (expansionContainer && packManager.expansionPacks.size > 0) {
+            const expansionGrid = Array.from(packManager.expansionPacks.entries()).map(([id, pack]) => {
+                const isInstalled = packManager.localPacks.has(id);
+                return `
+                    <div class="carrot-pack-item carrot-pack-expansion-item">
+                        <div class="carrot-pack-info">
+                            <div class="carrot-pack-name">${pack.displayName}</div>
+                            <div class="carrot-pack-desc">${pack.description || 'Expansion pack with additional content'}</div>
+                            <div class="carrot-pack-details">
+                                <span class="carrot-pack-size">${pack.size ? Math.round(pack.size / 1024) : '~150'}KB</span>
+                                <span class="carrot-pack-type">Expansion</span>
+                            </div>
+                        </div>
+                        <div class="carrot-pack-actions">
+                            ${isInstalled ? 
+                                `<button class="carrot-secondary-btn" onclick="CarrotKernel.updatePack('${id}')">
+                                    <i class="fa-solid fa-sync-alt"></i> Update
+                                </button>` :
+                                `<button class="carrot-primary-btn" onclick="CarrotKernel.installPack('${id}')">
+                                    <i class="fa-solid fa-download"></i> Install
+                                </button>`
+                            }
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            expansionContainer.innerHTML = expansionGrid;
+        }
+    },
+    
+    // Install main BunnyMo pack
+    async installMainPack(filename) {
+        if (!filename) {
+            CarrotDebug.error('No filename provided for main pack installation');
+            return;
+        }
+        
+        try {
+            const packManager = new CarrotPackManager();
+            await packManager.installPackByFilename(filename, 'main');
+            
+            // Update status and refresh interface
+            this.updatePackStatus();
+            toastr.success('Main BunnyMo pack installed successfully!');
+            
+            // Refresh the pack manager interface
+            await this.showPackManagerInterface();
+            
+        } catch (error) {
+            CarrotDebug.error('Failed to install main pack:', error);
+            toastr.error('Failed to install main pack: ' + error.message);
+        }
+    },
+    
+    // Install theme or expansion pack
+    async installPack(packId) {
+        try {
+            const packManager = new CarrotPackManager();
+            await packManager.installPackById(packId);
+            
+            // Update status and refresh interface
+            this.updatePackStatus();
+            toastr.success('Pack installed successfully!');
+            
+            // Refresh the pack manager interface
+            await this.showPackManagerInterface();
+            
+        } catch (error) {
+            CarrotDebug.error('Failed to install pack:', error);
+            toastr.error('Failed to install pack: ' + error.message);
+        }
+    },
+    
+    // Update main pack
+    async updateMainPack(filename) {
+        try {
+            const packManager = new CarrotPackManager();
+            await packManager.updateMainPack(filename);
+            
+            // Update status and refresh interface
+            this.updatePackStatus();
+            toastr.success('Main pack updated successfully!');
+            
+            // Refresh the pack manager interface
+            await this.showPackManagerInterface();
+            
+        } catch (error) {
+            CarrotDebug.error('Failed to update main pack:', error);
+            toastr.error('Failed to update main pack: ' + error.message);
+        }
+    },
+    
+    // Update theme or expansion pack
+    async updatePack(packId) {
+        try {
+            const packManager = new CarrotPackManager();
+            await packManager.updatePackById(packId);
+            
+            // Update status and refresh interface  
+            this.updatePackStatus();
+            toastr.success('Pack updated successfully!');
+            
+            // Refresh the pack manager interface
+            await this.showPackManagerInterface();
+            
+        } catch (error) {
+            CarrotDebug.error('Failed to update pack:', error);
+            toastr.error('Failed to update pack: ' + error.message);
+        }
+    },
+    
+    // Scan for pack updates
+    async scanForUpdates() {
+        try {
+            const packManager = new CarrotPackManager();
+            await packManager.scanAllPacks();
+            
+            this.updatePackStatus();
+            toastr.info('Pack scan completed');
+            
+            // Refresh the pack manager interface
+            await this.showPackManagerInterface();
+            
+        } catch (error) {
+            CarrotDebug.error('Failed to scan for updates:', error);
+            toastr.error('Failed to scan for updates: ' + error.message);
+        }
+    },
+    
+    // Update pack status in status card
+    updatePackStatus() {
+        const statusElement = document.getElementById('carrot-pack-status');
+        const detailElement = document.getElementById('carrot-pack-detail');
+        const indicatorElement = document.getElementById('carrot-pack-indicator');
+        
+        if (statusElement && detailElement && indicatorElement) {
+            // This will be updated with real pack data when scanning completes
+            statusElement.textContent = 'Ready for management';
+            detailElement.textContent = 'Click to install and update packs';
+            
+            // Update indicator based on status
+            indicatorElement.className = 'carrot-pulse-dot';
+            indicatorElement.style.backgroundColor = '#28a745'; // Green for ready
+        }
     },
     
     // Old template editor functions removed - now using BunnyMoTags TemplatePromptEditInterface
@@ -8728,115 +11445,326 @@ window.CarrotKernel = {
     
     // Manual scan function
     async manualScan() {
-        this.closePopup();
-        $('#carrot-scan-btn').click();
-    },
-    
-    // Start a tutorial
-    startTutorial(tutorialId) {
-        if (!this.tutorials[tutorialId]) {
-            CarrotDebug.error('Unknown tutorial', tutorialId);
+        const selected = Array.from(selectedLorebooks);
+        if (selected.length === 0) {
+            alert('No lorebooks selected. Please select at least one lorebook to scan.');
             return;
         }
         
-        this.currentTutorial = tutorialId;
-        this.currentStep = 0;
-        this.tutorialSteps = this.tutorials[tutorialId].steps;
+        // Update button to show scanning state
+        const scanBtn = document.querySelector('button[onclick="CarrotKernel.manualScan()"]');
+        const originalButtonText = scanBtn ? scanBtn.textContent : '';
+        if (scanBtn) {
+            scanBtn.textContent = '⏳ Scanning...';
+            scanBtn.style.pointerEvents = 'none';
+        }
         
-        this.showTutorialOverlay();
-        this.showTutorialStep();
+        try {
+            const results = await scanSelectedLorebooks(selected);
+            updateStatusPanels();
+            
+            // Update the popup content in place instead of closing/reopening
+            this.updateRepositoryManagerContent();
+            
+            // Force show character cards section after successful scan
+            setTimeout(() => {
+                this.forceShowCharacterCards();
+            }, 500);
+            
+            // Show success message
+            const characterCount = scannedCharacters.size;
+            if (characterCount > 0) {
+                // Briefly show success state
+                if (scanBtn) {
+                    scanBtn.textContent = `✅ Found ${characterCount} characters`;
+                    scanBtn.style.background = 'rgba(76, 175, 80, 0.3)';
+                    setTimeout(() => {
+                        scanBtn.textContent = '🔄 Rescan Repositories';
+                        scanBtn.style.background = 'rgba(255, 255, 255, 0.2)';
+                        scanBtn.style.pointerEvents = 'auto';
+                    }, 2000);
+                }
+            }
+            
+        } catch (error) {
+            console.error('Scan error:', error);
+            alert('Scan failed: ' + error.message);
+            
+            // Restore button state on error
+            if (scanBtn) {
+                scanBtn.textContent = originalButtonText;
+                scanBtn.style.pointerEvents = 'auto';
+            }
+        }
     },
     
-    // Get tutorial overlay - check modal context first, then document
-    getTutorialOverlay() {
-        CarrotDebug.tutorial('Getting tutorial overlay', {
-            timestamp: Date.now(),
-            location: 'getTutorialOverlay'
-        });
+    // Start a tutorial - simple browser dialog system
+    async startTutorial(tutorialId) {
+        if (!this.tutorials[tutorialId]) {
+            alert(`Tutorial "${tutorialId}" not found`);
+            return;
+        }
         
+        const tutorial = this.tutorials[tutorialId];
+        const steps = tutorial.steps;
+        
+        // Show each step with browser confirm dialog
+        for (let i = 0; i < steps.length; i++) {
+            const step = steps[i];
+            
+            // Highlight the target element
+            const target = document.querySelector(step.target);
+            if (target) {
+                // Remove previous highlights
+                document.querySelectorAll('.carrot-tutorial-highlight')
+                    .forEach(el => el.classList.remove('carrot-tutorial-highlight'));
+                
+                // Add highlight to current target
+                target.classList.add('carrot-tutorial-highlight');
+                
+                // Smart scrolling for different devices
+                const isMobile = window.innerWidth <= 768 || 'ontouchstart' in window;
+                const scrollOptions = {
+                    behavior: 'smooth',
+                    block: isMobile ? 'start' : 'center',
+                    inline: 'nearest'
+                };
+                
+                // For mobile, add extra padding to ensure element is fully visible
+                if (isMobile) {
+                    // Check if element is in a modal or overlay
+                    const isInModal = target.closest('.popup, .modal, #carrot-loadout-manager');
+                    if (isInModal) {
+                        // For modals on mobile, just ensure element is visible
+                        target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    } else {
+                        // For main page elements, scroll with top padding
+                        const rect = target.getBoundingClientRect();
+                        const headerHeight = 60; // Account for mobile headers
+                        if (rect.top < headerHeight) {
+                            window.scrollBy({
+                                top: rect.top - headerHeight - 20,
+                                behavior: 'smooth'
+                            });
+                        } else {
+                            target.scrollIntoView(scrollOptions);
+                        }
+                    }
+                } else {
+                    // Desktop - use center alignment
+                    target.scrollIntoView(scrollOptions);
+                }
+                
+                // Wait longer on mobile for scroll to complete
+                await new Promise(resolve => setTimeout(resolve, isMobile ? 800 : 500));
+            }
+            
+            // Clean up HTML tags and format text nicely
+            const cleanContent = step.content
+                .replace(/<[^>]*>/g, '') // Remove HTML tags
+                .replace(/\s+/g, ' ') // Normalize whitespace
+                .replace(/&lt;/g, '<').replace(/&gt;/g, '>') // Fix HTML entities
+                .replace(/&amp;/g, '&') // Fix ampersands
+                .trim();
+            
+            // Format text with proper line breaks for readability
+            const formattedContent = cleanContent
+                .replace(/([.!?])\s+([A-Z])/g, '$1\n\n$2') // Add breaks after sentences starting new topics
+                .replace(/([:])\s*([A-Z•])/g, '$1\n$2') // Add breaks after colons
+                .replace(/•\s/g, '\n• ') // Put bullets on new lines
+                .replace(/(\d+\.)\s/g, '\n$1 ') // Put numbered items on new lines
+                .replace(/\n\n\n+/g, '\n\n') // Clean up multiple line breaks
+                .trim();
+            
+            // Show step as confirm dialog (like in your image)
+            const continueClicked = confirm(
+                `Step ${i + 1} of ${steps.length}: ${step.title}\n\n${formattedContent}\n\nClick OK for next step, Cancel to exit tutorial.`
+            );
+            
+            if (!continueClicked) {
+                break; // User cancelled
+            }
+        }
+        
+        // Clean up highlights
+        document.querySelectorAll('.carrot-tutorial-highlight')
+            .forEach(el => el.classList.remove('carrot-tutorial-highlight'));
+        
+        alert('Tutorial completed! 🎉');
+    },
+    
+    // Ensure tutorial overlay exists and return it
+    getTutorialOverlay() {
         // First check if we're in a modal context
         const modal = document.querySelector('.popup:not(.popup_template)');
-        CarrotDebug.tutorial('Modal context check', {
-            modalExists: !!modal,
-            modalSelector: '.popup:not(.popup_template)',
-            allPopups: document.querySelectorAll('.popup').length
-        });
-        
         if (modal) {
-            const modalOverlay = modal.querySelector('#carrot-tutorial-overlay');
-            CarrotDebug.tutorial('Modal overlay search', {
-                modalOverlayFound: !!modalOverlay,
-                modalChildren: modal.children.length,
-                modalId: modal.id || 'no-id',
-                modalClasses: modal.className
-            });
-            
+            let modalOverlay = modal.querySelector('#carrot-tutorial-overlay');
+            if (!modalOverlay) {
+                // Create tutorial overlay in modal
+                this.createTutorialOverlayInModal(modal);
+                modalOverlay = modal.querySelector('#carrot-tutorial-overlay');
+            }
             if (modalOverlay) {
-                CarrotDebug.tutorial('✅ Using modal tutorial overlay', {
-                    overlayId: modalOverlay.id,
-                    overlayParent: modalOverlay.parentElement?.tagName || 'unknown',
-                    overlayDisplay: modalOverlay.style.display
-                });
                 return modalOverlay;
             }
         }
         
         // Fall back to document-level overlay
-        const documentOverlay = document.getElementById('carrot-tutorial-overlay');
-        CarrotDebug.tutorial('Document overlay fallback', {
-            documentOverlayFound: !!documentOverlay,
-            documentOverlayParent: documentOverlay?.parentElement?.tagName || 'unknown',
-            documentOverlayDisplay: documentOverlay?.style.display || 'unknown'
-        });
-        
+        let documentOverlay = document.getElementById('carrot-tutorial-overlay');
+        if (!documentOverlay) {
+            // Create tutorial overlay in document
+            this.createTutorialOverlayInDocument();
+            documentOverlay = document.getElementById('carrot-tutorial-overlay');
+        }
         return documentOverlay;
     },
+    
+    // Create tutorial overlay in modal (reusing existing code pattern)
+    createTutorialOverlayInModal(modal) {
+        const tutorialHTML = `
+            <!-- Tutorial Overlay -->
+            <div class="carrot-tutorial-overlay" id="carrot-tutorial-overlay" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999999;">
+                <div class="carrot-tutorial-spotlight" id="carrot-tutorial-spotlight"></div>
+                <div class="carrot-tutorial-popup" id="carrot-tutorial-popup">
+                    <div class="carrot-tutorial-popup-header">
+                        <h4 id="carrot-tutorial-popup-title">Tutorial Step</h4>
+                        <button class="carrot-tutorial-close" onclick="CarrotKernel.closeTutorial()">
+                            <i class="fa-solid fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="carrot-tutorial-popup-content" id="carrot-tutorial-popup-content">
+                        <!-- Tutorial content -->
+                    </div>
+                    <div class="carrot-tutorial-popup-nav">
+                        <button class="carrot-tutorial-prev" id="carrot-tutorial-prev" onclick="CarrotKernel.previousTutorialStep()">
+                            <i class="fa-solid fa-arrow-left"></i> Previous
+                        </button>
+                        <span class="carrot-tutorial-progress" id="carrot-tutorial-progress">1 / 5</span>
+                        <button class="carrot-tutorial-next" id="carrot-tutorial-next" onclick="CarrotKernel.nextTutorialStep()">
+                            Next <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        modal.insertAdjacentHTML('beforeend', tutorialHTML);
+        CarrotDebug.tutorial('✅ Tutorial overlay created in modal');
+    },
+    
+    // Create tutorial overlay in document
+    createTutorialOverlayInDocument() {
+        const tutorialHTML = `
+            <!-- Tutorial Overlay -->
+            <div class="carrot-tutorial-overlay" id="carrot-tutorial-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999999; background: rgba(0,0,0,0.5);">
+                <div class="carrot-tutorial-spotlight" id="carrot-tutorial-spotlight"></div>
+                <div class="carrot-tutorial-popup" id="carrot-tutorial-popup">
+                    <div class="carrot-tutorial-popup-header">
+                        <h4 id="carrot-tutorial-popup-title">Tutorial Step</h4>
+                        <button class="carrot-tutorial-close" onclick="CarrotKernel.closeTutorial()">
+                            <i class="fa-solid fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="carrot-tutorial-popup-content" id="carrot-tutorial-popup-content">
+                        <!-- Tutorial content -->
+                    </div>
+                    <div class="carrot-tutorial-popup-nav">
+                        <button class="carrot-tutorial-prev" id="carrot-tutorial-prev" onclick="CarrotKernel.previousTutorialStep()">
+                            <i class="fa-solid fa-arrow-left"></i> Previous
+                        </button>
+                        <span class="carrot-tutorial-progress" id="carrot-tutorial-progress">1 / 5</span>
+                        <button class="carrot-tutorial-next" id="carrot-tutorial-next" onclick="CarrotKernel.nextTutorialStep()">
+                            Next <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', tutorialHTML);
+        CarrotDebug.tutorial('✅ Tutorial overlay created in document');
+    },
 
-    // Show tutorial overlay - no scroll control
+    // Show current tutorial step
+    showTutorialStep() {
+        if (!this.tutorialSteps || this.currentStep >= this.tutorialSteps.length) {
+            this.closeTutorial();
+            return;
+        }
+        
+        const step = this.tutorialSteps[this.currentStep];
+        const targetElement = document.querySelector(step.target);
+        
+        if (!targetElement) {
+            CarrotDebug.error('Tutorial target not found', step.target);
+            this.nextTutorialStep();
+            return;
+        }
+        
+        // Remove previous highlights
+        document.querySelectorAll('.carrot-tutorial-highlight')
+            .forEach(el => el.classList.remove('carrot-tutorial-highlight'));
+        
+        // Highlight target element
+        targetElement.classList.add('carrot-tutorial-highlight');
+        
+        // Just highlight the element - let user scroll themselves
+        this.highlightElement(targetElement, step);
+    },
+    
+    // Show tutorial overlay
     showTutorialOverlay() {
         const overlay = this.getTutorialOverlay();
-        
-        CarrotDebug.tutorial('Showing tutorial overlay', {
-            overlayExists: !!overlay,
-            overlayId: overlay?.id || 'no-id',
-            overlayCurrentDisplay: overlay?.style.display || 'unknown',
-            overlayCurrentClasses: overlay?.className || 'no-classes'
-        });
         
         if (!overlay) {
             CarrotDebug.error('❌ Tutorial overlay not found! Cannot show tutorial');
             return;
         }
         
-        // Enable tutorial mode
-        this.enableTutorialMode();
-        
         overlay.style.display = 'block';
-        // Force reflow to ensure display change takes effect
-        overlay.offsetHeight;
         overlay.classList.add('active');
         
-        CarrotDebug.tutorial('Tutorial overlay activated', {
-            newDisplay: overlay.style.display,
-            newClasses: overlay.className,
-            offsetHeight: overlay.offsetHeight,
-            boundingRect: overlay.getBoundingClientRect()
+        CarrotDebug.tutorial('Tutorial overlay activated');
+    },
+    
+    // Simple element highlighting
+    highlightTargetElement(target) {
+        // Remove any existing highlights
+        document.querySelectorAll('.carrot-tutorial-highlight').forEach(el => {
+            el.classList.remove('carrot-tutorial-highlight');
         });
         
-        // Add resize handler for repositioning
-        this.addResizeHandler();
+        // Add highlight to target element
+        const element = document.querySelector(target);
+        if (element) {
+            element.classList.add('carrot-tutorial-highlight');
+            
+            // Scroll element into view
+            element.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'center',
+                inline: 'center'
+            });
+            
+            CarrotDebug.tutorial(`Highlighted element: ${target}`);
+        } else {
+            CarrotDebug.tutorial(`Element not found: ${target}`);
+        }
     },
     
-    // Simple tutorial mode - no scroll locking
-    enableTutorialMode() {
-        // Just add tutorial class for styling
-        document.body.classList.add('carrot-tutorial-active');
+    // Navigation functions
+    nextTutorialStep() {
+        if (this.currentStep < this.tutorialSteps.length - 1) {
+            this.currentStep++;
+            this.showTutorialStep();
+        } else {
+            this.closeTutorial();
+        }
     },
     
-    // Exit tutorial mode
-    disableTutorialMode() {
-        // Remove tutorial class
-        document.body.classList.remove('carrot-tutorial-active');
+    previousTutorialStep() {
+        if (this.currentStep > 0) {
+            this.currentStep--;
+            this.showTutorialStep();
+        }
     },
     
     // Add window resize handler for tutorial repositioning
@@ -8876,76 +11804,36 @@ window.CarrotKernel = {
         window.addEventListener('resize', this.resizeHandler);
     },
     
-    // Hide tutorial overlay with proper cleanup
+    // Close tutorial with proper cleanup
     closeTutorial() {
         const overlay = this.getTutorialOverlay();
-        const spotlight = overlay.querySelector('#carrot-tutorial-spotlight');
-        
-        // Remove active classes
-        overlay.classList.remove('active');
-        spotlight.classList.remove('active');
-        
-        // Clean up after animation completes
-        setTimeout(() => {
-            overlay.style.display = 'none';
+        if (overlay) {
+            overlay.classList.remove('active');
             
-            // Remove all highlights
-            document.querySelectorAll('.carrot-tutorial-highlight')
-                .forEach(el => el.classList.remove('carrot-tutorial-highlight'));
-            
-            // Reset spotlight position
-            spotlight.style.cssText = '';
-            
-            // Reset popup position and remove arrows
-            const popup = overlay.querySelector('#carrot-tutorial-popup');
-            popup.style.cssText = '';
-            popup.className = popup.className.replace(/carrot-popup-\w+/g, '');
-            
-            // Remove any arrows
-            const arrow = popup.querySelector('.carrot-popup-arrow');
-            if (arrow) arrow.remove();
-        }, 400);
-        
-        // Exit tutorial mode
-        this.disableTutorialMode();
-        
-        // Remove resize handler
-        if (this.resizeHandler) {
-            window.removeEventListener('resize', this.resizeHandler);
-            this.resizeHandler = null;
+            setTimeout(() => {
+                overlay.style.display = 'none';
+                
+                // Remove all highlights
+                document.querySelectorAll('.carrot-tutorial-highlight')
+                    .forEach(el => el.classList.remove('carrot-tutorial-highlight'));
+                
+                // Reset popup position
+                const popup = overlay.querySelector('#carrot-tutorial-popup');
+                if (popup) {
+                    popup.style.cssText = '';
+                    popup.className = popup.className.replace(/carrot-popup-\w+/g, '');
+                }
+            }, 400);
         }
         
+        // Reset tutorial state
         this.currentTutorial = null;
         this.currentStep = 0;
         this.tutorialSteps = [];
+        
+        CarrotDebug.tutorial('Tutorial closed');
     },
     
-    // Show current tutorial step with modern positioning
-    showTutorialStep() {
-        if (!this.tutorialSteps || this.currentStep >= this.tutorialSteps.length) {
-            this.closeTutorial();
-            return;
-        }
-        
-        const step = this.tutorialSteps[this.currentStep];
-        const targetElement = document.querySelector(step.target);
-        
-        if (!targetElement) {
-            CarrotDebug.error('Tutorial target not found', step.target);
-            this.nextTutorialStep();
-            return;
-        }
-        
-        // Remove previous highlights
-        document.querySelectorAll('.carrot-tutorial-highlight')
-            .forEach(el => el.classList.remove('carrot-tutorial-highlight'));
-        
-        // Highlight target element
-        targetElement.classList.add('carrot-tutorial-highlight');
-        
-        // Just highlight the element - let user scroll themselves
-        this.highlightElement(targetElement, step);
-    },
     
     // Apply comprehensive viewport safeguards to ensure tutorial popup is always viewable
     applyViewportSafeguards(popup) {
@@ -9469,30 +12357,163 @@ window.CarrotKernel = {
     
     // Show popup
     showPopup(title, content) {
-        const popup = `
-            <div style="background: var(--SmartThemeBlurTintColor); border-radius: 16px; overflow: hidden;">
-                <div style="background: linear-gradient(135deg, var(--active) 0%, rgba(var(--active-rgb), 0.85) 100%); 
-                           color: white; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center;">
-                    <h4 style="margin: 0; font-size: 1.1em;">${title}</h4>
-                    <button onclick="CarrotKernel.closePopup()" style="
-                        background: none; border: none; color: white; font-size: 1.1em; cursor: pointer;
-                        padding: 4px; border-radius: 4px; transition: background 0.2s ease;">
-                        ✕
-                    </button>
-                </div>
-                <div style="padding: 20px; color: var(--SmartThemeBodyColor); line-height: 1.6;">
-                    ${content}
-                </div>
-            </div>
-        `;
+        console.log('🥕 CarrotKernel showPopup called:', { title, isRepoBrowser: content.includes('carrot-repo-browser') || content.includes('carrot-github-browser') });
         
-        $('#carrot-popup-container').html(popup);
+        // DEBUG: Check if popup elements exist
+        const overlay = document.getElementById('carrot-popup-overlay');
+        const container = document.getElementById('carrot-popup-container');
+        console.log('🥕 Popup elements exist?', { overlay: !!overlay, container: !!container });
+        console.log('🥕 Overlay display style:', overlay ? overlay.style.display : 'N/A');
+        console.log('🥕 Container current classes:', container ? container.className : 'N/A');
+        
+        // For repository browser, inject content directly
+        if (content.includes('carrot-repo-browser') || content.includes('carrot-github-browser') || title.includes('BunnyMo Repository')) {
+            console.log('🥕 Setting up repository browser popup');
+            $('#carrot-popup-container').html(content);
+            $('#carrot-popup-container').addClass('carrot-repo-browser-popup');
+            
+            // Force the class and styling
+            setTimeout(() => {
+                // Check if the class was actually applied
+                const hasClass = $('#carrot-popup-container').hasClass('carrot-repo-browser-popup');
+                console.log('🥕 Class applied successfully?', hasClass);
+                
+                // Check computed styles
+                const computedStyles = window.getComputedStyle($('#carrot-popup-container')[0]);
+                console.log('🥕 Computed styles before JS override:', {
+                    width: computedStyles.width,
+                    height: computedStyles.height,
+                    maxWidth: computedStyles.maxWidth,
+                    maxHeight: computedStyles.maxHeight,
+                    position: computedStyles.position,
+                    display: computedStyles.display
+                });
+                
+                // NUCLEAR OPTION: Force sizing directly via JavaScript
+                $('#carrot-popup-container').css({
+                    'width': '1600px !important',
+                    'height': '1000px !important',
+                    'max-width': '1600px !important',
+                    'max-height': '1000px !important',
+                    'min-width': '1600px !important',
+                    'min-height': '1000px !important'
+                });
+                
+                // Check if JS override worked
+                const afterStyles = window.getComputedStyle($('#carrot-popup-container')[0]);
+                console.log('🥕 Computed styles after JS override:', {
+                    width: afterStyles.width,
+                    height: afterStyles.height,
+                    maxWidth: afterStyles.maxWidth,
+                    maxHeight: afterStyles.maxHeight
+                });
+                
+                console.log('🥕 Popup container classes:', $('#carrot-popup-container').attr('class'));
+                console.log('🥕 Popup container dimensions:', {
+                    width: $('#carrot-popup-container').outerWidth(),
+                    height: $('#carrot-popup-container').outerHeight(),
+                    actualWidth: $('#carrot-popup-container')[0].offsetWidth,
+                    actualHeight: $('#carrot-popup-container')[0].offsetHeight
+                });
+                
+                // Check parent container constraints
+                const overlay = $('#carrot-popup-overlay')[0];
+                if (overlay) {
+                    const overlayStyles = window.getComputedStyle(overlay);
+                    console.log('🥕 Overlay container styles:', {
+                        width: overlayStyles.width,
+                        height: overlayStyles.height,
+                        display: overlayStyles.display,
+                        position: overlayStyles.position
+                    });
+                }
+            }, 100);
+        } else {
+            // For other popups, use the wrapped structure
+            const popup = `
+                <div class="carrot-popup-content">
+                    <div class="carrot-popup-header">
+                        <h4>${title}</h4>
+                        <button onclick="CarrotKernel.closePopup()" class="carrot-popup-close">✕</button>
+                    </div>
+                    <div class="carrot-popup-body">
+                        ${content}
+                    </div>
+                </div>
+            `;
+            $('#carrot-popup-container').html(popup);
+            $('#carrot-popup-container').removeClass('carrot-repo-browser-popup');
+        }
+        
         $('#carrot-popup-overlay').addClass('active').show();
+    },
+    
+    // DEBUG: Utility function to inspect modal sizing
+    debugModalSizing() {
+        console.log('🔍 MODAL SIZING DEBUG REPORT:');
+        
+        const container = document.getElementById('carrot-popup-container');
+        const overlay = document.getElementById('carrot-popup-overlay');
+        
+        if (!container) {
+            console.log('❌ No popup container found');
+            return;
+        }
+        
+        console.log('📋 Container Info:');
+        console.log('  - ID:', container.id);
+        console.log('  - Classes:', container.className);
+        console.log('  - Inline styles:', container.style.cssText);
+        
+        const computedStyles = window.getComputedStyle(container);
+        console.log('📏 Computed Styles:');
+        console.log('  - Width:', computedStyles.width);
+        console.log('  - Height:', computedStyles.height);
+        console.log('  - Max-width:', computedStyles.maxWidth);
+        console.log('  - Max-height:', computedStyles.maxHeight);
+        console.log('  - Position:', computedStyles.position);
+        console.log('  - Display:', computedStyles.display);
+        
+        console.log('📐 Actual Dimensions:');
+        console.log('  - offsetWidth:', container.offsetWidth);
+        console.log('  - offsetHeight:', container.offsetHeight);
+        console.log('  - clientWidth:', container.clientWidth);
+        console.log('  - clientHeight:', container.clientHeight);
+        
+        if (overlay) {
+            const overlayStyles = window.getComputedStyle(overlay);
+            console.log('🗂️ Overlay Styles:');
+            console.log('  - Width:', overlayStyles.width);
+            console.log('  - Height:', overlayStyles.height);
+            console.log('  - Display:', overlayStyles.display);
+            console.log('  - Position:', overlayStyles.position);
+        }
+        
+        // Check all CSS rules affecting this element
+        console.log('📜 CSS Rules affecting container:');
+        const sheets = Array.from(document.styleSheets);
+        sheets.forEach((sheet, index) => {
+            try {
+                const rules = Array.from(sheet.cssRules || sheet.rules || []);
+                rules.forEach(rule => {
+                    if (rule.selectorText && (
+                        rule.selectorText.includes('carrot-popup-container') ||
+                        rule.selectorText.includes('#carrot-popup-container') ||
+                        rule.selectorText.includes('.carrot-repo-browser-popup')
+                    )) {
+                        console.log(`  - Sheet ${index}: ${rule.selectorText} -> ${rule.style.cssText}`);
+                    }
+                });
+            } catch (e) {
+                console.log(`  - Sheet ${index}: Cannot access (cross-origin)`);
+            }
+        });
     },
     
     // Close popup
     closePopup() {
         $('#carrot-popup-overlay').removeClass('active');
+        $('#carrot-popup-container').removeClass('carrot-repo-browser-popup');
         setTimeout(() => {
             $('#carrot-popup-overlay').hide();
             $('.carrot-tutorial-highlight').removeClass('carrot-tutorial-highlight');
@@ -9632,11 +12653,11 @@ window.switchToChatContext = async function() {
 
 // Placeholder functions for loadout manager functionality
 
-// Open tutorial for loadout manager
-window.openLoadoutTutorial = function() {
-    console.log('🥕 LOADOUT DEBUG: Opening proper tutorial system');
-    CarrotKernel.openLoadoutTutorial();
-}
+// Open tutorial for loadout manager (removed - now using CarrotKernel.openLoadoutTutorial directly)
+// window.openLoadoutTutorial = function() {
+//     console.log('🥕 LOADOUT DEBUG: Opening proper tutorial system');
+//     CarrotKernel.openLoadoutTutorial();
+// }
 
 // Save current loadout profile for active context
 function saveCurrentLoadoutProfile() {
