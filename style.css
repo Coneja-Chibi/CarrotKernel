@@ -4369,3 +4369,34 @@ div.carrot-popup-container.carrot-repo-browser-popup,
 }
 
 }
+
+/* Repository Browser Status Card */
+.carrot-repo-status-card {
+    background: var(--SmartThemeQuoteColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 16px auto;
+    max-width: 400px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
+}
+
+.carrot-repo-status-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.carrot-repo-status {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--SmartThemeEmColor);
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.carrot-repo-status i {
+    color: var(--SmartThemeEmColor);
+    opacity: 0.8;
+}

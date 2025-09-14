@@ -1,6 +1,6 @@
 # 🥕 CarrotKernel
 
-> *A spiritual successor to old BunnyMoTags extension - Character consistency tracking system for SillyTavern*
+> *A spiritual successor to BunnyMoTags - Character consistency tracking system for SillyTavern*
 
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-orange.svg)](https://github.com/your-repo/CarrotKernel)
 [![SillyTavern Extension](https://img.shields.io/badge/SillyTavern-Extension-blue.svg)](https://docs.sillytavern.app/)
@@ -23,7 +23,7 @@ CarrotKernel is your AI's memory assistant - it automatically detects when you m
 - **👤 Character Repositories**: Lorebooks containing individual character data with `<BunnymoTags>` blocks
 - **📖 Tag Libraries**: Lorebooks with tag definitions (species, personality types, etc.)
 - **🔍 Smart Scanning**: Automatically identifies and categorizes your lorebooks
-- **🎨 Visual Management**: Beautiful card-based interface for browsing characters, or seemless and native thinking blocks for a more immersive experience.
+- **🎨 Visual Management**: Beautiful card-based interface for browsing characters
 
 ### 🧠 **Advanced Template System**
 - **📝 Custom Templates**: Create your own injection prompts with macro variables
@@ -57,47 +57,25 @@ AI responds: *Alice's face flushes red as she looks away* "I-It's not like I wan
 - SillyTavern (latest version recommended)
 - Lorebooks containing character data in BunnymoTags format
 
-## Step by Step Guide
-### 1. Copy the gitlink for CarrotKernel and paste it in the ST extension adding bar. 
-### 2. Run one of the three sheet based formats in the main BunnyMo file (!tagsheet, !quicksheet, !fullsheet) and then copy and paste the tag list at the bottom, pictured here. 
+### Step 1: Installation
+1. Download the CarrotKernel extension files
+2. Place in your SillyTavern extensions directory: `public/scripts/extensions/third-party/CarrotKernel/`
+3. Restart SillyTavern
+4. Enable CarrotKernel in Extensions menu
 
-<img width="1140" height="252" alt="image" src="https://github.com/user-attachments/assets/5dec05b0-8d3d-42a2-bdb8-3a48ce49944b" />
-
-   
-### 3. Within the Main BunnyMo file (if you sort by UID) you will see the 'Spare Copies' section
-
-<img width="1209" height="192" alt="image" src="https://github.com/user-attachments/assets/a8f38059-a209-42f1-9230-0e2360646781" />
-
-### 4. Create a copy of the empty one labeled 'EMPTY Auto-Tag Injection - RENAME AND REKEY THIS TO WHATEVER CHARACTERS TAGS OR SHEET YOU ARE PUTTING IN.' In a new seperate lorebook that is for this chat. (You can also have all your character tags in one mega lorebook if you have a shared universe or something along those lines, the organization is really up to you)
-
-Copy the tags you just lifted: `<BunnymoTags><Name:Atsu_Ibn_Oba_Al-Masri>, <GENRE:FANTASY> <PHYSICAL> <SPECIES:HUMAN>, <GENDER:MALE>, <BUILD:Muscular>, <BUILD:Tall>, <SKIN:FAIR>, <HAIR:BLACK>, <STYLE:ANCIENT_EGYPTIAN_ROYALTY>,</PHYSICAL> <PERSONALITY><Dere:Sadodere>, <Dere:Oujidere>, <ENTJ-U>, <TRAIT:CRUEL>, <TRAIT:INTELLIGENT>, <TRAIT:POWERFUL>, <TRAIT:DANGEROUS>, <TRAIT:SELFISH>, <TRAIT:HEDONISTIC>, <ATTACHMENT:FEARFUL_AVOIDANT>, <CONFLICT:COMPETITIVE>, <BOUNDARIES:RIGID>,<FLIRTING:AGGRESSIVE>, </PERSONALITY> <NSFW><ORIENTATION:PANSEXUAL>, <POWER:DOMINANT>, <KINK:BRAT_TAMING>, <KINK:PUBLIC_HUMILIATION>, <KINK:POWER_PLAY>, <KINK:EXHIBITIONISM>, <CHEMISTRY:ANTAGONISTIC>, <AROUSAL:DOMINANCE>, <TRAUMA:CHILDHOOD>, <JEALOUSY:POSSESSIVE>,</NSFW> </BunnymoTags>`
-
-`<Linguistics> Character uses <LING:COMMANDING> as his primary mode of speech, asserting authority and control. This is almost always blended with <LING:SUGGESTIVE>, using a tone of cruel flirtation, possessive pet names, and psychological manipulation to achieve his goals. </linguistics>` ***(INTO THAT EMPTY ENTRY, REPLACING WHAT IS INSIDE WITH IT, AND CHANGE THE TRIGGER KEYWORD TO THE MOST COMMONLY USED NAME(S) FOR SAID CHARACTER.)***
-
-### 5. Then, declare the new lorebook you just made as a Character Repo within the Carrot Kernel settings and then scan the available lorebooks.
-
-<img width="617" height="140" alt="image" src="https://github.com/user-attachments/assets/e6e4fe67-a03a-49ec-a1e8-1356c2d9d857" />
-
-### 6. Profit!
-
-
-
-
-## Basic Settings Rundown
+### Step 2: Quick Start
 1. **🔧 Enable Master Toggle**: Turn on CarrotKernel in Extension Settings
 2. **📚 Select Lorebooks**: Choose which lorebooks contain your character data
 3. **🔍 Scan Characters**: Click "Scan Selected Lorebooks" to build your repository
 4. **✅ Test**: Mention a character in chat - their data should inject automatically!
 
-## Power User Tools (Optional)
+### Step 3: Advanced Configuration (Optional)
 - **🎨 Display Mode**: Choose how character data appears (No Display recommended)
 - **⚡ Injection Settings**: Fine-tune depth and character limits
 - **📝 Templates**: Customize how character data is formatted for AI
 - **🎯 Context Settings**: Create different profiles for different chats/characters
 
----
-
-## 🎮 Specific Breakdowns
+## 🎮 Usage Guide
 
 ### 🏁 **Getting Started Tutorial**
 CarrotKernel includes interactive tutorials! Click the status panels in Extension Settings:
@@ -123,6 +101,21 @@ After scanning, you'll see character cards showing:
 - **Source**: Which lorebook contains their data
 - **Quick Preview**: Click any character to see their full profile
 
+## 🎨 Character Data Format
+
+CarrotKernel reads character data from `<BunnymoTags>` blocks in your lorebooks:
+
+```html
+<BunnymoTags>
+<NAME:Alice Cooper>
+<PERSONALITY:Tsundere>
+<TRAIT:Intelligent, Stubborn, Caring>
+<SPECIES:Human>
+<HAIR:Long blonde>
+<OCCUPATION:Student Council President>
+<DERE:Tsundere - Acts hostile but caring underneath>
+</BunnymoTags>
+```
 
 ### 📋 **Organized Categories**
 Character data gets automatically organized into:
@@ -142,7 +135,6 @@ Create custom injection prompts with powerful macro variables:
 - `{{CHARACTER_LIST}}` - Just character names
 - `{{PERSONALITY_TAGS}}` - Only personality-related tags
 - `{{PHYSICAL_TAGS}}` - Only appearance-related tags
-- And more!
 - Custom conditions and formatting
 
 ### ⚙️ **Context Management**
@@ -163,9 +155,10 @@ Install and manage BunnyMo content packs:
 ## 💡 Pro Tips
 
 ### 🎯 **Optimal Settings**
-- **Display Mode**: "Thinking Box Display" for most compact experience
+- **Display Mode**: "No Display" for cleanest experience
 - **Injection Depth**: 4 (matches GuidedGenerations standard)
 - **Max Characters**: 6 (prevents context overload)
+- **Filter Context**: Enable to hide BunnymoTags from AI
 
 ### 📚 **Lorebook Organization**
 - **Separate by Type**: Keep character data and tag definitions in different lorebooks
@@ -183,13 +176,13 @@ Install and manage BunnyMo content packs:
 
 Choose how character data appears in your chats:
 
-### 🚫 **No Display** 
+### 🚫 **No Display** *(Recommended)*
 - Completely silent injection
 - Clean chat appearance  
 - Maximum immersion
 - AI gets data, you don't see it
 
-### 💭 **Thinking Box Style** *(Recommended)*
+### 💭 **Thinking Box Style**
 - Character data appears in expandable boxes
 - Visual confirmation of injection
 - Can be manually expanded/collapsed
@@ -276,10 +269,12 @@ CarrotKernel is actively developed. Suggestions welcome for:
 
 ## 🎉 Credits & Acknowledgments
 
-CarrotKernel builds upon the foundation laid by **BunnyMoTags (depreciated extension)** - we're grateful for the innovation and community that made this possible. This is a spiritual successor, designed to push character consistency tracking into the future while honoring what came before.
+CarrotKernel builds upon the foundation laid by **BunnyMoTags** - we're grateful for the innovation and community that made this possible. This is a spiritual successor, designed to push character consistency tracking into the future while honoring what came before.
 
 **Special thanks to:**
 - The SillyTavern development team
+- BunnyMoTags original creators
+- The AI roleplaying community
 - Beta testers and feedback providers
 
 ---

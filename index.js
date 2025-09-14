@@ -9950,6 +9950,12 @@ window.CarrotKernel = {
                             <button class="carrot-icon-btn carrot-home-btn" onclick="CarrotKernel.navigateToRoot()" data-tooltip="Repository root">
                                 <i class="fa-solid fa-home"></i>
                             </button>
+                            <button class="carrot-icon-btn carrot-detect-btn" onclick="CarrotKernel.detectExistingPacks()" data-tooltip="Detect existing BunnyMo packs">
+                                <i class="fa-solid fa-search"></i>
+                            </button>
+                            <button class="carrot-icon-btn carrot-close-btn" onclick="CarrotKernel.closePopup()" data-tooltip="Close repository browser">
+                                <i class="fa-solid fa-times"></i>
+                            </button>
                         </div>
                     </div>
                     <div class="carrot-repo-breadcrumb-container" id="carrot-breadcrumbs">
@@ -9988,17 +9994,14 @@ window.CarrotKernel = {
                     </div>
                 </div>
                 
-                <!-- Action Footer -->
+                <!-- Status Footer -->
                 <div class="carrot-repo-footer">
                     <div class="carrot-repo-footer-content">
-                        <div class="carrot-repo-status">
-                            <i class="fa-brands fa-github"></i>
-                            <span>Connected to Coneja-Chibi/BunnyMo</span>
-                        </div>
-                        <div class="carrot-repo-actions">
-                            <button class="carrot-secondary-btn" onclick="CarrotKernel.closePopup()">
-                                <i class="fa-solid fa-times"></i> Close
-                            </button>
+                        <div class="carrot-repo-status-card">
+                            <div class="carrot-repo-status">
+                                <i class="fa-brands fa-github"></i>
+                                <span>Connected to Coneja-Chibi/BunnyMo</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -10039,6 +10042,12 @@ window.CarrotKernel = {
         // Update file listing with update detection (async)
         fileList.innerHTML = await this.generateFileList(items);
         
+        // Scan for existing packs before counting (only do this once)
+        if (!this._hasScannedExisting) {
+            await this.scanExistingLorebooks();
+            this._hasScannedExisting = true;
+        }
+        
         // Update stats with update info
         if (statsEl) {
             const folders = items.filter(item => item.type === 'dir').length;
@@ -10049,10 +10058,12 @@ window.CarrotKernel = {
             let installedPacks = 0;
             
             for (const file of jsonFiles) {
-                const isInstalled = this.githubBrowser.installedPacks[file.name];
+                // Check if pack is installed (filename is the key used during installation)
+                const isInstalled = extension_settings[extensionName]?.installedPacks?.[file.name];
+                
                 if (isInstalled) {
                     installedPacks++;
-                    if (this.githubBrowser.hasUpdates(file.name, file.sha)) {
+                    if (this.githubBrowser.hasUpdates && this.githubBrowser.hasUpdates(file.name, file.sha)) {
                         updatesAvailable++;
                     }
                 }
@@ -10268,6 +10279,35 @@ window.CarrotKernel = {
             toastr.error('Failed to refresh repository: ' + error.message);
         }
     },
+
+    // Manually trigger detection of existing packs
+    async detectExistingPacks() {
+        const button = document.querySelector('.carrot-detect-btn');
+        if (button) {
+            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            button.disabled = true;
+        }
+        
+        try {
+            const foundCount = await this.scanExistingLorebooks();
+            // Refresh the display to show updated counts
+            await this.updateBrowserContent();
+            
+            if (foundCount > 0) {
+                toastr.success(`Detected and tracked ${foundCount} existing pack${foundCount === 1 ? '' : 's'}!`);
+            } else {
+                toastr.info('No additional BunnyMo packs detected in your lorebooks');
+            }
+        } catch (error) {
+            console.error('Failed to detect existing packs:', error);
+            toastr.error('Failed to detect existing packs: ' + error.message);
+        } finally {
+            if (button) {
+                button.innerHTML = '<i class="fa-solid fa-search"></i>';
+                button.disabled = false;
+            }
+        }
+    },
     
     // Show installation dialog and install pack
     async downloadFile(path, filename) {
@@ -10423,6 +10463,26 @@ window.CarrotKernel = {
             const updateResult = await updateWorldInfoList();
             console.log('🥕 Update result:', updateResult);
             
+            // Track the installation in our settings
+            if (!extension_settings[extensionName]) {
+                extension_settings[extensionName] = {};
+            }
+            if (!extension_settings[extensionName].installedPacks) {
+                extension_settings[extensionName].installedPacks = {};
+            }
+            
+            // Use the actual filename as the key (what the counting logic expects)
+            extension_settings[extensionName].installedPacks[filename] = {
+                displayName: filename.replace('.json', ''),
+                filename: filename,
+                installedDate: Date.now(),
+                size: jsonData.length,
+                method: 'native'
+            };
+            
+            // Save settings
+            saveSettingsDebounced();
+            
             console.log('🥕 ✅ Native installation completed successfully');
             CarrotDebug.repo(`✅ Successfully installed: ${filename}`);
             toastr.success(`Installed ${filename} to your lorebooks!`);
@@ -10473,6 +10533,71 @@ window.CarrotKernel = {
         }
         
         console.log('🥕🏁 === DIRECT INSTALLATION ENDED ===');
+    },
+
+    // Scan existing lorebooks to retroactively track installed packs
+    async scanExistingLorebooks() {
+        console.log('🔍 Scanning existing lorebooks for BunnyMo packs...');
+        
+        try {
+            // Get all existing world info (lorebooks)
+            const worldInfoModule = await import('../../../world-info.js');
+            const existingBooks = world_info || [];
+            
+            if (!extension_settings[extensionName]) {
+                extension_settings[extensionName] = {};
+            }
+            if (!extension_settings[extensionName].installedPacks) {
+                extension_settings[extensionName].installedPacks = {};
+            }
+            
+            let foundPacks = 0;
+            
+            for (const book of existingBooks) {
+                const bookName = book.name || book.filename || 'Unknown';
+                
+                // Check if this looks like a BunnyMo pack
+                const isBunnyMoPack = bookName.toLowerCase().includes('bunnymo') || 
+                                     bookName.toLowerCase().includes('dere') ||
+                                     bookName.toLowerCase().includes('pack') ||
+                                     (book.entries && book.entries.some(entry => 
+                                         entry.content && entry.content.includes('<BunnymoTags>')));
+                
+                if (isBunnyMoPack) {
+                    // Generate a filename-like key
+                    let filename = bookName.endsWith('.json') ? bookName : `${bookName}.json`;
+                    
+                    // Only track if not already tracked
+                    if (!extension_settings[extensionName].installedPacks[filename]) {
+                        extension_settings[extensionName].installedPacks[filename] = {
+                            displayName: bookName,
+                            filename: filename,
+                            installedDate: book.dateCreated || Date.now(),
+                            size: JSON.stringify(book).length,
+                            method: 'existing',
+                            detected: true
+                        };
+                        
+                        foundPacks++;
+                        console.log(`📦 Detected existing pack: ${bookName}`);
+                    }
+                }
+            }
+            
+            if (foundPacks > 0) {
+                saveSettingsDebounced();
+                console.log(`✅ Retroactively tracked ${foundPacks} existing packs`);
+                toastr.info(`Found and tracked ${foundPacks} existing BunnyMo pack${foundPacks === 1 ? '' : 's'}`);
+            } else {
+                console.log('ℹ️ No existing BunnyMo packs detected');
+            }
+            
+            return foundPacks;
+            
+        } catch (error) {
+            console.error('❌ Failed to scan existing lorebooks:', error);
+            return 0;
+        }
     },
 
     // Execute the actual installation
