@@ -3,6 +3,7 @@ import { extension_settings, getContext, writeExtensionField, saveMetadataDeboun
 import { loadWorldInfo, world_names } from '../../../world-info.js';
 import { executeSlashCommandsWithOptions } from '../../../slash-commands.js';
 import { getMessageTimeStamp } from '../../../RossAscends-mods.js';
+import { CarrotWorldBookTracker } from './worldbook-tracker.js';
 
 const extensionName = 'CarrotKernel';
 
@@ -44,12 +45,16 @@ function detectSheetCommand(messageText) {
 
 // Process sheet command and generate appropriate injection
 async function processSheetCommand(sheetData) {
-    console.log('🥕 SHEET COMMAND DEBUG: processSheetCommand called with:', sheetData);
-    
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🥕 SHEET COMMAND DEBUG: processSheetCommand called with:', sheetData);
+    }
+
     const { type, entry } = sheetData;
-    
-    console.log('🥕 SHEET COMMAND DEBUG: Processing sheet command type:', type);
-    
+
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🥕 SHEET COMMAND DEBUG: Processing sheet command type:', type);
+    }
+
     CarrotDebug.inject('Processing sheet command', {
         type: type,
         entry: !!entry
@@ -305,10 +310,10 @@ const CarrotTemplateManager = {
 
 **CRITICAL INSTRUCTIONS:**
 1. You MUST incorporate this character information into your response planning
-2. Stay true to their personality traits, species characteristics, and behavioral patterns  
+2. Stay true to their personality traits, species characteristics, and behavioral patterns
 3. When using your <think> blocks for reasoning, you MUST include exactly 10 carrot emotes (🥕) distributed throughout your thinking process
 4. Carrot emotes (🥕) must ONLY appear inside <think></think> blocks - NEVER in your actual response
-5. Use carrots when referencing or applying the character information: "🥕 Luna is wolf anthro, so she'd react protectively..."
+5. Use carrots when referencing or applying the character information: "🥕 Luna has the trait \`PROTECTIVE\`, so she'd react immediately in defense of her new found family..."
 
 **CARROT REQUIREMENT:** Exactly 10 🥕 emotes within <think> blocks only.`,
             macros: {
@@ -552,13 +557,16 @@ const CarrotTemplateManager = {
         const templates = this.getTemplates();
         const template = templates[id];
         if (!template) return null;
-        
+
         // Convert CarrotKernel format to BunnyMoTags-compatible format
         return {
             ...template,
             label: template.name,
             isDefault: template.metadata?.is_default || false,
-            variables: template.variables || []
+            variables: template.variables || [],
+            // Ensure depth is available from multiple possible sources
+            depth: template.depth !== undefined ? template.depth :
+                   (template.settings?.inject_depth !== undefined ? template.settings.inject_depth : 4)
         };
     },
 
@@ -633,7 +641,7 @@ const CarrotTemplateManager = {
         template.metadata.usage_count = template.metadata.usage_count || 0;
         
         extension_settings[extensionName].templates[template.id] = template;
-        this.saveSettings();
+        this.saveSettings(true); // Force immediate save for template creation
         CarrotDebug.ui(`Template '${template.name}' saved successfully`);
         return true;
     },
@@ -664,7 +672,7 @@ const CarrotTemplateManager = {
         }
 
         delete extension_settings[extensionName].templates[id];
-        this.saveSettings();
+        this.saveSettings(true); // Force immediate save for template deletion
         CarrotDebug.ui(`Template '${template.name}' deleted successfully`);
         return true;
     },
@@ -675,7 +683,7 @@ const CarrotTemplateManager = {
 
         if (extension_settings[extensionName]?.templates?.[id]) {
             delete extension_settings[extensionName].templates[id];
-            this.saveSettings();
+            this.saveSettings(true); // Force immediate save for template reset
             CarrotDebug.ui(`Template '${defaultTemplate.name}' reset to default`);
         }
         return true;
@@ -696,14 +704,13 @@ const CarrotTemplateManager = {
         updatedTemplate.metadata.is_default = false;
 
         extension_settings[extensionName].templates[id] = updatedTemplate;
-        this.saveSettings();
+        this.saveSettings(true); // Force immediate save for template updates
         CarrotDebug.ui(`Template '${updatedTemplate.name}' updated successfully`);
         return true;
     },
 
     // Compatibility method for BunnyMoTags interface
     setTemplate(id, template) {
-        console.log('🥕 SETTEMPLATE DEBUG: Input template depth:', template.depth, 'full template:', template);
         
         // Convert BunnyMoTags template format to CarrotKernel format
         const convertedTemplate = {
@@ -731,7 +738,6 @@ const CarrotTemplateManager = {
             }
         };
         
-        console.log('🥕 SETTEMPLATE DEBUG: Converted template depth:', convertedTemplate.depth, 'inject_depth:', convertedTemplate.settings.inject_depth);
         
         return this.updateTemplate(id, convertedTemplate);
     },
@@ -816,8 +822,20 @@ const CarrotTemplateManager = {
         }
     },
 
-    saveSettings() {
-        saveSettingsDebounced();
+    saveSettings(immediate = false) {
+        if (immediate) {
+            // Force immediate save for critical operations like template saving
+            // First ensure the entire extension settings object is saved
+            if (typeof saveSettingsDebounced === 'function') {
+                saveSettingsDebounced();
+            }
+            // Also try to force immediate write
+            if (typeof writeExtensionField === 'function') {
+                writeExtensionField(extensionName, 'templates', extension_settings[extensionName]?.templates || {});
+            }
+        } else {
+            saveSettingsDebounced();
+        }
     },
 
     // Helper function to get currently triggered/active characters
@@ -1228,6 +1246,22 @@ class CarrotGitHubBrowser {
         this.pathCache = new Map();
         this.installedPacks = this.loadInstalledPacks();
         this.updateCache = new Map();
+
+        // Rate limit management
+        this.requestQueue = [];
+        this.processingQueue = false;
+        this.rateLimitInfo = {
+            limit: 60,
+            remaining: 60,
+            resetTime: Date.now() + 3600000,
+            lastUpdated: Date.now()
+        };
+        this.retryConfig = {
+            maxRetries: 3,
+            baseDelay: 1000,
+            maxDelay: 30000,
+            backoffFactor: 2
+        };
     }
     
     // Load installed pack tracking from extension settings
@@ -1244,7 +1278,140 @@ class CarrotGitHubBrowser {
         extension_settings[extensionName].installedBunnyMoPacks = this.installedPacks;
         saveSettingsDebounced();
     }
-    
+
+    // Rate-limit aware GitHub API fetch with retry logic
+    async fetchWithRateLimit(url, options = {}) {
+        return new Promise((resolve, reject) => {
+            this.requestQueue.push({ url, options, resolve, reject });
+            this.processQueue();
+        });
+    }
+
+    // Process the request queue with rate limit awareness
+    async processQueue() {
+        if (this.processingQueue || this.requestQueue.length === 0) {
+            return;
+        }
+
+        this.processingQueue = true;
+
+        while (this.requestQueue.length > 0) {
+            const request = this.requestQueue.shift();
+
+            try {
+                await this.checkRateLimit();
+                const response = await this.makeRequestWithRetry(request.url, request.options);
+                this.updateRateLimitInfo(response);
+                request.resolve(response);
+                await this.delay(100);
+            } catch (error) {
+                request.reject(error);
+            }
+        }
+
+        this.processingQueue = false;
+    }
+
+    // Check rate limit and wait if necessary
+    async checkRateLimit() {
+        const now = Date.now();
+        if (now - this.rateLimitInfo.lastUpdated > 60000) {
+            this.rateLimitInfo.remaining = this.rateLimitInfo.limit;
+        }
+
+        if (this.rateLimitInfo.remaining <= 5) {
+            const waitTime = Math.max(0, this.rateLimitInfo.resetTime - now);
+            if (waitTime > 0) {
+                CarrotDebug.repo(`⏳ GitHub Browser rate limit approaching, waiting ${Math.ceil(waitTime/1000)}s...`);
+                await this.delay(waitTime);
+                this.rateLimitInfo.remaining = this.rateLimitInfo.limit;
+            }
+        }
+    }
+
+    // Make request with exponential backoff retry
+    async makeRequestWithRetry(url, options = {}, retryCount = 0) {
+        try {
+            const response = await fetch(url, options);
+
+            if (response.status === 403) {
+                const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
+                const rateLimitReset = response.headers.get('x-ratelimit-reset');
+
+                if (rateLimitRemaining === '0' && retryCount < this.retryConfig.maxRetries) {
+                    const resetTime = parseInt(rateLimitReset) * 1000;
+                    const waitTime = Math.max(0, resetTime - Date.now()) + 1000;
+
+                    CarrotDebug.repo(`⏳ GitHub Browser rate limit hit, waiting ${Math.ceil(waitTime/1000)}s for reset...`);
+                    await this.delay(waitTime);
+
+                    return this.makeRequestWithRetry(url, options, retryCount + 1);
+                }
+            }
+
+            if (!response.ok && this.isRetryableError(response.status) && retryCount < this.retryConfig.maxRetries) {
+                const delay = Math.min(
+                    this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, retryCount),
+                    this.retryConfig.maxDelay
+                );
+
+                CarrotDebug.repo(`⚠️ GitHub Browser request failed (${response.status}), retrying in ${delay}ms... (attempt ${retryCount + 1}/${this.retryConfig.maxRetries})`);
+                await this.delay(delay);
+
+                return this.makeRequestWithRetry(url, options, retryCount + 1);
+            }
+
+            return response;
+
+        } catch (error) {
+            if (this.isRetryableNetworkError(error) && retryCount < this.retryConfig.maxRetries) {
+                const delay = Math.min(
+                    this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, retryCount),
+                    this.retryConfig.maxDelay
+                );
+
+                CarrotDebug.repo(`⚠️ GitHub Browser network error, retrying in ${delay}ms... (attempt ${retryCount + 1}/${this.retryConfig.maxRetries})`);
+                await this.delay(delay);
+
+                return this.makeRequestWithRetry(url, options, retryCount + 1);
+            }
+
+            throw error;
+        }
+    }
+
+    // Update rate limit info from response headers
+    updateRateLimitInfo(response) {
+        const limit = response.headers.get('x-ratelimit-limit');
+        const remaining = response.headers.get('x-ratelimit-remaining');
+        const reset = response.headers.get('x-ratelimit-reset');
+
+        if (limit) this.rateLimitInfo.limit = parseInt(limit);
+        if (remaining) this.rateLimitInfo.remaining = parseInt(remaining);
+        if (reset) this.rateLimitInfo.resetTime = parseInt(reset) * 1000;
+        this.rateLimitInfo.lastUpdated = Date.now();
+
+        CarrotDebug.repo(`📊 GitHub Browser rate limit: ${this.rateLimitInfo.remaining}/${this.rateLimitInfo.limit} remaining`);
+    }
+
+    // Check if error status is retryable
+    isRetryableError(status) {
+        return [429, 502, 503, 504].includes(status);
+    }
+
+    // Check if network error is retryable
+    isRetryableNetworkError(error) {
+        return error.name === 'TypeError' ||
+               error.message.includes('fetch') ||
+               error.message.includes('network') ||
+               error.message.includes('timeout');
+    }
+
+    // Utility delay function
+    delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
     // Track a pack installation with its SHA hash
     trackPackInstallation(filename, sha, size) {
         this.installedPacks[filename] = {
@@ -1292,7 +1459,7 @@ class CarrotGitHubBrowser {
     async getAllJsonFilesInFolder(folderPath) {
         try {
             const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents${folderPath ? '/' + encodeURIComponent(folderPath) : ''}`;
-            const response = await fetch(apiUrl);
+            const response = await this.fetchWithRateLimit(apiUrl);
             
             if (!response.ok) return [];
             
@@ -1347,8 +1514,8 @@ class CarrotGitHubBrowser {
         try {
             const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents${path ? '/' + encodeURIComponent(path) : ''}`;
             CarrotDebug.repo(`🌐 Fetching: ${apiUrl}`);
-            
-            const response = await fetch(apiUrl);
+
+            const response = await this.fetchWithRateLimit(apiUrl);
             if (!response.ok) {
                 if (response.status === 403) {
                     throw new Error(`GitHub API rate limit exceeded. Please wait and try again later.`);
@@ -1389,7 +1556,7 @@ class CarrotGitHubBrowser {
         // Fallback: make API call to get download URL
         try {
             const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(path)}`;
-            const response = await fetch(apiUrl);
+            const response = await this.fetchWithRateLimit(apiUrl);
             if (!response.ok) {
                 throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
             }
@@ -1419,6 +1586,208 @@ class CarrotPackManager {
         this.availablePacks = new Map();
         this.mainPackInfo = null;
         this.expansionPacks = new Map();
+
+        // Rate limit management
+        this.requestQueue = [];
+        this.processingQueue = false;
+        this.rateLimitInfo = {
+            limit: 60, // Default GitHub API limit
+            remaining: 60,
+            resetTime: Date.now() + 3600000, // 1 hour from now
+            lastUpdated: Date.now()
+        };
+        this.retryConfig = {
+            maxRetries: 3,
+            baseDelay: 1000, // 1 second
+            maxDelay: 30000, // 30 seconds
+            backoffFactor: 2
+        };
+    }
+
+    // Rate-limit aware GitHub API fetch with retry logic
+    async fetchWithRateLimit(url, options = {}) {
+        return new Promise((resolve, reject) => {
+            this.requestQueue.push({ url, options, resolve, reject });
+            this.processQueue();
+        });
+    }
+
+    // Process the request queue with rate limit awareness
+    async processQueue() {
+        if (this.processingQueue || this.requestQueue.length === 0) {
+            return;
+        }
+
+        this.processingQueue = true;
+
+        while (this.requestQueue.length > 0) {
+            const request = this.requestQueue.shift();
+
+            try {
+                // Check rate limit before making request
+                await this.checkRateLimit();
+
+                const response = await this.makeRequestWithRetry(request.url, request.options);
+                this.updateRateLimitInfo(response);
+                request.resolve(response);
+
+                // Small delay between requests to be respectful
+                await this.delay(100);
+
+            } catch (error) {
+                request.reject(error);
+            }
+        }
+
+        this.processingQueue = false;
+    }
+
+    // Check rate limit and wait if necessary
+    async checkRateLimit() {
+        const now = Date.now();
+
+        // If rate limit info is stale, refresh it
+        if (now - this.rateLimitInfo.lastUpdated > 60000) { // 1 minute
+            this.rateLimitInfo.remaining = this.rateLimitInfo.limit; // Assume reset
+        }
+
+        // If we're close to the limit, wait
+        if (this.rateLimitInfo.remaining <= 5) {
+            const waitTime = Math.max(0, this.rateLimitInfo.resetTime - now);
+            if (waitTime > 0) {
+                CarrotDebug.repo(`⏳ Rate limit approaching, waiting ${Math.ceil(waitTime/1000)}s...`);
+                await this.delay(waitTime);
+                this.rateLimitInfo.remaining = this.rateLimitInfo.limit; // Reset after waiting
+            }
+        }
+    }
+
+    // Make request with exponential backoff retry
+    async makeRequestWithRetry(url, options = {}, retryCount = 0) {
+        try {
+            const response = await fetch(url, options);
+
+            // Handle rate limit specifically
+            if (response.status === 403) {
+                const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
+                const rateLimitReset = response.headers.get('x-ratelimit-reset');
+
+                if (rateLimitRemaining === '0' && retryCount < this.retryConfig.maxRetries) {
+                    const resetTime = parseInt(rateLimitReset) * 1000;
+                    const waitTime = Math.max(0, resetTime - Date.now()) + 1000; // Add 1s buffer
+
+                    CarrotDebug.repo(`⏳ Rate limit hit, waiting ${Math.ceil(waitTime/1000)}s for reset...`);
+                    await this.delay(waitTime);
+
+                    return this.makeRequestWithRetry(url, options, retryCount + 1);
+                }
+            }
+
+            // Handle other temporary errors with exponential backoff
+            if (!response.ok && this.isRetryableError(response.status) && retryCount < this.retryConfig.maxRetries) {
+                const delay = Math.min(
+                    this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, retryCount),
+                    this.retryConfig.maxDelay
+                );
+
+                CarrotDebug.repo(`⚠️ Request failed (${response.status}), retrying in ${delay}ms... (attempt ${retryCount + 1}/${this.retryConfig.maxRetries})`);
+                await this.delay(delay);
+
+                return this.makeRequestWithRetry(url, options, retryCount + 1);
+            }
+
+            return response;
+
+        } catch (error) {
+            // Handle network errors with retry
+            if (this.isRetryableNetworkError(error) && retryCount < this.retryConfig.maxRetries) {
+                const delay = Math.min(
+                    this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, retryCount),
+                    this.retryConfig.maxDelay
+                );
+
+                CarrotDebug.repo(`⚠️ Network error, retrying in ${delay}ms... (attempt ${retryCount + 1}/${this.retryConfig.maxRetries})`);
+                await this.delay(delay);
+
+                return this.makeRequestWithRetry(url, options, retryCount + 1);
+            }
+
+            throw error;
+        }
+    }
+
+    // Update rate limit info from response headers
+    updateRateLimitInfo(response) {
+        const limit = response.headers.get('x-ratelimit-limit');
+        const remaining = response.headers.get('x-ratelimit-remaining');
+        const reset = response.headers.get('x-ratelimit-reset');
+
+        if (limit) this.rateLimitInfo.limit = parseInt(limit);
+        if (remaining) this.rateLimitInfo.remaining = parseInt(remaining);
+        if (reset) this.rateLimitInfo.resetTime = parseInt(reset) * 1000;
+        this.rateLimitInfo.lastUpdated = Date.now();
+
+        CarrotDebug.repo(`📊 Rate limit: ${this.rateLimitInfo.remaining}/${this.rateLimitInfo.limit} remaining`);
+    }
+
+    // Check if error status is retryable
+    isRetryableError(status) {
+        return [429, 502, 503, 504].includes(status);
+    }
+
+    // Check if network error is retryable
+    isRetryableNetworkError(error) {
+        return error.name === 'TypeError' ||
+               error.message.includes('fetch') ||
+               error.message.includes('network') ||
+               error.message.includes('timeout');
+    }
+
+    // Utility delay function
+    delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // Test rate limiting system (for debugging)
+    async testRateLimiting() {
+        console.log('🧪 Testing rate limiting system...');
+
+        const testUrl = `https://api.github.com/repos/${this.githubRepo}/contents`;
+        const startTime = Date.now();
+
+        try {
+            console.log('📊 Current rate limit info:', this.rateLimitInfo);
+            console.log('🔄 Making test request with rate limiting...');
+
+            const response = await this.fetchWithRateLimit(testUrl);
+            const endTime = Date.now();
+
+            console.log('✅ Rate-limited request completed:', {
+                status: response.status,
+                ok: response.ok,
+                duration: `${endTime - startTime}ms`,
+                rateLimit: {
+                    limit: response.headers.get('x-ratelimit-limit'),
+                    remaining: response.headers.get('x-ratelimit-remaining'),
+                    reset: response.headers.get('x-ratelimit-reset')
+                }
+            });
+
+            return {
+                success: true,
+                status: response.status,
+                duration: endTime - startTime,
+                rateLimitRemaining: response.headers.get('x-ratelimit-remaining')
+            };
+
+        } catch (error) {
+            console.error('❌ Rate limiting test failed:', error);
+            return {
+                success: false,
+                error: error.message,
+                duration: Date.now() - startTime
+            };
+        }
     }
 
     // Scan for all pack types: main pack, expansion packs, and variants
@@ -1450,7 +1819,7 @@ class CarrotPackManager {
     async scanMainPack() {
         try {
             const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents`;
-            const response = await fetch(apiUrl);
+            const response = await this.fetchWithRateLimit(apiUrl);
             
             if (!response.ok) {
                 if (response.status === 403) {
@@ -1504,7 +1873,7 @@ class CarrotPackManager {
                 const expansionsUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(this.packsFolder)}/${encodeURIComponent(themeName)}/Expansion%20Packs%20(Seperated)`;
                 
                 try {
-                    const response = await fetch(expansionsUrl);
+                    const response = await this.fetchWithRateLimit(expansionsUrl);
                     if (response.ok) {
                         const expansions = await response.json();
                         const jsonExpansions = expansions.filter(item => item.name.endsWith('.json'));
@@ -1669,32 +2038,88 @@ class CarrotPackManager {
 
     // Scan GitHub repository for available packs
     async scanRemotePacks() {
+        console.log('🎯 PACK MANAGER DEBUG: scanRemotePacks() called');
+
         try {
             CarrotDebug.repo('🔍 Scanning remote packs from GitHub...');
-            
+
             const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(this.packsFolder)}`;
-            const response = await fetch(apiUrl);
-            
+            console.log('🎯 PACK MANAGER DEBUG: API URL constructed:', {
+                apiUrl: apiUrl,
+                githubRepo: this.githubRepo,
+                packsFolder: this.packsFolder
+            });
+
+            console.log('🎯 PACK MANAGER DEBUG: Making rate-limited fetch request to GitHub API...');
+            const response = await this.fetchWithRateLimit(apiUrl);
+
+            console.log('🎯 PACK MANAGER DEBUG: GitHub API response received:', {
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok,
+                headers: {
+                    'x-ratelimit-limit': response.headers.get('x-ratelimit-limit'),
+                    'x-ratelimit-remaining': response.headers.get('x-ratelimit-remaining'),
+                    'x-ratelimit-reset': response.headers.get('x-ratelimit-reset')
+                }
+            });
+
             if (!response.ok) {
-                throw new Error(`GitHub API error: ${response.status}`);
+                const errorText = await response.text();
+                console.error('❌ PACK MANAGER ERROR: GitHub API error response:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    responseText: errorText
+                });
+                throw new Error(`GitHub API error: ${response.status} - ${response.statusText}`);
             }
-            
+
+            console.log('🎯 PACK MANAGER DEBUG: Parsing JSON response...');
             const contents = await response.json();
+
+            console.log('🎯 PACK MANAGER DEBUG: GitHub API contents parsed:', {
+                isArray: Array.isArray(contents),
+                length: contents?.length,
+                firstFewItems: contents?.slice(0, 3)
+            });
+
             const packs = contents.filter(item => item.type === 'dir');
-            
+            console.log('🎯 PACK MANAGER DEBUG: Directory items filtered:', {
+                totalItems: contents.length,
+                packDirectories: packs.length,
+                packNames: packs.map(p => p.name)
+            });
+
             this.availablePacks.clear();
-            
+
+            console.log('🎯 PACK MANAGER DEBUG: Starting to fetch pack info for each pack...');
             for (const pack of packs) {
+                console.log(`🎯 PACK MANAGER DEBUG: Fetching info for pack: ${pack.name}`);
                 const packInfo = await this.getPackInfo(pack.name);
                 if (packInfo) {
                     this.availablePacks.set(pack.name, packInfo);
+                    console.log(`✅ PACK MANAGER DEBUG: Successfully added pack: ${pack.name}`);
+                } else {
+                    console.warn(`⚠️ PACK MANAGER DEBUG: Failed to get info for pack: ${pack.name}`);
                 }
             }
-            
+
+            console.log('🎯 PACK MANAGER DEBUG: Pack scanning completed:', {
+                totalPacksFound: this.availablePacks.size,
+                packNames: Array.from(this.availablePacks.keys())
+            });
+
             CarrotDebug.repo(`✅ Found ${this.availablePacks.size} packs on GitHub`);
             return Array.from(this.availablePacks.values());
-            
+
         } catch (error) {
+            console.error('❌ PACK MANAGER ERROR: scanRemotePacks failed:', {
+                errorMessage: error.message,
+                errorStack: error.stack,
+                errorName: error.name,
+                fullError: error
+            });
+
             CarrotDebug.error('❌ Failed to scan remote packs:', error);
             return [];
         }
@@ -1702,15 +2127,27 @@ class CarrotPackManager {
 
     // Get detailed info about a specific pack
     async getPackInfo(packName) {
+        console.log(`🎯 PACK MANAGER DEBUG: getPackInfo called for pack: ${packName}`);
+
         try {
             const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(this.packsFolder)}/${encodeURIComponent(packName)}`;
-            const response = await fetch(apiUrl);
-            
+            console.log(`🎯 PACK MANAGER DEBUG: Pack info API URL: ${apiUrl}`);
+
+            const response = await this.fetchWithRateLimit(apiUrl);
+            console.log(`🎯 PACK MANAGER DEBUG: Pack info response for ${packName}:`, {
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok,
+                rateLimitRemaining: response.headers.get('x-ratelimit-remaining')
+            });
+
             if (!response.ok) {
                 if (response.status === 403) {
+                    console.warn(`⚠️ PACK MANAGER DEBUG: Rate limit hit for pack ${packName}`);
                     CarrotDebug.error(`GitHub API rate limit exceeded for pack: ${packName}`);
                     return null;
                 }
+                console.error(`❌ PACK MANAGER ERROR: API error for pack ${packName}: ${response.status}`);
                 throw new Error(`GitHub API error: ${response.status}`);
             }
             
@@ -2473,8 +2910,7 @@ function initializeSettings() {
         extension_settings[extensionName] = { ...defaultSettings };
     }
     
-    // Reset character_consistency template to show updated default prompt
-    CarrotTemplateManager.resetTemplateToDefault('character_consistency');
+    // Note: We no longer auto-reset templates to preserve user modifications
     
     // Ensure all default properties exist
     Object.keys(defaultSettings).forEach(key => {
@@ -3858,14 +4294,18 @@ function displayCharacterData(injectedCharacters) {
     
     let renderedContent = '';
     if (settings.displayMode === 'thinking') {
-        console.log('🧠 CARROT DEBUG: About to call renderAsThinkingBox with:', injectedCharacters);
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🧠 CARROT DEBUG: About to call renderAsThinkingBox with:', injectedCharacters);
+        }
         CarrotDebug.ui('🧠 DISPLAY: Rendering thinking box');
         renderedContent = renderAsThinkingBox(injectedCharacters);
-        console.log('🧠 CARROT DEBUG: renderAsThinkingBox returned:', {
-            contentLength: renderedContent?.length,
-            hasContent: !!renderedContent,
-            content: renderedContent
-        });
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🧠 CARROT DEBUG: renderAsThinkingBox returned:', {
+                contentLength: renderedContent?.length,
+                hasContent: !!renderedContent,
+                content: renderedContent
+            });
+        }
         CarrotDebug.ui('🧠 DISPLAY: Thinking box rendered', {
             contentLength: renderedContent?.length,
             hasContent: !!renderedContent
@@ -3884,13 +4324,15 @@ function displayCharacterData(injectedCharacters) {
         const lastMessage = document.querySelector('#chat .mes:last-child');
         const allMessages = document.querySelectorAll('#chat .mes');
         
-        console.log('🎯 CARROT DEBUG: DOM injection details:', {
-            contentLength: renderedContent.length,
-            lastMessageExists: !!lastMessage,
-            totalMessages: allMessages.length,
-            lastMessageId: lastMessage?.getAttribute('mesid'),
-            content: renderedContent.substring(0, 200) + '...'
-        });
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🎯 CARROT DEBUG: DOM injection details:', {
+                contentLength: renderedContent.length,
+                lastMessageExists: !!lastMessage,
+                totalMessages: allMessages.length,
+                lastMessageId: lastMessage?.getAttribute('mesid'),
+                content: renderedContent.substring(0, 200) + '...'
+            });
+        }
         
         CarrotDebug.ui('🎯 DISPLAY: DOM selection results', {
             lastMessage: !!lastMessage,
@@ -3920,9 +4362,13 @@ function displayCharacterData(injectedCharacters) {
             });
             
             if (mesText) {
-                console.log('🎯 CARROT DEBUG: Inserting HTML before mesText element');
+                if (extension_settings[extensionName]?.debugMode) {
+                    console.log('🎯 CARROT DEBUG: Inserting HTML before mesText element');
+                }
                 mesText.insertAdjacentHTML('beforebegin', renderedContent);
-                console.log('✅ CARROT DEBUG: HTML insertion completed, checking if element exists in DOM');
+                if (extension_settings[extensionName]?.debugMode) {
+                    console.log('✅ CARROT DEBUG: HTML insertion completed, checking if element exists in DOM');
+                }
                 
                 // Ensure collapsible functionality works by adding event listeners
                 const characterDetails = lastMessage.querySelectorAll('details[style*="border"]');
@@ -3944,14 +4390,18 @@ function displayCharacterData(injectedCharacters) {
                 
                 // Verify the thinking block was actually added (look for ST's native reasoning class)
                 const insertedElement = lastMessage.querySelector('.mes_reasoning_details[data-type="manual"]');
-                console.log('🔍 CARROT DEBUG: Verification - ST-native thinking block element found:', !!insertedElement);
+                if (extension_settings[extensionName]?.debugMode) {
+                    console.log('🔍 CARROT DEBUG: Verification - ST-native thinking block element found:', !!insertedElement);
+                }
                 if (insertedElement) {
-                    console.log('📏 CARROT DEBUG: Thinking block dimensions:', {
-                        offsetHeight: insertedElement.offsetHeight,
-                        offsetWidth: insertedElement.offsetWidth,
-                        display: getComputedStyle(insertedElement).display,
-                        visibility: getComputedStyle(insertedElement).visibility
-                    });
+                    if (extension_settings[extensionName]?.debugMode) {
+                        console.log('📏 CARROT DEBUG: Thinking block dimensions:', {
+                            offsetHeight: insertedElement.offsetHeight,
+                            offsetWidth: insertedElement.offsetWidth,
+                            display: getComputedStyle(insertedElement).display,
+                            visibility: getComputedStyle(insertedElement).visibility
+                        });
+                    }
                     
                     // Mark the message as having reasoning for ST's native system
                     lastMessage.classList.add('reasoning');
@@ -4168,7 +4618,9 @@ async function processActivatedLorebookEntries(entryList) {
             // Store character data for thinking blocks when AI message is rendered
             const characterNames = characterData.map(char => char.name);
             pendingThinkingBlockData = characterNames;
-            console.log('🧠 CARROT DEBUG: Storing thinking block data:', characterNames);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🧠 CARROT DEBUG: Storing thinking block data:', characterNames);
+            }
             CarrotDebug.ui('🧠 THINKING MODE: Stored character data for later display', {
                 characterNames,
                 pendingThinkingBlockDataLength: pendingThinkingBlockData.length
@@ -4189,12 +4641,14 @@ function extractCharacterDataFromEntry(entry) {
     if (!entry.content) return null;
     
     const characterName = entry.comment || entry.key?.[0] || 'Unknown';
-    console.log('🔍 CARROT DEBUG: Extracting character from entry:', {
-        entryComment: entry.comment,
-        entryKey: entry.key,
-        extractedName: characterName,
-        entryTitle: entry.title || entry.comment
-    });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🔍 CARROT DEBUG: Extracting character from entry:', {
+            entryComment: entry.comment,
+            entryKey: entry.key,
+            extractedName: characterName,
+            entryTitle: entry.title || entry.comment
+        });
+    }
     
     const character = {
         name: characterName,
@@ -4204,7 +4658,9 @@ function extractCharacterDataFromEntry(entry) {
     };
     
     // Parse BunnyMoTags from the entry content (FIX: correct case-sensitive matching)
-    console.log('🔍 CARROT DEBUG: Entry content preview:', entry.content.substring(0, 200));
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🔍 CARROT DEBUG: Entry content preview:', entry.content.substring(0, 200));
+    }
     
     // Try both case variations to be safe
     const bunnyTagsMatch = entry.content.match(/<BunnyMoTags>(.*?)<\/BunnyMoTags>/s) || 
@@ -4212,12 +4668,16 @@ function extractCharacterDataFromEntry(entry) {
     
     if (bunnyTagsMatch) {
         const tagsContent = bunnyTagsMatch[1];
-        console.log('🔍 CARROT DEBUG: Found BunnyMoTags content:', tagsContent.substring(0, 100));
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🔍 CARROT DEBUG: Found BunnyMoTags content:', tagsContent.substring(0, 100));
+        }
         
         const tagMatches = tagsContent.match(/<([^:>]+):([^>]+)>/g);
         
         if (tagMatches) {
-            console.log('🔍 CARROT DEBUG: Found tag matches:', tagMatches);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🔍 CARROT DEBUG: Found tag matches:', tagMatches);
+            }
             
             tagMatches.forEach(tagMatch => {
                 const match = tagMatch.match(/<([^:>]+):([^>]+)>/);
@@ -4230,14 +4690,20 @@ function extractCharacterDataFromEntry(entry) {
                     }
                     character.tags[category].push(value);
                     
-                    console.log(`🔍 CARROT DEBUG: Added tag - ${category}: ${value}`);
+                    if (extension_settings[extensionName]?.debugMode) {
+                        console.log(`🔍 CARROT DEBUG: Added tag - ${category}: ${value}`);
+                    }
                 }
             });
         } else {
-            console.log('⚠️ CARROT DEBUG: BunnyMoTags block found but no individual tags matched');
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('⚠️ CARROT DEBUG: BunnyMoTags block found but no individual tags matched');
+            }
         }
     } else {
-        console.log('⚠️ CARROT DEBUG: No BunnyMoTags block found in entry content');
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('⚠️ CARROT DEBUG: No BunnyMoTags block found in entry content');
+        }
     }
     
     CarrotDebug.scan(`✅ Extracted character: ${character.name} with ${Object.keys(character.tags).length} tag categories`);
@@ -4331,7 +4797,9 @@ async function sendCarrotSystemMessage(characterData) {
 
 // Create external card container (like BunnyMoTags)
 function attachExternalCardsToMessage(messageIndex, characterData) {
-    console.log('🔧 CARDS EMERGENCY DEBUG: Function called', { messageIndex, characterData });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🔧 CARDS EMERGENCY DEBUG: Function called', { messageIndex, characterData });
+    }
     
     CarrotDebug.ui('🔧 CARDS DEBUG: Starting card attachment', { 
         messageIndex, 
@@ -4515,7 +4983,9 @@ function createExternalCardContainer(characterData, messageIndex) {
         pointer-events: none;
         z-index: 1;
     `;
-    console.log('🚨 DEBUG appendChild: container.appendChild(accentLayer)', { container, accentLayer });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🚨 DEBUG appendChild: container.appendChild(accentLayer)', { container, accentLayer });
+    }
     container.appendChild(accentLayer);
 
     // Main content area
@@ -4580,11 +5050,17 @@ function createExternalCardContainer(characterData, messageIndex) {
     toggleButton.title = 'Toggle card visibility';
     
     // Assemble header
-    console.log('🚨 DEBUG appendChild: header.appendChild(headerTitle)', { header, headerTitle });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🚨 DEBUG appendChild: header.appendChild(headerTitle)', { header, headerTitle });
+    }
     header.appendChild(headerTitle);
-    console.log('🚨 DEBUG appendChild: header.appendChild(headerInfo)', { header, headerInfo });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🚨 DEBUG appendChild: header.appendChild(headerInfo)', { header, headerInfo });
+    }
     header.appendChild(headerInfo);
-    console.log('🚨 DEBUG appendChild: header.appendChild(toggleButton)', { header, headerTitle, headerInfo, toggleButton });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🚨 DEBUG appendChild: header.appendChild(toggleButton)', { header, headerTitle, headerInfo, toggleButton });
+    }
     header.appendChild(toggleButton);
     
     // Add character selector if multiple characters
@@ -4713,7 +5189,9 @@ function createExternalCardContainer(characterData, messageIndex) {
         });
         
         tabButton.addEventListener('click', () => switchTab(tab.id, tab.color));
-        console.log('🚨 DEBUG appendChild: tabNavigation.appendChild(tabButton)', { tabNavigation, tabButton, tabId: tab.id });
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🚨 DEBUG appendChild: tabNavigation.appendChild(tabButton)', { tabNavigation, tabButton, tabId: tab.id });
+        }
         tabNavigation.appendChild(tabButton);
     });
     
@@ -4788,7 +5266,9 @@ function createExternalCardContainer(characterData, messageIndex) {
         transform-origin: top;
     `;
     
-    console.log('🚨 DEBUG appendChild: collapsibleContent.appendChild(tabNavigation)', { collapsibleContent, tabNavigation });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🚨 DEBUG appendChild: collapsibleContent.appendChild(tabNavigation)', { collapsibleContent, tabNavigation });
+    }
     collapsibleContent.appendChild(tabNavigation);
     
     // Content container for tabs with enhanced styling
@@ -4817,14 +5297,20 @@ function createExternalCardContainer(characterData, messageIndex) {
             transform: translateY(0);
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         `;
-        console.log('🚨 DEBUG appendChild: contentContainer.appendChild(tabContent)', { contentContainer, tabContent, tabId: tab.id });
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🚨 DEBUG appendChild: contentContainer.appendChild(tabContent)', { contentContainer, tabContent, tabId: tab.id });
+        }
         contentContainer.appendChild(tabContent);
         tabContents[tab.id] = tabContent; // Store reference
     });
     
     // Process characters and organize by tabs - show first character initially
-    console.log(`[BMT CARDS] Creating tabbed interface for ${characters.length} characters`);
-    console.log(`[BMT CARDS] First character data:`, characters[0]);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`[BMT CARDS] Creating tabbed interface for ${characters.length} characters`);
+    }
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`[BMT CARDS] First character data:`, characters[0]);
+    }
     
     if (characters.length > 0) {
             // Characters from our system have different format - need to convert
@@ -4852,7 +5338,9 @@ function createExternalCardContainer(characterData, messageIndex) {
             };
         }
         
-        console.log(`[BMT CARDS] Formatted character:`, formattedChar);
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log(`[BMT CARDS] Formatted character:`, formattedChar);
+        }
         refreshTabContent(formattedChar, tabContents);
     }
 
@@ -4891,11 +5379,17 @@ function createExternalCardContainer(characterData, messageIndex) {
         toggleButton.style.transform = 'scale(1)';
     });
 
-    console.log('🚨 DEBUG appendChild: mainContent.appendChild(header)', { mainContent, header });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🚨 DEBUG appendChild: mainContent.appendChild(header)', { mainContent, header });
+    }
     mainContent.appendChild(header);
-    console.log('🚨 DEBUG appendChild: mainContent.appendChild(collapsibleContent)', { mainContent, collapsibleContent });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🚨 DEBUG appendChild: mainContent.appendChild(collapsibleContent)', { mainContent, collapsibleContent });
+    }
     mainContent.appendChild(collapsibleContent);
-    console.log('🚨 DEBUG appendChild: container.appendChild(mainContent)', { container, mainContent });
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🚨 DEBUG appendChild: container.appendChild(mainContent)', { container, mainContent });
+    }
     container.appendChild(mainContent);
 
     CarrotDebug.ui(`Container created successfully`, {
@@ -4919,7 +5413,9 @@ function refreshTabContent(character, tabContents) {
     // Check if already showing this character to avoid unnecessary recreation
     const currentCharName = tabContents.personality?.getAttribute('data-current-character');
     if (currentCharName === character.name) {
-        console.log(`[BMT CARDS] Already showing ${character.name}, skipping refresh`);
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log(`[BMT CARDS] Already showing ${character.name}, skipping refresh`);
+        }
         return;
     }
     
@@ -5194,7 +5690,9 @@ function createTabSpecificContent(tags, tabType) {
             }
             else if (/^(E|I)(N|S)(T|F)(J|P)(-[AU])?$/i.test(tag)) {
                 category = 'MBTI Types';
-                console.log(`[BMT CARDS] MBTI MATCH: "${tag}" -> "${category}"`);
+                if (extension_settings[extensionName]?.debugMode) {
+                    console.log(`[BMT CARDS] MBTI MATCH: "${tag}" -> "${category}"`);
+                }
             }
             else if (tagCategory.toLowerCase() === 'trait') {
                 category = 'Core Traits';
@@ -5281,21 +5779,29 @@ function createTabSpecificContent(tags, tabType) {
                 // Format tag with category prefix for display (e.g., "SKIN: FAIR" instead of just "FAIR")
                 const displayTag = `${tagCategory.toUpperCase()}: ${tag}`;
                 organizedTags[category].push(displayTag);
-                console.log(`[BMT CARDS] Added "${displayTag}" to "${category}"`);
+                if (extension_settings[extensionName]?.debugMode) {
+                    console.log(`[BMT CARDS] Added "${displayTag}" to "${category}"`);
+                }
             } else {
-                console.log(`[BMT CARDS] SKIPPING "${tag}" - category "${category}" not available for ${tabType} tab and no Other section`);
+                if (extension_settings[extensionName]?.debugMode) {
+                    console.log(`[BMT CARDS] SKIPPING "${tag}" - category "${category}" not available for ${tabType} tab and no Other section`);
+                }
             }
         });
     });
     
     // DEBUG: Log final organization
-    console.log(`[BMT CARDS] Final organized tags for ${tabType}:`, organizedTags);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`[BMT CARDS] Final organized tags for ${tabType}:`, organizedTags);
+    }
     
     // Create sections for each category that has tags
     Object.entries(organizedTags).forEach(([categoryName, categoryTags]) => {
         if (categoryTags.length === 0) return;
         
-        console.log(`[BMT CARDS] Creating section for category: ${categoryName} with ${categoryTags.length} tags:`, categoryTags);
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log(`[BMT CARDS] Creating section for category: ${categoryName} with ${categoryTags.length} tags:`, categoryTags);
+        }
         
         // Simple category info mapping
         const categoryInfo = getCategoryInfo(categoryName);
@@ -5553,7 +6059,9 @@ function createTagSection(categoryName, tags, tabType, isCollapsible = false, ca
     const theme = bunnyMoThemes[categoryName] || bunnyMoThemes['Context'];
     
     // DEBUG: Log theme selection
-    console.log(`[BMT CARDS] Selected theme for category "${categoryName}":`, theme);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`[BMT CARDS] Selected theme for category "${categoryName}":`, theme);
+    }
     
     const section = document.createElement('div');
     
@@ -5989,7 +6497,9 @@ function searchWorldBook(tag) {
         // Try to access SillyTavern's WorldBook functionality
         if (typeof window.world_info_character_cards !== 'undefined') {
             // Search through world info entries
-            console.log(`[BMT SYSTEM] Searching WorldBook for tag: ${tag}`);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log(`[BMT SYSTEM] Searching WorldBook for tag: ${tag}`);
+            }
             
             // Create a temporary search popup
             const searchPopup = document.createElement('div');
@@ -6036,7 +6546,9 @@ function searchWorldBook(tag) {
             
         } else {
             // Fallback notification
-            console.log(`[BMT SYSTEM] WorldBook search not available for tag: ${tag}`);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log(`[BMT SYSTEM] WorldBook search not available for tag: ${tag}`);
+            }
             
             const notification = document.createElement('div');
             notification.style.cssText = `
@@ -6546,7 +7058,9 @@ function initializeBunnyMoTagsContextFiltering() {
 // Initialize extension
 jQuery(async () => {
     try {
-        console.log('🚨 CARROT KERNEL LOADING - NEW CODE VERSION! 🚨');
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🚨 CARROT KERNEL LOADING - NEW CODE VERSION! 🚨');
+        }
         CarrotDebug.init('Starting CarrotKernel initialization...');
         
         // Initialize context and storage managers first
@@ -6555,10 +7069,124 @@ jQuery(async () => {
         
         CarrotStorage = new CarrotStorageManager(CarrotContext);
         
-        // Initialize pack manager
-        window.CarrotPackManager = new CarrotPackManager();
-        window.CarrotPackManager.loadLocalPacks();
-        
+        // Initialize pack manager with retry mechanism
+        console.log('🎯 PACK MANAGER DEBUG: Initializing CarrotPackManager...');
+
+        async function initializePackManagerWithRetry(retries = 3, delay = 1000) {
+            for (let attempt = 1; attempt <= retries; attempt++) {
+                try {
+                    console.log(`🎯 PACK MANAGER DEBUG: Initialization attempt ${attempt}/${retries}`);
+
+                    // Clear any existing instance
+                    if (window.CarrotPackManager) {
+                        console.log('🎯 PACK MANAGER DEBUG: Clearing existing CarrotPackManager instance');
+                        delete window.CarrotPackManager;
+                    }
+
+                    window.CarrotPackManager = new CarrotPackManager();
+                    console.log('🎯 PACK MANAGER DEBUG: CarrotPackManager created successfully');
+
+                    window.CarrotPackManager.loadLocalPacks();
+                    console.log('🎯 PACK MANAGER DEBUG: Local packs loaded');
+
+                    // Verify the instance is properly set up
+                    const verification = {
+                        exists: !!window.CarrotPackManager,
+                        hasScanMethod: typeof window.CarrotPackManager.scanRemotePacks === 'function',
+                        hasLoadMethod: typeof window.CarrotPackManager.loadLocalPacks === 'function',
+                        githubRepo: window.CarrotPackManager.githubRepo,
+                        packsFolder: window.CarrotPackManager.packsFolder
+                    };
+
+                    console.log('🎯 PACK MANAGER DEBUG: CarrotPackManager verification:', verification);
+
+                    // Validate that all required components are working
+                    if (!verification.exists || !verification.hasScanMethod || !verification.hasLoadMethod) {
+                        throw new Error('CarrotPackManager initialization incomplete');
+                    }
+
+                    console.log('✅ PACK MANAGER DEBUG: CarrotPackManager initialized successfully on attempt', attempt);
+                    return true;
+
+                } catch (error) {
+                    console.error(`❌ PACK MANAGER ERROR: Initialization attempt ${attempt} failed:`, error);
+
+                    if (attempt < retries) {
+                        console.log(`🔄 PACK MANAGER DEBUG: Retrying in ${delay}ms...`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        delay *= 2; // Exponential backoff
+                    } else {
+                        console.error('❌ PACK MANAGER ERROR: All initialization attempts failed');
+
+                        // Provide user-visible error
+                        setTimeout(() => {
+                            if ($('#carrot-pack-status').length) {
+                                $('#carrot-pack-status').html(`
+                                    <p>❌ Pack Manager failed to initialize after ${retries} attempts.</p>
+                                    <p>🔄 <button onclick="location.reload()" class="menu_button">Refresh Page</button></p>
+                                    <p>💻 Open console for detailed error logs</p>
+                                `);
+                            }
+                        }, 2000);
+
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Start initialization
+        initializePackManagerWithRetry()
+
+        // Add global diagnostic function for users to troubleshoot pack manager issues
+        window.CarrotPackManagerDiagnostics = function() {
+            console.group('🥕 CARROT PACK MANAGER DIAGNOSTICS');
+
+            console.log('1. Pack Manager Instance:', {
+                exists: !!window.CarrotPackManager,
+                type: typeof window.CarrotPackManager,
+                constructor: window.CarrotPackManager?.constructor?.name
+            });
+
+            if (window.CarrotPackManager) {
+                console.log('2. Pack Manager Methods:', {
+                    scanRemotePacks: typeof window.CarrotPackManager.scanRemotePacks,
+                    loadLocalPacks: typeof window.CarrotPackManager.loadLocalPacks,
+                    getPackInfo: typeof window.CarrotPackManager.getPackInfo
+                });
+
+                console.log('3. Pack Manager Configuration:', {
+                    githubRepo: window.CarrotPackManager.githubRepo,
+                    packsFolder: window.CarrotPackManager.packsFolder,
+                    availablePacksSize: window.CarrotPackManager.availablePacks?.size
+                });
+            }
+
+            console.log('4. UI Elements:', {
+                scanButton: !!$('#carrot-pack-scan').length,
+                statusElement: !!$('#carrot-pack-status').length,
+                masterToggle: !!$('#carrot_enabled').length,
+                masterEnabled: extension_settings[extensionName]?.enabled
+            });
+
+            console.log('5. Extension Settings:', {
+                extensionName: extensionName,
+                settingsExist: !!extension_settings[extensionName],
+                debugMode: extension_settings[extensionName]?.debugMode
+            });
+
+            console.log('6. Test GitHub API Access (run this manually if needed):');
+            console.log('fetch("https://api.github.com/repos/Chi-BiWolf/CarrotKernel-packs/contents/packs").then(r => console.log("API Status:", r.status, r.statusText))');
+            console.log('7. Test Rate-Limited API Access:');
+            console.log('window.CarrotPackManager.testRateLimiting() // Tests the new rate limiting system');
+
+            console.groupEnd();
+
+            return 'Diagnostics completed. Check the logs above for any issues.';
+        };
+
+        console.log('🎯 PACK MANAGER DEBUG: Diagnostic function added. Run CarrotPackManagerDiagnostics() in console to troubleshoot.');
+
         // Check for pack updates on startup (like ST extensions)
         setTimeout(async () => {
             if (extension_settings[extensionName]?.autoCheckUpdates !== false) {
@@ -6596,10 +7224,12 @@ jQuery(async () => {
         eventSource.on(event_types.WORLD_INFO_ACTIVATED, async (entryList) => {
             const settings = extension_settings[extensionName];
             
-            // ALWAYS log this event, even if disabled, to debug activation issues
-            console.log('🔥 CARROT DEBUG: WORLD_INFO_ACTIVATED fired with', entryList?.length || 0, 'entries');
-            console.log('🔥 CARROT DEBUG: Settings enabled:', settings.enabled, 'Display mode:', settings.displayMode);
-            console.log('🔥 CARROT DEBUG: Entry list:', entryList);
+            // Log this event only when debug mode is enabled
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🔥 CARROT DEBUG: WORLD_INFO_ACTIVATED fired with', entryList?.length || 0, 'entries');
+                console.log('🔥 CARROT DEBUG: Settings enabled:', settings.enabled, 'Display mode:', settings.displayMode);
+                console.log('🔥 CARROT DEBUG: Entry list:', entryList);
+            }
             
             // Check if any activated entries are sheet commands
             const sheetCommandEntry = entryList?.find(entry => {
@@ -6815,6 +7445,14 @@ jQuery(async () => {
             CarrotDebug.init('Auto-scan disabled - lorebooks will be scanned on-demand only');
         }
         
+        // Initialize WorldBook Tracker
+        try {
+            CarrotWorldBookTracker.init();
+            CarrotDebug.init('WorldBook Tracker initialized successfully');
+        } catch (error) {
+            CarrotDebug.error('WorldBook Tracker initialization failed', error);
+        }
+
         CarrotDebug.init('CarrotKernel initialized successfully', {
             version: '1.0.0',
             contextValid: CarrotContext.isContextValid(),
@@ -6831,10 +7469,15 @@ jQuery(async () => {
 
 // Apply master enable state to UI and functionality
 function applyMasterEnableState(isEnabled) {
+    console.log('🎯 MASTER ENABLE DEBUG: applyMasterEnableState called:', {
+        isEnabled: isEnabled,
+        timestamp: new Date().toISOString()
+    });
+
     // Disable/enable all CarrotKernel UI elements
     const uiElements = [
         '#carrot_send_to_ai',
-        '#carrot_display_mode', 
+        '#carrot_display_mode',
         '#carrot_auto_expand',
         '#carrot_debug_mode',
         '#carrot_injection_depth',
@@ -6845,20 +7488,35 @@ function applyMasterEnableState(isEnabled) {
         '.carrot-repo-btn',
         '#carrot-search-lorebooks'
     ];
-    
-    uiElements.forEach(selector => {
-        $(selector).prop('disabled', !isEnabled);
+
+    console.log('🎯 MASTER ENABLE DEBUG: Updating UI elements state:', {
+        elementCount: uiElements.length,
+        disabling: !isEnabled
     });
-    
+
+    uiElements.forEach(selector => {
+        const element = $(selector);
+        const elementExists = element.length > 0;
+        element.prop('disabled', !isEnabled);
+
+        if (!elementExists) {
+            console.warn(`⚠️ MASTER ENABLE DEBUG: UI element not found: ${selector}`);
+        }
+    });
+
     // Add visual indication to the entire settings panel
     if (isEnabled) {
+        console.log('🎯 MASTER ENABLE DEBUG: Enabling UI - removing disabled class');
         $('#carrot_settings').removeClass('carrot-disabled');
         CarrotDebug.ui('UI elements ENABLED');
     } else {
+        console.log('🎯 MASTER ENABLE DEBUG: Disabling UI - adding disabled class and clearing displays');
         $('#carrot_settings').addClass('carrot-disabled');
-        
+
         // Clear all existing character displays when disabled
-        document.querySelectorAll('.carrot-reasoning-details, .carrot-cards-container').forEach(el => {
+        const existingDisplays = document.querySelectorAll('.carrot-reasoning-details, .carrot-cards-container');
+        console.log(`🎯 MASTER ENABLE DEBUG: Removing ${existingDisplays.length} existing character displays`);
+        existingDisplays.forEach(el => {
             el.remove();
         });
         
@@ -6871,21 +7529,84 @@ function applyMasterEnableState(isEnabled) {
 
 // Bind all settings UI events
 function bindSettingsEvents() {
+    console.log('🎯 DOM DEBUG: bindSettingsEvents called');
+
+    // Check if DOM is ready and elements exist before binding
+    function waitForElement(selector, timeout = 10000) {
+        return new Promise((resolve, reject) => {
+            const startTime = Date.now();
+
+            function checkElement() {
+                const element = $(selector);
+                if (element.length > 0) {
+                    console.log(`✅ DOM DEBUG: Element found: ${selector}`);
+                    resolve(element);
+                } else if (Date.now() - startTime > timeout) {
+                    console.error(`❌ DOM DEBUG: Element not found after ${timeout}ms: ${selector}`);
+                    reject(new Error(`Element ${selector} not found within timeout`));
+                } else {
+                    setTimeout(checkElement, 100);
+                }
+            }
+
+            checkElement();
+        });
+    }
+
     const settings = extension_settings[extensionName];
+
+    // Wait for critical UI elements before binding events
+    const criticalElements = [
+        '#carrot_enabled',
+        '#carrot-pack-scan',
+        '#carrot_settings'
+    ];
+
+    console.log('🎯 DOM DEBUG: Waiting for critical elements...', criticalElements);
+
+    Promise.allSettled(criticalElements.map(selector => waitForElement(selector)))
+        .then(results => {
+            const failures = results.filter(r => r.status === 'rejected');
+            if (failures.length > 0) {
+                console.warn('⚠️ DOM DEBUG: Some elements not found:', failures.map(f => f.reason?.message));
+            }
+
+            console.log('🎯 DOM DEBUG: Proceeding with event binding...');
+            bindActualEvents();
+        })
+        .catch(error => {
+            console.error('❌ DOM DEBUG: Critical error in element waiting:', error);
+            // Try binding anyway as a fallback
+            setTimeout(() => bindActualEvents(), 2000);
+        });
+
+    function bindActualEvents() {
+        console.log('🎯 DOM DEBUG: Starting actual event binding...');
     
     // Master enable toggle
     $('#carrot_enabled').prop('checked', settings.enabled).on('change', function() {
         const isEnabled = Boolean($(this).prop('checked'));
+        console.log('🎯 MASTER TOGGLE DEBUG: State changed:', {
+            previousState: settings.enabled,
+            newState: isEnabled,
+            timestamp: new Date().toISOString()
+        });
+
         extension_settings[extensionName].enabled = isEnabled;
-        
+
+        console.log('🎯 MASTER TOGGLE DEBUG: Applying master enable state...');
         // Apply master enable state
         applyMasterEnableState(isEnabled);
-        
+
+        console.log('🎯 MASTER TOGGLE DEBUG: Updating status panels...');
         // Update status panels
         updateStatusPanels();
-        
+
+        console.log('🎯 MASTER TOGGLE DEBUG: Saving settings...');
         saveSettingsDebounced();
         CarrotDebug.setting('masterEnable', !isEnabled, isEnabled);
+
+        console.log('🎯 MASTER TOGGLE DEBUG: Master toggle change completed');
     });
     
     // Display mode
@@ -7042,24 +7763,117 @@ function bindSettingsEvents() {
         saveSettingsDebounced();
     });
 
-    // Pack manager buttons
-    $('#carrot-pack-scan').on('click', async function() {
+    // Pack manager buttons with debouncing
+    let packScanInProgress = false;
+    const PACK_SCAN_DEBOUNCE_MS = 1000; // Prevent rapid clicks
+
+    $('#carrot-pack-scan').on('click', async function(event) {
+        console.log('🎯 PACK MANAGER DEBUG: Scan button clicked');
+
+        // Prevent double-clicks and rapid clicking
+        if (packScanInProgress) {
+            console.log('⚠️ PACK MANAGER DEBUG: Scan already in progress, ignoring click');
+            event.preventDefault();
+            return false;
+        }
+
+        packScanInProgress = true;
         const button = $(this);
         const originalText = button.html();
-        
+
+        // Visual feedback that click was registered
+        button.addClass('clicked');
+
+        console.log('🎯 PACK MANAGER DEBUG: Button element found:', {
+            buttonExists: !!button.length,
+            originalText: originalText,
+            isDisabled: button.prop('disabled')
+        });
+
+        // Check if CarrotPackManager exists
+        if (!window.CarrotPackManager) {
+            console.error('❌ PACK MANAGER ERROR: window.CarrotPackManager not found!');
+            $('#carrot-pack-status').html('<p>❌ Pack Manager not initialized. Please refresh the page.</p>');
+            return;
+        }
+
+        console.log('🎯 PACK MANAGER DEBUG: CarrotPackManager found, checking scanRemotePacks method');
+
+        if (typeof window.CarrotPackManager.scanRemotePacks !== 'function') {
+            console.error('❌ PACK MANAGER ERROR: scanRemotePacks method not found!');
+            $('#carrot-pack-status').html('<p>❌ Pack Manager scanRemotePacks method missing. Extension may be corrupted.</p>');
+            return;
+        }
+
+        console.log('🎯 PACK MANAGER DEBUG: Starting pack scan process');
+
         button.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i> Scanning...');
-        $('#carrot-pack-status').html('<p>🔍 Scanning GitHub repository for available packs...</p>');
-        
+        $('#carrot-pack-status').html('<p>🔍 Scanning GitHub repository for available packs...</p><p>📊 Rate-limit aware scanning with automatic retry enabled.</p>');
+
         try {
+            console.log('🎯 PACK MANAGER DEBUG: Calling scanRemotePacks()...');
             const packs = await window.CarrotPackManager.scanRemotePacks();
+
+            console.log('🎯 PACK MANAGER DEBUG: scanRemotePacks completed successfully:', {
+                packsFound: packs?.length || 0,
+                packs: packs
+            });
+
             updatePackListUI(packs);
             $('#carrot-pack-status').html(`<p>✅ Found ${packs.length} available packs</p>`);
+
+            console.log('✅ PACK MANAGER DEBUG: Pack scan completed successfully');
         } catch (error) {
-            $('#carrot-pack-status').html(`<p>❌ Scan failed: ${error.message}</p>`);
+            console.error('❌ PACK MANAGER ERROR: Scan failed:', {
+                errorMessage: error.message,
+                errorStack: error.stack,
+                errorName: error.name,
+                fullError: error
+            });
+
+            // Provide user-friendly error messages based on error type
+            let userMessage = '';
+            if (error.message.includes('rate limit') || error.message.includes('403')) {
+                console.warn('⚠️ PACK MANAGER DEBUG: GitHub rate limit detected');
+                const retryTime = window.CarrotPackManager?.rateLimitInfo?.resetTime;
+                const waitMinutes = retryTime ? Math.ceil((retryTime - Date.now()) / 60000) : 5;
+                userMessage = `<p>⏳ GitHub API rate limit reached. The extension will automatically retry.</p>
+                              <p>🕒 Rate limit resets in approximately ${waitMinutes} minutes.</p>
+                              <p>💡 Tip: Try again later or check console for retry progress.</p>`;
+            } else if (error.message.includes('network') || error.message.includes('fetch')) {
+                console.warn('⚠️ PACK MANAGER DEBUG: Network error detected');
+                userMessage = `<p>🌐 Network error occurred. The extension will automatically retry failed requests.</p>
+                              <p>🔄 Check your internet connection and try scanning again.</p>
+                              <p>💻 Console shows detailed retry attempts and network status.</p>`;
+            } else if (error.message.includes('404')) {
+                console.warn('⚠️ PACK MANAGER DEBUG: GitHub repository not found');
+                userMessage = `<p>❌ Pack repository not found (GitHub returned 404).</p>
+                              <p>🔗 The repository may have moved or been renamed.</p>
+                              <p>💻 Check console for the attempted repository URL.</p>`;
+            } else if (error.message.includes('timeout')) {
+                userMessage = `<p>⏱️ Request timed out. GitHub may be experiencing slow response times.</p>
+                              <p>🔄 The extension automatically retries with exponential backoff.</p>
+                              <p>💡 Try scanning again - it may succeed on retry.</p>`;
+            } else {
+                userMessage = `<p>❌ Scan failed: ${error.message}</p>
+                              <p>🔄 If this was a temporary issue, the extension will retry automatically.</p>
+                              <p>💻 Check console for detailed error information and retry attempts.</p>`;
+            }
+
+            $('#carrot-pack-status').html(userMessage);
         } finally {
-            button.prop('disabled', false).html(originalText);
+            console.log('🎯 PACK MANAGER DEBUG: Restoring button state');
+            button.prop('disabled', false).html(originalText).removeClass('clicked');
+
+            // Reset scan state with debounce delay
+            setTimeout(() => {
+                packScanInProgress = false;
+                console.log('🎯 PACK MANAGER DEBUG: Scan debounce period ended');
+            }, PACK_SCAN_DEBOUNCE_MS);
         }
     });
+
+    console.log('✅ PACK MANAGER DEBUG: Pack scan button event handler bound successfully');
 
     $('#carrot-pack-sync').on('click', async function() {
         const button = $(this);
@@ -7713,21 +8527,27 @@ function bindLoadoutManagerEvents(context, currentSettings) {
             });
         }
 
-        console.log('🥕 LOADOUT DEBUG: Simplified event binding completed (using inline onclick for context switching)');
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🥕 LOADOUT DEBUG: Simplified event binding completed (using inline onclick for context switching)');
+        }
         CarrotDebug.ui('Loadout manager events bound successfully');
     }, 100);
 }
 
 // Switch context in loadout manager
 async function switchLoadoutContext(selectedContext, context, currentSettings) {
-    console.log(`🥕 LOADOUT DEBUG: Switching to context: ${selectedContext}`);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`🥕 LOADOUT DEBUG: Switching to context: ${selectedContext}`);
+    }
     
     // Check if clicking the same active context (deselection)
     const contextCards = document.querySelectorAll('.carrot-status-panel[data-context="character"], .carrot-status-panel[data-context="chat"]');
     const currentActiveCard = document.querySelector('.carrot-status-panel.active[data-context]');
     const isDeselecting = currentActiveCard && currentActiveCard.dataset.context === selectedContext;
     
-    console.log(`🥕 LOADOUT DEBUG: Found ${contextCards.length} context cards, deselecting: ${isDeselecting}`);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`🥕 LOADOUT DEBUG: Found ${contextCards.length} context cards, deselecting: ${isDeselecting}`);
+    }
     
     // Update active state
     contextCards.forEach(card => {
@@ -7739,7 +8559,9 @@ async function switchLoadoutContext(selectedContext, context, currentSettings) {
             card.classList.remove('active');
             if (card.dataset.context === selectedContext) {
                 card.classList.add('active');
-                console.log(`🥕 LOADOUT DEBUG: Activated card for context: ${selectedContext}`);
+                if (extension_settings[extensionName]?.debugMode) {
+                    console.log(`🥕 LOADOUT DEBUG: Activated card for context: ${selectedContext}`);
+                }
             }
         }
     });
@@ -7748,7 +8570,9 @@ async function switchLoadoutContext(selectedContext, context, currentSettings) {
     if (isDeselecting) {
         updateLoadoutInterface('global', currentSettings, context);
         updateLoadoutsDisplay(context);
-        console.log(`🥕 LOADOUT DEBUG: Deselected context, reverted to global settings`);
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log(`🥕 LOADOUT DEBUG: Deselected context, reverted to global settings`);
+        }
         CarrotDebug.ui('Deselected context - reverted to default settings');
         return;
     }
@@ -7758,22 +8582,30 @@ async function switchLoadoutContext(selectedContext, context, currentSettings) {
     switch (selectedContext) {
         case 'character':
             contextSettings = await CarrotStorage.getSettingsAt('character') || currentSettings;
-            console.log(`🥕 LOADOUT DEBUG: Character settings loaded:`, contextSettings);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log(`🥕 LOADOUT DEBUG: Character settings loaded:`, contextSettings);
+            }
             break;
         case 'chat':
             contextSettings = await CarrotStorage.getSettingsAt('chat') || currentSettings;
-            console.log(`🥕 LOADOUT DEBUG: Chat settings loaded:`, contextSettings);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log(`🥕 LOADOUT DEBUG: Chat settings loaded:`, contextSettings);
+            }
             break;
         default:
             contextSettings = currentSettings;
-            console.log(`🥕 LOADOUT DEBUG: Using default settings for context: ${selectedContext}`);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log(`🥕 LOADOUT DEBUG: Using default settings for context: ${selectedContext}`);
+            }
             break;
     }
 
     // Update the interface content for the selected context
     updateLoadoutInterface(selectedContext, contextSettings, context);
     
-    console.log(`🥕 LOADOUT DEBUG: Interface updated for context: ${selectedContext}`);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`🥕 LOADOUT DEBUG: Interface updated for context: ${selectedContext}`);
+    }
     CarrotDebug.ui(`Switched loadout context to: ${selectedContext}`);
 }
 
@@ -9312,7 +10144,9 @@ window.CarrotKernel = {
     forceShowCharacterCards() {
         const popupContainer = document.getElementById('carrot-popup-container');
         if (!popupContainer || scannedCharacters.size === 0) {
-            console.log('Cannot show character cards:', { popupContainer: !!popupContainer, characterCount: scannedCharacters.size });
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('Cannot show character cards:', { popupContainer: !!popupContainer, characterCount: scannedCharacters.size });
+            }
             return;
         }
         
@@ -9325,7 +10159,9 @@ window.CarrotKernel = {
         // Hide getting started since user completed setup
         this.hideGettingStartedSection();
         
-        console.log(`✅ Character data updated - ${scannedCharacters.size} characters available`);
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log(`✅ Character data updated - ${scannedCharacters.size} characters available`);
+        }
     },
     
     // Add simple characters list
@@ -9362,12 +10198,24 @@ window.CarrotKernel = {
             let tagCount = 0;
             
             // Debug character data during list generation
-            console.log(`🔍 LIST GEN - Character: ${characterName}`);
-            console.log('🔍 LIST GEN - Data:', characterData);
-            console.log('🔍 LIST GEN - Tags:', characterData?.tags);
-            console.log('🔍 LIST GEN - Tags type:', typeof characterData?.tags);
-            console.log('🔍 LIST GEN - Is Map:', characterData?.tags instanceof Map);
-            console.log('🔍 LIST GEN - Is Set:', characterData?.tags instanceof Set);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log(`🔍 LIST GEN - Character: ${characterName}`);
+            }
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🔍 LIST GEN - Data:', characterData);
+            }
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🔍 LIST GEN - Tags:', characterData?.tags);
+            }
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🔍 LIST GEN - Tags type:', typeof characterData?.tags);
+            }
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🔍 LIST GEN - Is Map:', characterData?.tags instanceof Map);
+            }
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🔍 LIST GEN - Is Set:', characterData?.tags instanceof Set);
+            }
             
             if (characterData && characterData.tags) {
                 if (characterData.tags instanceof Map) {
@@ -9448,13 +10296,17 @@ window.CarrotKernel = {
             return;
         }
         
-        console.log('🔍 Showing character details for:', characterName, characterData);
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log('🔍 Showing character details for:', characterName, characterData);
+        }
         
         // Store the current repository manager state before changing views
         const popupContainer = document.getElementById('carrot-popup-container');
         if (popupContainer) {
             this._previousRepositoryState = popupContainer.innerHTML;
-            console.log('💾 Stored repository manager state for restoration');
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('💾 Stored repository manager state for restoration');
+            }
         }
         
         try {
@@ -9491,7 +10343,9 @@ window.CarrotKernel = {
                 });
             }
             
-            console.log('🔍 DEBUG: Converted tags for character card:', tagsObject);
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log('🔍 DEBUG: Converted tags for character card:', tagsObject);
+            }
             
             // Use existing CarrotKernel character card system
             const characterForCard = {
@@ -9513,14 +10367,20 @@ window.CarrotKernel = {
                     const tabs = cardContainer.querySelectorAll('.carrot-tab');
                     const personalityTabs = cardContainer.querySelectorAll('.carrot-tab[data-tab="personality"]');
                     
-                    console.log('🔍 DEBUG: Found tabs:', tabs.length);
-                    console.log('🔍 DEBUG: Found personality tabs:', personalityTabs.length);
+                    if (extension_settings[extensionName]?.debugMode) {
+                        console.log('🔍 DEBUG: Found tabs:', tabs.length);
+                    }
+                    if (extension_settings[extensionName]?.debugMode) {
+                        console.log('🔍 DEBUG: Found personality tabs:', personalityTabs.length);
+                    }
                     
                     // Click the first personality tab to ensure it's active and content is shown
                     personalityTabs.forEach((tab, index) => {
                         if (!tab.classList.contains('active')) {
                             tab.click();
-                            console.log(`🔓 Auto-activated personality tab ${index + 1}`);
+                            if (extension_settings[extensionName]?.debugMode) {
+                                console.log(`🔓 Auto-activated personality tab ${index + 1}`);
+                            }
                         }
                     });
                 }, 200); // Slightly longer delay to ensure tabs are ready
@@ -12763,14 +13623,18 @@ This is a test message.`;
 
 // Global functions for loadout manager inline onclick handlers
 window.switchToCharacterContext = async function() {
-    console.log('🥕 LOADOUT DEBUG: Character context clicked via onclick');
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🥕 LOADOUT DEBUG: Character context clicked via onclick');
+    }
     const context = CarrotContext.getCurrentContext();
     const currentSettings = await CarrotStorage.getSettings();
     await switchLoadoutContext('character', context, currentSettings);
 };
 
 window.switchToChatContext = async function() {
-    console.log('🥕 LOADOUT DEBUG: Chat context clicked via onclick');
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🥕 LOADOUT DEBUG: Chat context clicked via onclick');
+    }
     const context = CarrotContext.getCurrentContext();
     const currentSettings = await CarrotStorage.getSettings();
     await switchLoadoutContext('chat', context, currentSettings);
@@ -12944,7 +13808,9 @@ function applyProfileTemplate(templateType) {
 
     // Show success message
     toastr.success(`Applied ${template.description}`, 'Profile Template');
-    console.log(`🥕 LOADOUT DEBUG: Applied ${templateType} template`, template);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`🥕 LOADOUT DEBUG: Applied ${templateType} template`, template);
+    }
 };
 
 // Save current settings as a new loadout
@@ -12985,7 +13851,9 @@ function saveCurrentAsLoadout() {
     const context = CarrotContext.getCurrentContext();
     updateLoadoutsDisplay(context);
     toastr.success(`Saved loadout: ${loadoutName}`, 'Loadout Library');
-    console.log(`🥕 LOADOUT DEBUG: Saved loadout: ${loadoutName}`, loadout);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`🥕 LOADOUT DEBUG: Saved loadout: ${loadoutName}`, loadout);
+    }
 }
 
 
@@ -13033,7 +13901,9 @@ function assignLoadoutToContext(loadoutName, context) {
     }
     
     saveContextAssignments(assignments);
-    console.log(`🥕 LOADOUT DEBUG: Assigned loadout "${loadoutName}" to context "${contextKey}"`);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`🥕 LOADOUT DEBUG: Assigned loadout "${loadoutName}" to context "${contextKey}"`);
+    }
 }
 
 function applyLoadoutToInterface(loadoutName) {
@@ -13072,7 +13942,9 @@ function applyLoadoutToInterface(loadoutName) {
         checkbox.checked = loadout.lorebooks.includes(checkbox.dataset.lorebook);
     });
 
-    console.log(`🥕 LOADOUT DEBUG: Applied loadout "${loadoutName}" to interface`, loadout);
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`🥕 LOADOUT DEBUG: Applied loadout "${loadoutName}" to interface`, loadout);
+    }
     return true;
 }
 
@@ -14663,7 +15535,6 @@ Most common categories:<br/>
         const template = this.templateManager.getTemplate(templateKey);
         if (!template) return;
         
-        console.log('🥕 LOAD DEBUG: Loading template:', templateKey, 'template name:', template.name, 'template data:', template);
         
         // Load template content  
         const templateContent = template.content || '';
@@ -14696,8 +15567,6 @@ Most common categories:<br/>
             // Also update our jQuery reference
             this.$template_depth.val(depthValue).attr('value', depthValue);
             
-            console.log('🥕 LOAD DEBUG: NUCLEAR OPTION - Set depth value:', depthValue, 'from template.depth:', template.depth);
-            console.log('🥕 LOAD DEBUG: Element value:', element?.value, 'Element attribute:', element?.getAttribute('value'));
         }
         if (this.$template_scan && this.$template_scan.length) {
             this.$template_scan.prop('checked', template.scan !== false);
@@ -14855,7 +15724,6 @@ Most common categories:<br/>
         const depthValue = this.$template_depth?.val() || $('#template_depth').val() || 4;
         const scanValue = this.$template_scan?.prop('checked') !== false || $('#template_scan').prop('checked') !== false;
         
-        console.log('🥕 SAVE DEBUG: Depth value being saved:', depthValue, 'from element:', this.$template_depth?.val(), 'direct:', $('#template_depth').val());
         
         const template = {
             label: this.templateManager.getTemplate(templateKey)?.label || templateKey,
