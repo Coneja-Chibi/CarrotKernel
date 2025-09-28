@@ -1860,7 +1860,6 @@ const init = ()=>{
                 clearHighlightsButton.style.borderColor = 'rgba(231, 76, 60, 0.3)';
             });
 
-            panel.style.position = 'relative'; // Ensure panel can contain the absolute positioned elements
         }
 
         document.body.append(panel);
