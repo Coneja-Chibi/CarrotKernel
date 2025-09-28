@@ -7341,6 +7341,18 @@ jQuery(async () => {
                 console.log('🔥 CARROT DEBUG: WORLD_INFO_ACTIVATED fired with', entryList?.length || 0, 'entries');
                 console.log('🔥 CARROT DEBUG: Settings enabled:', settings.enabled, 'Display mode:', settings.displayMode);
                 console.log('🔥 CARROT DEBUG: Entry list:', entryList);
+
+                // 🥕 Enhanced debugging for carrot icon troubleshooting
+                entryList?.forEach((entry, index) => {
+                    console.log(`🥕 WI DEBUG: Entry ${index + 1}:`, {
+                        uid: entry.uid,
+                        key: entry.key || entry.keys,
+                        comment: entry.comment,
+                        title: entry.title,
+                        enabled: entry.enabled,
+                        entry: entry
+                    });
+                });
             }
             
             // Check if any activated entries are sheet commands
@@ -8139,6 +8151,231 @@ function updatePackListUI(packs) {
             button.prop('disabled', false).text(originalText);
         }
     });
+
+    // 🥕 CARROT ICON CLICK DEBUGGING - Add comprehensive debugging for carrot icon clicks
+    function addCarrotIconDebugging() {
+        console.log('🥕 CLICK DEBUG: Setting up carrot icon click debugging...');
+
+        // Debug all carrot-related icon clicks in world info
+        $(document).on('click', '.fa-carrot, .wi_icon[title*="carrot"], .world_entry_icon[title*="carrot"], .carrot-icon', function(e) {
+            console.log('🥕 CLICK DEBUG: Carrot icon clicked!', {
+                element: this,
+                target: e.target,
+                currentTarget: e.currentTarget,
+                classes: this.className,
+                title: this.title,
+                dataAttributes: Object.fromEntries(Object.entries(this.dataset || {})),
+                parentElement: this.parentElement,
+                timestamp: new Date().toISOString()
+            });
+
+            // Check if this is within a world info entry
+            const worldEntry = $(this).closest('.world_entry, .wi_entry, .world_info_entry');
+            if (worldEntry.length) {
+                console.log('🥕 CLICK DEBUG: Found parent world info entry:', {
+                    entryElement: worldEntry[0],
+                    entryId: worldEntry.attr('id'),
+                    entryClasses: worldEntry[0].className,
+                    entryData: Object.fromEntries(Object.entries(worldEntry[0].dataset || {}))
+                });
+            }
+
+            // Check if click is being prevented
+            console.log('🥕 CLICK DEBUG: Event details:', {
+                defaultPrevented: e.isDefaultPrevented(),
+                propagationStopped: e.isPropagationStopped(),
+                immediatePropagationStopped: e.isImmediatePropagationStopped(),
+                eventType: e.type,
+                originalEvent: e.originalEvent
+            });
+        });
+
+        // Debug general world info icon clicks
+        $(document).on('click', '.world_entry .fa-fw, .world_entry .world_entry_icon, .wi_entry .fa-fw', function(e) {
+            console.log('🌍 WI CLICK DEBUG: World info icon clicked!', {
+                element: this,
+                classes: this.className,
+                title: this.title,
+                isCarrotIcon: this.classList.contains('fa-carrot'),
+                parentEntry: $(this).closest('.world_entry, .wi_entry')[0],
+                timestamp: new Date().toISOString()
+            });
+        });
+
+        // Monitor mutations to the world info container to detect when entries are added/removed
+        const worldInfoContainer = document.querySelector('#world_info_entries, .world_entries_container, #worldInfoEntries');
+        if (worldInfoContainer) {
+            console.log('🥕 CLICK DEBUG: Found world info container, setting up mutation observer');
+
+            const observer = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    if (mutation.type === 'childList') {
+                        mutation.addedNodes.forEach((node) => {
+                            if (node.nodeType === Node.ELEMENT_NODE) {
+                                const carrotIcons = node.querySelectorAll('.fa-carrot, .carrot-icon');
+                                if (carrotIcons.length > 0) {
+                                    console.log('🥕 CLICK DEBUG: New carrot icons detected in DOM:', carrotIcons.length);
+                                    carrotIcons.forEach((icon, index) => {
+                                        console.log(`🥕 CLICK DEBUG: Carrot icon ${index + 1}:`, {
+                                            element: icon,
+                                            classes: icon.className,
+                                            title: icon.title,
+                                            hasClickHandler: !!icon.onclick
+                                        });
+                                    });
+                                }
+                            }
+                        });
+                    }
+                });
+            });
+
+            observer.observe(worldInfoContainer, {
+                childList: true,
+                subtree: true
+            });
+
+            console.log('🥕 CLICK DEBUG: Mutation observer active on world info container');
+        } else {
+            console.log('🥕 CLICK DEBUG: World info container not found - debugging may be limited');
+        }
+
+        // Periodically check for carrot icons and their click handlers
+        setInterval(() => {
+            const carrotIcons = document.querySelectorAll('.fa-carrot, .carrot-icon');
+            if (carrotIcons.length > 0) {
+                console.log(`🥕 CLICK DEBUG: Periodic check - found ${carrotIcons.length} carrot icons on page`);
+                carrotIcons.forEach((icon, index) => {
+                    if (!icon.dataset.debugged) {
+                        console.log(`🥕 CLICK DEBUG: New carrot icon detected (${index + 1}):`, {
+                            element: icon,
+                            classes: icon.className,
+                            title: icon.title,
+                            hasClickHandler: !!icon.onclick,
+                            hasEventListeners: !!icon._events || !!$.data(icon, 'events')
+                        });
+                        icon.dataset.debugged = 'true';
+                    }
+                });
+            }
+        }, 5000); // Check every 5 seconds
+
+        console.log('🥕 CLICK DEBUG: Carrot icon debugging setup complete');
+    }
+
+    // 🔧 CARROT ICON CLICK FIX - Ensure carrot icons work properly
+    function fixCarrotIconClicks() {
+        console.log('🔧 CLICK FIX: Setting up carrot icon click fixes...');
+
+        // Function to ensure world info entry click handlers are properly bound
+        function ensureWorldInfoClickHandlers() {
+            const carrotIcons = document.querySelectorAll('.fa-carrot');
+            console.log(`🔧 CLICK FIX: Found ${carrotIcons.length} carrot icons, ensuring click handlers...`);
+
+            carrotIcons.forEach((icon, index) => {
+                const worldEntry = icon.closest('.world_entry, .wi_entry, .world_info_entry');
+
+                if (worldEntry && !icon.dataset.clickFixed) {
+                    console.log(`🔧 CLICK FIX: Fixing click handler for carrot icon ${index + 1}`);
+
+                    // Ensure the icon is clickable
+                    icon.style.cursor = 'pointer';
+                    icon.style.pointerEvents = 'auto';
+
+                    // Add fallback click handler if none exists
+                    if (!icon.onclick && !$(icon).data('events')?.click) {
+                        console.log(`🔧 CLICK FIX: Adding fallback click handler for icon ${index + 1}`);
+
+                        icon.addEventListener('click', function(e) {
+                            console.log('🔧 CLICK FIX: Fallback click handler triggered!', {
+                                icon: this,
+                                worldEntry: worldEntry,
+                                timestamp: new Date().toISOString()
+                            });
+
+                            // Try to trigger the world info entry display
+                            const entryId = worldEntry.dataset.id || worldEntry.id;
+                            const entryUid = worldEntry.dataset.uid;
+
+                            console.log('🔧 CLICK FIX: Attempting to open world info entry:', {
+                                entryId: entryId,
+                                entryUid: entryUid,
+                                worldEntry: worldEntry
+                            });
+
+                            // Try different methods to open the world info entry
+                            if (window.openWorldInfoEntry && entryId) {
+                                console.log('🔧 CLICK FIX: Using openWorldInfoEntry function');
+                                window.openWorldInfoEntry(entryId);
+                            } else if (window.editWorldInfoEntry && entryUid) {
+                                console.log('🔧 CLICK FIX: Using editWorldInfoEntry function');
+                                window.editWorldInfoEntry(entryUid);
+                            } else if (worldEntry.click) {
+                                console.log('🔧 CLICK FIX: Triggering world entry click directly');
+                                worldEntry.click();
+                            } else {
+                                console.log('🔧 CLICK FIX: Attempting to trigger click event on world entry');
+                                $(worldEntry).trigger('click');
+                            }
+                        });
+                    }
+
+                    icon.dataset.clickFixed = 'true';
+                }
+            });
+        }
+
+        // Initial fix
+        ensureWorldInfoClickHandlers();
+
+        // Fix again when world info changes
+        const observer = new MutationObserver((mutations) => {
+            let shouldFix = false;
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    for (const node of mutation.addedNodes) {
+                        if (node.nodeType === Node.ELEMENT_NODE &&
+                            (node.classList.contains('world_entry') ||
+                             node.classList.contains('wi_entry') ||
+                             node.querySelector('.fa-carrot'))) {
+                            shouldFix = true;
+                            break;
+                        }
+                    }
+                }
+            });
+
+            if (shouldFix) {
+                console.log('🔧 CLICK FIX: World info DOM changed, re-applying fixes...');
+                setTimeout(ensureWorldInfoClickHandlers, 100); // Small delay to ensure DOM is ready
+            }
+        });
+
+        // Observe world info container for changes
+        const worldInfoContainer = document.querySelector('#world_info_entries, .world_entries_container, #worldInfoEntries, .world_info');
+        if (worldInfoContainer) {
+            observer.observe(worldInfoContainer, {
+                childList: true,
+                subtree: true
+            });
+            console.log('🔧 CLICK FIX: Monitoring world info container for changes');
+        }
+
+        // Also fix when the world info tab is shown
+        $(document).on('shown.bs.tab', 'a[href="#world_info"]', function() {
+            console.log('🔧 CLICK FIX: World info tab shown, re-applying fixes...');
+            setTimeout(ensureWorldInfoClickHandlers, 200);
+        });
+
+        // Periodic fix as backup
+        setInterval(ensureWorldInfoClickHandlers, 10000); // Every 10 seconds
+
+        console.log('🔧 CLICK FIX: Carrot icon click fixes setup complete');
+    }
+
+    // Initialize debugging and fixes
+    addCarrotIconDebugging();
+    fixCarrotIconClicks();
 }
 
 // Add Loadout Manager status card (4th card matching ST's status card style)
