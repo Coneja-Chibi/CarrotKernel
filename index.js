@@ -7055,6 +7055,118 @@ function initializeBunnyMoTagsContextFiltering() {
 
 // OLD CHARACTER CONSISTENCY PIPELINE REMOVED - Now using WORLD_INFO_ACTIVATED event system
 
+// Update status panels with current state
+function updateStatusPanels() {
+    const settings = extension_settings[extensionName];
+
+    // System Status Panel
+    const systemStatus = $('#carrot-system-status');
+    const systemDetail = $('#carrot-system-detail');
+    const systemIndicator = $('#carrot-system-indicator');
+
+    if (settings.enabled) {
+        systemStatus.text('Active and Ready');
+        systemDetail.text('Click to open tutorial');
+        systemIndicator.removeClass('error warning').addClass('success');
+        $('.carrot-status-system').addClass('initialized');
+    } else {
+        systemStatus.text('Disabled');
+        systemDetail.text('Click to learn how to enable');
+        systemIndicator.removeClass('success warning').addClass('error');
+        $('.carrot-status-system').removeClass('initialized');
+    }
+
+    // Repository Status Panel
+    const repoStatus = $('#carrot-repo-status');
+    const repoDetail = $('#carrot-repo-detail');
+    const repoIndicator = $('#carrot-repo-indicator');
+
+    const characterCount = scannedCharacters.size;
+    const selectedCount = selectedLorebooks.size;
+    const repoCount = characterRepoBooks.size;
+
+    if (characterCount > 0) {
+        repoStatus.text(`${characterCount} characters indexed`);
+        repoDetail.text(`From ${repoCount} repositories`);
+        repoIndicator.removeClass('error warning').addClass('success');
+        $('.carrot-status-repository').addClass('loaded');
+    } else if (selectedCount > 0) {
+        repoStatus.text(`${selectedCount} lorebooks selected`);
+        repoDetail.text('Click to scan for characters');
+        repoIndicator.removeClass('error success').addClass('warning');
+        $('.carrot-status-repository').removeClass('loaded');
+    } else {
+        repoStatus.text('0 characters indexed');
+        repoDetail.text('Click to manage repositories');
+        repoIndicator.removeClass('success warning').addClass('error');
+        $('.carrot-status-repository').removeClass('loaded');
+    }
+
+    // AI Injection Status Panel
+    const injectionStatus = $('#carrot-injection-status');
+    const injectionDetail = $('#carrot-injection-detail');
+    const injectionIndicator = $('#carrot-injection-indicator');
+    const injectionTooltipStatus = $('#carrot-injection-tooltip-status');
+
+    if (!settings.enabled) {
+        injectionStatus.text('Disabled');
+        injectionDetail.text('System disabled');
+        injectionIndicator.removeClass('success warning active').addClass('error');
+        if (injectionTooltipStatus.length) injectionTooltipStatus.text('System Disabled');
+        $('.carrot-status-injection').removeClass('injecting');
+    } else if (!settings.sendToAI) {
+        injectionStatus.text('AI Injection Off');
+        injectionDetail.text('Hover for details');
+        injectionIndicator.removeClass('success error active').addClass('warning');
+        if (injectionTooltipStatus.length) injectionTooltipStatus.text('AI Injection Disabled');
+        $('.carrot-status-injection').removeClass('injecting');
+    } else if (characterCount === 0) {
+        injectionStatus.text('Standby');
+        injectionDetail.text('No characters to inject');
+        injectionIndicator.removeClass('success error active').addClass('warning');
+        if (injectionTooltipStatus.length) injectionTooltipStatus.text('Waiting for character data');
+        $('.carrot-status-injection').removeClass('injecting');
+    } else {
+        injectionStatus.text('Ready');
+        injectionDetail.text(`${characterCount} characters available`);
+        injectionIndicator.removeClass('error warning').addClass('success');
+        if (injectionTooltipStatus.length) injectionTooltipStatus.text(`Ready to inject ${characterCount} characters`);
+        $('.carrot-status-injection').removeClass('injecting');
+    }
+
+    // Pack Manager Status Panel
+    const packStatus = $('#carrot-pack-status');
+    const packDetail = $('#carrot-pack-detail');
+    const packIndicator = $('#carrot-pack-indicator');
+
+    if (!settings.enabled) {
+        packStatus.text('Disabled');
+        packDetail.text('System disabled');
+        packIndicator.removeClass('success warning').addClass('error');
+        $('.carrot-status-packs').removeClass('initialized');
+    } else {
+        // Initialize with default ready state
+        packStatus.text('Ready for management');
+        packDetail.text('Click to install and update packs');
+        packIndicator.removeClass('error warning').addClass('success');
+        $('.carrot-status-packs').addClass('initialized');
+
+        // If we have cached pack data, show more specific status
+        if (window.CarrotKernel && window.CarrotKernel.cachedPackSummary) {
+            const summary = window.CarrotKernel.cachedPackSummary;
+            if (summary.hasUpdates) {
+                packStatus.text('Updates available');
+                packDetail.text('Click to install updates');
+                packIndicator.removeClass('success error').addClass('warning');
+            } else if (summary.totalInstalled > 0) {
+                packStatus.text(`${summary.totalInstalled} packs installed`);
+                packDetail.text('Click to manage packs');
+                packIndicator.removeClass('error warning').addClass('success');
+            }
+        }
+    }
+}
+
 // Initialize extension
 jQuery(async () => {
     try {
@@ -9568,117 +9680,6 @@ async function getLoadoutSettings() {
     };
 }
 
-// Update status panels with current state
-function updateStatusPanels() {
-    const settings = extension_settings[extensionName];
-    
-    // System Status Panel
-    const systemStatus = $('#carrot-system-status');
-    const systemDetail = $('#carrot-system-detail');
-    const systemIndicator = $('#carrot-system-indicator');
-    
-    if (settings.enabled) {
-        systemStatus.text('Active and Ready');
-        systemDetail.text('Click to open tutorial');
-        systemIndicator.removeClass('error warning').addClass('success');
-        $('.carrot-status-system').addClass('initialized');
-    } else {
-        systemStatus.text('Disabled');
-        systemDetail.text('Click to learn how to enable');
-        systemIndicator.removeClass('success warning').addClass('error');
-        $('.carrot-status-system').removeClass('initialized');
-    }
-    
-    // Repository Status Panel
-    const repoStatus = $('#carrot-repo-status');
-    const repoDetail = $('#carrot-repo-detail');
-    const repoIndicator = $('#carrot-repo-indicator');
-    
-    const characterCount = scannedCharacters.size;
-    const selectedCount = selectedLorebooks.size;
-    const repoCount = characterRepoBooks.size;
-    
-    if (characterCount > 0) {
-        repoStatus.text(`${characterCount} characters indexed`);
-        repoDetail.text(`From ${repoCount} repositories`);
-        repoIndicator.removeClass('error warning').addClass('success');
-        $('.carrot-status-repository').addClass('loaded');
-    } else if (selectedCount > 0) {
-        repoStatus.text(`${selectedCount} lorebooks selected`);
-        repoDetail.text('Click to scan for characters');
-        repoIndicator.removeClass('error success').addClass('warning');
-        $('.carrot-status-repository').removeClass('loaded');
-    } else {
-        repoStatus.text('0 characters indexed');
-        repoDetail.text('Click to manage repositories');
-        repoIndicator.removeClass('success warning').addClass('error');
-        $('.carrot-status-repository').removeClass('loaded');
-    }
-    
-    // AI Injection Status Panel
-    const injectionStatus = $('#carrot-injection-status');
-    const injectionDetail = $('#carrot-injection-detail');
-    const injectionIndicator = $('#carrot-injection-indicator');
-    const injectionTooltipStatus = $('#carrot-injection-tooltip-status');
-    
-    if (!settings.enabled) {
-        injectionStatus.text('Disabled');
-        injectionDetail.text('System disabled');
-        injectionIndicator.removeClass('success warning active').addClass('error');
-        if (injectionTooltipStatus.length) injectionTooltipStatus.text('System Disabled');
-        $('.carrot-status-injection').removeClass('injecting');
-    } else if (!settings.sendToAI) {
-        injectionStatus.text('AI Injection Off');
-        injectionDetail.text('Hover for details');
-        injectionIndicator.removeClass('success error active').addClass('warning');
-        if (injectionTooltipStatus.length) injectionTooltipStatus.text('AI Injection Disabled');
-        $('.carrot-status-injection').removeClass('injecting');
-    } else if (characterCount === 0) {
-        injectionStatus.text('Standby');
-        injectionDetail.text('No characters to inject');
-        injectionIndicator.removeClass('success error active').addClass('warning');
-        if (injectionTooltipStatus.length) injectionTooltipStatus.text('Waiting for character data');
-        $('.carrot-status-injection').removeClass('injecting');
-    } else {
-        injectionStatus.text('Ready');
-        injectionDetail.text(`${characterCount} characters available`);
-        injectionIndicator.removeClass('error warning').addClass('success');
-        if (injectionTooltipStatus.length) injectionTooltipStatus.text(`Ready to inject ${characterCount} characters`);
-        $('.carrot-status-injection').removeClass('injecting');
-    }
-    
-    // Pack Manager Status Panel
-    const packStatus = $('#carrot-pack-status');
-    const packDetail = $('#carrot-pack-detail');
-    const packIndicator = $('#carrot-pack-indicator');
-    
-    if (!settings.enabled) {
-        packStatus.text('Disabled');
-        packDetail.text('System disabled');
-        packIndicator.removeClass('success warning').addClass('error');
-        $('.carrot-status-packs').removeClass('initialized');
-    } else {
-        // Initialize with default ready state
-        packStatus.text('Ready for management');
-        packDetail.text('Click to install and update packs');
-        packIndicator.removeClass('error warning').addClass('success');
-        $('.carrot-status-packs').addClass('initialized');
-        
-        // If we have cached pack data, show more specific status
-        if (window.CarrotKernel && window.CarrotKernel.cachedPackSummary) {
-            const summary = window.CarrotKernel.cachedPackSummary;
-            if (summary.hasUpdates) {
-                packStatus.text('Updates available');
-                packDetail.text('Click to install updates');
-                packIndicator.removeClass('success error').addClass('warning');
-            } else if (summary.totalInstalled > 0) {
-                packStatus.text(`${summary.totalInstalled} packs installed`);
-                packDetail.text('Click to manage packs');
-                packIndicator.removeClass('error warning').addClass('success');
-            }
-        }
-    }
-}
 
 // Global CarrotKernel object for UI interactions
 window.CarrotKernel = {
@@ -15855,23 +15856,8 @@ Most common categories:<br/>
             toastr.error('No default available for this template');
         }
     }
-    
-    add_new_macro() {
-        const name = prompt('Enter macro name (e.g., CUSTOM_MACRO):');
-        if (!name) return;
-        
-        const upperName = name.toUpperCase().replace(/[^A-Z_]/g, '_');
-        
-        if (!this.macros) this.macros = {};
-        
-        this.macros[upperName] = {
-            name: upperName,
-            enabled: true,
-            type: 'simple',
-            value: ''
-        };
-        
-        this.create_macro_interface(this.macros[upperName]);
-        toastr.success(`Macro ${upperName} added!`);
-    }
+
 }
+
+// Close the main CarrotKernel object
+};
