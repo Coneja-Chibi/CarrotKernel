@@ -7319,8 +7319,6 @@ jQuery(async () => {
         // Bind settings events
         bindSettingsEvents();
 
-        // 🥕 CARROT ICON CLICK DEBUGGING - Add comprehensive debugging for carrot icon clicks
-        console.log('🥕 CLICK DEBUG: Setting up carrot icon click debugging...');
 
         // Debug all carrot-related icon clicks in world info
         $(document).on('click', '.fa-carrot, .wi_icon[title*="carrot"], .world_entry_icon[title*="carrot"], .carrot-icon', function(e) {
@@ -7368,140 +7366,6 @@ jQuery(async () => {
             });
         });
 
-        // 🔧 CARROT ICON CLICK FIX - Ensure carrot icons work properly
-        function fixCarrotIconClicks() {
-            console.log('🔧 CLICK FIX: Setting up carrot icon click fixes...');
-
-            // Function to ensure world info entry click handlers are properly bound
-            function ensureWorldInfoClickHandlers() {
-                const carrotIcons = document.querySelectorAll('.fa-carrot');
-                console.log(`🔧 CLICK FIX: Found ${carrotIcons.length} carrot icons, ensuring click handlers...`);
-
-                carrotIcons.forEach((icon, index) => {
-                    const worldEntry = icon.closest('.world_entry, .wi_entry, .world_info_entry');
-
-                    if (worldEntry && !icon.dataset.clickFixed) {
-                        console.log(`🔧 CLICK FIX: Fixing click handler for carrot icon ${index + 1}`);
-
-                        // Ensure the icon is clickable
-                        icon.style.cursor = 'pointer';
-                        icon.style.pointerEvents = 'auto';
-
-                        // Add fallback click handler if none exists
-                        if (!icon.onclick && !$(icon).data('events')?.click) {
-                            console.log(`🔧 CLICK FIX: Adding fallback click handler for icon ${index + 1}`);
-
-                            icon.addEventListener('click', function(e) {
-                                console.log('🔧 CLICK FIX: Fallback click handler triggered!', {
-                                    icon: this,
-                                    worldEntry: worldEntry,
-                                    timestamp: new Date().toISOString()
-                                });
-
-                                // Try to trigger the world info entry display
-                                const entryId = worldEntry.dataset.id || worldEntry.id;
-                                const entryUid = worldEntry.dataset.uid;
-
-                                console.log('🔧 CLICK FIX: Attempting to open world info entry:', {
-                                    entryId: entryId,
-                                    entryUid: entryUid,
-                                    worldEntry: worldEntry
-                                });
-
-                                // Try different methods to open the world info entry
-                                if (window.openWorldInfoEntry && entryId) {
-                                    console.log('🔧 CLICK FIX: Using openWorldInfoEntry function');
-                                    window.openWorldInfoEntry(entryId);
-                                } else if (window.editWorldInfoEntry && entryUid) {
-                                    console.log('🔧 CLICK FIX: Using editWorldInfoEntry function');
-                                    window.editWorldInfoEntry(entryUid);
-                                } else if (worldEntry.click) {
-                                    console.log('🔧 CLICK FIX: Triggering world entry click directly');
-                                    worldEntry.click();
-                                } else {
-                                    console.log('🔧 CLICK FIX: Attempting to trigger click event on world entry');
-                                    $(worldEntry).trigger('click');
-                                }
-                            });
-                        }
-
-                        icon.dataset.clickFixed = 'true';
-                    }
-                });
-            }
-
-            // Initial fix - delay to ensure DOM is ready
-            setTimeout(ensureWorldInfoClickHandlers, 500);
-
-            // Fix again when world info changes
-            const observer = new MutationObserver((mutations) => {
-                let shouldFix = false;
-                mutations.forEach((mutation) => {
-                    if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                        for (const node of mutation.addedNodes) {
-                            if (node.nodeType === Node.ELEMENT_NODE &&
-                                (node.classList.contains('world_entry') ||
-                                 node.classList.contains('wi_entry') ||
-                                 node.querySelector('.fa-carrot'))) {
-                                shouldFix = true;
-                                break;
-                            }
-                        }
-                    }
-                });
-
-                if (shouldFix) {
-                    console.log('🔧 CLICK FIX: World info DOM changed, re-applying fixes...');
-                    setTimeout(ensureWorldInfoClickHandlers, 100);
-                }
-            });
-
-            // Observe world info container for changes
-            const worldInfoContainer = document.querySelector('#world_info_entries, .world_entries_container, #worldInfoEntries, .world_info');
-            if (worldInfoContainer) {
-                observer.observe(worldInfoContainer, {
-                    childList: true,
-                    subtree: true
-                });
-                console.log('🔧 CLICK FIX: Monitoring world info container for changes');
-            }
-
-            // Also fix when the world info tab is shown
-            $(document).on('shown.bs.tab', 'a[href="#world_info"]', function() {
-                console.log('🔧 CLICK FIX: World info tab shown, re-applying fixes...');
-                setTimeout(ensureWorldInfoClickHandlers, 200);
-            });
-
-            // Periodic fix as backup
-            setInterval(ensureWorldInfoClickHandlers, 10000); // Every 10 seconds
-
-            console.log('🔧 CLICK FIX: Carrot icon click fixes setup complete');
-        }
-
-        // Initialize debugging and fixes
-        fixCarrotIconClicks();
-
-        // Periodically check for carrot icons and their click handlers
-        setInterval(() => {
-            const carrotIcons = document.querySelectorAll('.fa-carrot, .carrot-icon');
-            if (carrotIcons.length > 0) {
-                console.log(`🥕 PERIODIC DEBUG: Found ${carrotIcons.length} carrot icons on page`);
-                carrotIcons.forEach((icon, index) => {
-                    if (!icon.dataset.debugged) {
-                        console.log(`🥕 PERIODIC DEBUG: New carrot icon detected (${index + 1}):`, {
-                            element: icon,
-                            classes: icon.className,
-                            title: icon.title,
-                            hasClickHandler: !!icon.onclick,
-                            hasEventListeners: !!icon._events || !!$.data(icon, 'events')
-                        });
-                        icon.dataset.debugged = 'true';
-                    }
-                });
-            }
-        }, 5000); // Check every 5 seconds
-
-        console.log('🥕 CLICK DEBUG: Carrot icon debugging setup complete');
 
         // Apply initial master enable state
         applyMasterEnableState(extension_settings[extensionName].enabled);
@@ -16058,3 +15922,128 @@ Most common categories:<br/>
 
 // Close the main CarrotKernel object
 };
+
+// 🥕 WB TRACKER DEBUG - WORLD INFO ENTRY TRIGGER DEBUGGING
+console.log('🥕 WB TRACKER DEBUG: Setting up world info trigger debugging...');
+
+document.addEventListener('click', function(e) {
+    // Log ALL clicks to see what's happening
+    console.log('🥕 WB TRACKER DEBUG: Click detected on element:', {
+        tagName: e.target.tagName,
+        className: e.target.className,
+        classList: Array.from(e.target.classList),
+        hasCarrotClass: e.target.classList.contains('fa-carrot'),
+        id: e.target.id,
+        textContent: e.target.textContent?.substring(0, 50)
+    });
+
+    // Check for carrot icon - either fa-carrot class OR ck-trigger with carrot emoji
+    const isCarrotIcon = e.target.classList.contains('fa-carrot') ||
+                        (e.target.classList.contains('ck-trigger') && e.target.textContent?.includes('🥕'));
+
+    if (isCarrotIcon) {
+        console.log('🥕 WORLDBOOK TRACKER: Carrot clicked - trying to open WorldBook tracker panel...');
+
+        // Check if CarrotKernel has a function to open the tracker
+        console.log('🥕 TRACKER DEBUG: Checking for CarrotKernel tracker functions...');
+        const carrotFunctions = {
+            CarrotKernel: typeof window.CarrotKernel,
+            openTracker: typeof window.CarrotKernel?.openTracker,
+            showTracker: typeof window.CarrotKernel?.showTracker,
+            openWorldBookTracker: typeof window.CarrotKernel?.openWorldBookTracker,
+            showWorldBookTracker: typeof window.CarrotKernel?.showWorldBookTracker,
+            popup: typeof window.CarrotKernel?.showPopup
+        };
+        console.log('🥕 TRACKER DEBUG: Available CarrotKernel functions:', carrotFunctions);
+
+        // Try to find and call the tracker opening function
+        if (window.CarrotKernel) {
+            console.log('🥕 TRACKER DEBUG: CarrotKernel object found, trying to open tracker...');
+
+            // Method 1: Try showPopup with proper parameters
+            if (window.CarrotKernel.showPopup) {
+                console.log('🥕 TRACKER OPEN: Trying CarrotKernel.showPopup with proper parameters...');
+                try {
+                    // Call showPopup with title and content parameters
+                    window.CarrotKernel.showPopup('WorldBook Tracker', '<div class="worldbook-tracker">Loading tracker...</div>');
+                    console.log('✅ TRACKER OPEN: showPopup called successfully');
+                } catch (error) {
+                    console.log('❌ TRACKER OPEN: showPopup failed:', error);
+                }
+            }
+
+            // Method 2: Try openTracker
+            if (window.CarrotKernel.openTracker) {
+                console.log('🥕 TRACKER OPEN: Trying CarrotKernel.openTracker...');
+                try {
+                    window.CarrotKernel.openTracker();
+                    console.log('✅ TRACKER OPEN: openTracker called successfully');
+                } catch (error) {
+                    console.log('❌ TRACKER OPEN: openTracker failed:', error);
+                }
+            }
+
+            // Method 3: Try direct popup call with tracker content
+            if (window.CarrotKernel.showPopup && window.CarrotKernel.generateTrackerHTML) {
+                console.log('🥕 TRACKER OPEN: Trying to generate and show tracker HTML...');
+                try {
+                    const trackerHTML = window.CarrotKernel.generateTrackerHTML();
+                    window.CarrotKernel.showPopup('WorldBook Tracker', trackerHTML);
+                    console.log('✅ TRACKER OPEN: Tracker HTML generated and shown');
+                } catch (error) {
+                    console.log('❌ TRACKER OPEN: Tracker HTML generation failed:', error);
+                }
+            }
+
+            // Method 4: Look for any CarrotKernel methods that might open the tracker
+            console.log('🥕 TRACKER DEBUG: All CarrotKernel methods:', Object.getOwnPropertyNames(window.CarrotKernel));
+        } else {
+            console.log('❌ TRACKER DEBUG: CarrotKernel object not found on window');
+        }
+
+        // Check if the specific ck-panel tracker exists and populate it
+        setTimeout(() => {
+            const ckPanel = document.querySelector('.ck-panel');
+            const ckContent = document.querySelector('.ck-panel .ck-content');
+            const ckBadge = document.querySelector('.ck-panel .ck-header__badge');
+
+            console.log('🥕 PANEL CHECK: ck-panel exists?', !!ckPanel);
+            console.log('🥕 PANEL CHECK: ck-content exists?', !!ckContent);
+            console.log('🥕 PANEL CHECK: ck-badge exists?', !!ckBadge);
+
+            if (ckPanel && ckContent) {
+                console.log('✅ PANEL FOUND: CarrotKernel tracker panel exists');
+                console.log('🥕 PANEL STATUS: Badge shows:', ckBadge?.textContent);
+                console.log('🥕 PANEL STATUS: Content empty?', ckContent.innerHTML.trim() === '');
+
+                // Try to populate the tracker content
+                console.log('🥕 POPULATE: Attempting to populate tracker...');
+
+                // Check if there's a populate function
+                if (window.CarrotKernel && window.CarrotKernel.populateTracker) {
+                    console.log('🥕 POPULATE: Trying CarrotKernel.populateTracker...');
+                    try {
+                        window.CarrotKernel.populateTracker();
+                        console.log('✅ POPULATE: populateTracker called');
+                    } catch (error) {
+                        console.log('❌ POPULATE: populateTracker failed:', error);
+                    }
+                }
+
+                // Check if there's an update function
+                if (window.CarrotKernel && window.CarrotKernel.updateTracker) {
+                    console.log('🥕 POPULATE: Trying CarrotKernel.updateTracker...');
+                    try {
+                        window.CarrotKernel.updateTracker();
+                        console.log('✅ POPULATE: updateTracker called');
+                    } catch (error) {
+                        console.log('❌ POPULATE: updateTracker failed:', error);
+                    }
+                }
+
+            } else {
+                console.log('❌ PANEL NOT FOUND: CarrotKernel tracker panel does not exist');
+            }
+        }, 300);
+    }
+}, true);
