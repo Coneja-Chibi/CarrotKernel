@@ -3487,16 +3487,16 @@ function renderAsThinkingBox(activeCharacters) {
     
     // Use SillyTavern's exact native structure for reasoning blocks (match native appearance exactly)
     const finalHTML = `
-        <details class="mes_reasoning_details" data-state="done" data-type="manual" ${openAttr}>
-            <summary class="mes_reasoning_summary flex-container">
-                <div class="mes_reasoning_header_block flex-container">
-                    <div class="mes_reasoning_header flex-container">
-                        <span class="mes_reasoning_header_title" style="color: var(--SmartThemeQuoteColor);">🥕 BunnyMoTags</span>
-                        <div class="mes_reasoning_arrow fa-solid fa-chevron-up"></div>
+        <details class="carrot-thinking-details" data-state="done" data-type="carrot-thinking" ${openAttr}>
+            <summary class="carrot-thinking-summary flex-container">
+                <div class="carrot-thinking-header-block flex-container">
+                    <div class="carrot-thinking-header flex-container">
+                        <span class="carrot-thinking-header-title" style="color: var(--SmartThemeQuoteColor);">🥕 BunnyMoTags</span>
+                        <div class="carrot-thinking-arrow fa-solid fa-chevron-up"></div>
                     </div>
                 </div>
             </summary>
-            <div class="mes_reasoning">
+            <div class="carrot-thinking-content">
                 ${truncationNote}${content}
             </div>
         </details>
@@ -3756,9 +3756,9 @@ function restoreThinkingBlocksFromChat() {
                         }
                     });
                     
-                    // Mark the message properly
-                    messageElement.classList.add('reasoning');
-                    messageElement.setAttribute('data-reasoning-state', 'done');
+                    // Mark the message as having CarrotKernel thinking content
+                    messageElement.classList.add('carrot-thinking');
+                    messageElement.setAttribute('data-carrot-thinking-state', 'done');
                     
                     restoredCount++;
                 }
@@ -4348,7 +4348,7 @@ function displayCharacterData(injectedCharacters) {
         
         if (lastMessage) {
             // Remove any existing CarrotKernel content (both old broken and new implementations)
-            const existing = lastMessage.querySelector('.carrot-reasoning-details, .mes_reasoning_details[data-type="manual"], .carrot-cards-container');
+            const existing = lastMessage.querySelector('.carrot-reasoning-details, .carrot-thinking-details, .carrot-cards-container');
             if (existing) {
                 CarrotDebug.ui('🗑️ DISPLAY: Removing existing content');
                 existing.remove();
@@ -4388,8 +4388,8 @@ function displayCharacterData(injectedCharacters) {
                     }
                 });
                 
-                // Verify the thinking block was actually added (look for ST's native reasoning class)
-                const insertedElement = lastMessage.querySelector('.mes_reasoning_details[data-type="manual"]');
+                // Verify the thinking block was actually added (look for CarrotKernel thinking class)
+                const insertedElement = lastMessage.querySelector('.carrot-thinking-details');
                 if (extension_settings[extensionName]?.debugMode) {
                     console.log('🔍 CARROT DEBUG: Verification - ST-native thinking block element found:', !!insertedElement);
                 }
@@ -4403,9 +4403,9 @@ function displayCharacterData(injectedCharacters) {
                         });
                     }
                     
-                    // Mark the message as having reasoning for ST's native system
-                    lastMessage.classList.add('reasoning');
-                    lastMessage.setAttribute('data-reasoning-state', 'done');
+                    // Mark the message as having CarrotKernel thinking content (separate from ST reasoning)
+                    lastMessage.classList.add('carrot-thinking');
+                    lastMessage.setAttribute('data-carrot-thinking-state', 'done');
                     
                     // PERSISTENCE: Store character data in message.extra for page refresh survival
                     const messageId = parseInt(lastMessage.getAttribute('mesid'));
@@ -7174,7 +7174,103 @@ jQuery(async () => {
             console.log('🚨 CARROT KERNEL LOADING - NEW CODE VERSION! 🚨');
         }
         CarrotDebug.init('Starting CarrotKernel initialization...');
-        
+
+        // Add CSS for CarrotKernel thinking blocks (exact copy of ST's native reasoning styles)
+        const carrotThinkingCSS = `
+            /* Copy all ST reasoning styles but with carrot-thinking prefixes */
+            .carrot-thinking-details {
+                all: unset;
+                display: block;
+                margin: 0.5rem 0;
+                border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 50%, transparent);
+                border-radius: 0.375rem;
+                background: var(--SmartThemeBlurTintColor);
+                backdrop-filter: blur(var(--SmartThemeBlurStrength));
+                overflow: hidden;
+                max-width: fit-content;
+                width: auto;
+            }
+
+            .carrot-thinking-summary {
+                all: unset;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 0.5rem 0.75rem;
+                cursor: pointer;
+                user-select: none;
+                background: linear-gradient(135deg, transparent, color-mix(in srgb, var(--SmartThemeQuoteColor) 5%, transparent));
+                border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 30%, transparent);
+                transition: all 0.2s ease;
+                list-style: none;
+                min-height: 1.75rem;
+            }
+
+            .carrot-thinking-summary:hover {
+                background: color-mix(in srgb, var(--SmartThemeQuoteColor) 10%, transparent);
+            }
+
+            .carrot-thinking-summary::marker,
+            .carrot-thinking-summary::-webkit-details-marker {
+                display: none;
+            }
+
+            .carrot-thinking-header-block {
+                display: flex;
+                align-items: center;
+                flex: 1;
+            }
+
+            .carrot-thinking-header {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                flex: 1;
+            }
+
+            .carrot-thinking-header-title {
+                font-size: 0.875rem;
+                font-weight: 600;
+                color: var(--SmartThemeBodyColor);
+                opacity: 0.9;
+            }
+
+            .carrot-thinking-arrow {
+                font-size: 0.75rem;
+                color: var(--SmartThemeQuoteColor);
+                opacity: 0.7;
+                transition: transform 0.2s ease;
+                margin-left: auto;
+            }
+
+            .carrot-thinking-details[open] .carrot-thinking-arrow {
+                transform: rotate(180deg);
+            }
+
+            .carrot-thinking-content {
+                padding: 1rem;
+                color: var(--SmartThemeBodyColor);
+                line-height: 1.6;
+                background: color-mix(in srgb, var(--SmartThemeChatTintColor) 40%, transparent);
+                border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 20%, transparent);
+            }
+
+            /* Match ST's hover behavior - thinking boxes fade when not hovered */
+            .carrot-thinking-details {
+                opacity: 0.3;
+                transition: opacity 0.2s ease;
+            }
+
+            .mes:hover .carrot-thinking-details,
+            .carrot-thinking-details:hover {
+                opacity: 1;
+            }
+        `;
+
+        const styleElement = document.createElement('style');
+        styleElement.textContent = carrotThinkingCSS;
+        document.head.appendChild(styleElement);
+
         // Initialize context and storage managers first
         CarrotContext = new CarrotContextManager();
         await CarrotContext.initialize();
@@ -7526,7 +7622,7 @@ jQuery(async () => {
                 
                 // Only restore if we're in thinking mode and this message doesn't already have the thinking block
                 if (settings.displayMode === 'thinking') {
-                    const existingThinkingBlock = document.querySelector(`[mesid="${messageId}"] .mes_reasoning_details[data-type="manual"]`);
+                    const existingThinkingBlock = document.querySelector(`[mesid="${messageId}"] .carrot-thinking-details`);
                     
                     if (!existingThinkingBlock && storedData.characters && storedData.characters.length > 0) {
                         CarrotDebug.ui('🔄 PERSISTENCE: Restoring thinking block for message', {
