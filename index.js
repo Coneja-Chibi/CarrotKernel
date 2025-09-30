@@ -7814,20 +7814,54 @@ jQuery(async () => {
             }
 
             // The entire BunnymoTags block is the complete data
-            // DO NOT extract or append linguistics separately - they're already inside!
-            const completeCharacterData = bunnymoBlock.trim();
+            let completeCharacterData = bunnymoBlock.trim();
+
+            // BACKWARDS COMPATIBILITY: Check if Linguistics is inside BunnymoTags
+            const hasLinguisticsInside = completeCharacterData.includes('<Linguistics>') || completeCharacterData.includes('<linguistics>');
+
+            // If NO linguistics inside, look for standalone Linguistics blocks in the full message (old format)
+            if (!hasLinguisticsInside) {
+                console.log('🐰 BATCH PARSER: No linguistics found inside BunnymoTags, checking for standalone blocks (old format)...');
+
+                // Try to find a standalone Linguistics block near this character's block
+                const linguisticsRegexes = [
+                    /<Linguistics>(.*?)<\/Linguistics>/gis,
+                    /<linguistics>(.*?)<\/linguistics>/gis,
+                    /<LINGUISTICS>(.*?)<\/LINGUISTICS>/gis
+                ];
+
+                // Find the position of this BunnymoTags block in the full message
+                const blockPosition = fullMessageText.indexOf(bunnymoBlock);
+
+                // Search for linguistics blocks near this position (within 1000 chars before or after)
+                const searchStart = Math.max(0, blockPosition - 1000);
+                const searchEnd = Math.min(fullMessageText.length, blockPosition + bunnymoBlock.length + 1000);
+                const searchArea = fullMessageText.substring(searchStart, searchEnd);
+
+                for (const regex of linguisticsRegexes) {
+                    const matches = [...searchArea.matchAll(regex)];
+                    if (matches.length > 0) {
+                        // Found a standalone linguistics block - append it
+                        const linguisticsBlock = matches[0][0].trim();
+                        console.log('🐰 BATCH PARSER: Found standalone Linguistics block (old format), appending...');
+                        completeCharacterData += '\n\n' + linguisticsBlock;
+                        break;
+                    }
+                }
+            }
 
             console.log('🐰 BATCH PARSER: Extraction complete', {
                 characterName,
                 dataLength: completeCharacterData.length,
-                containsLinguistics: completeCharacterData.includes('<Linguistics>') || completeCharacterData.includes('<linguistics>')
+                containsLinguistics: completeCharacterData.includes('<Linguistics>') || completeCharacterData.includes('<linguistics>'),
+                usedOldFormat: !hasLinguisticsInside && (completeCharacterData.includes('<Linguistics>') || completeCharacterData.includes('<linguistics>'))
             });
 
             return {
                 name: characterName,
-                tags: completeCharacterData, // Complete BunnymoTags block as-is
+                tags: completeCharacterData, // Complete BunnymoTags block as-is (with appended linguistics if old format)
                 bunnymoTags: completeCharacterData, // Same
-                linguistics: '', // Don't separate - it's already inside
+                linguistics: '', // Don't separate - it's already inside or appended
                 fullText: fullMessageText
             };
         }
