@@ -1,11 +1,28 @@
 import { eventSource, event_types, chat, saveSettingsDebounced, chat_metadata, addOneMessage } from '../../../../script.js';
 import { extension_settings, getContext, writeExtensionField, saveMetadataDebounced } from '../../../extensions.js';
-import { loadWorldInfo, world_names } from '../../../world-info.js';
+import { loadWorldInfo, world_names, createNewWorldInfo, createWorldInfoEntry, saveWorldInfo, updateWorldInfoList, METADATA_KEY } from '../../../world-info.js';
 import { executeSlashCommandsWithOptions } from '../../../slash-commands.js';
 import { getMessageTimeStamp } from '../../../RossAscends-mods.js';
 import { CarrotWorldBookTracker } from './worldbook-tracker.js';
 
 const extensionName = 'CarrotKernel';
+
+// EXACT COPY of qvink_memory button system
+const baby_bunny_button_class = `${extensionName}_baby_bunny_button`;
+
+// Make button class globally accessible for debugging
+window.baby_bunny_button_class = baby_bunny_button_class;
+
+// Make functions globally accessible for debugging
+window.initialize_baby_bunny_message_button = function() {
+    return initialize_baby_bunny_message_button();
+};
+window.add_baby_bunny_button_to_message = function(messageId) {
+    return add_baby_bunny_button_to_message(messageId);
+};
+window.add_baby_bunny_buttons_to_all_existing_messages = function() {
+    return add_baby_bunny_buttons_to_all_existing_messages();
+};
 
 // =============================================================================
 // CARROT SHEET COMMAND SYSTEM 🥕
@@ -2896,7 +2913,8 @@ const defaultSettings = {
     injectionRole: 'system',
     maxCharactersShown: 6,
     debugMode: false,
-    filterFromContext: true  // Hide BunnyMoTags from AI context (like ST's reasoning system)
+    filterFromContext: true,  // Hide BunnyMoTags from AI context (like ST's reasoning system)
+    babyBunnyMode: false     // 🐰 Baby Bunny Mode - guided automation for sheet processing
 };
 
 // Debug logging function - now uses centralized CarrotDebug module
@@ -6818,57 +6836,83 @@ function initializePersistentTagsDisplay(messageElement) {
 // Render persistent BunnyMoTags with native ST reasoning box styling
 function renderPersistentBunnyMoTags(mesText) {
     const settings = extension_settings[extensionName];
-    
-    // Extract the BunnyMoTags content
+
+    // Extract all BunnyMoTags blocks
     let content = mesText.innerHTML;
-    const bunnyTagsMatch = content.match(/&lt;BunnyMoTags&gt;([\s\S]*?)&lt;\/BunnyMoTags&gt;/);
-    
-    if (!bunnyTagsMatch) return;
-    
-    const tagsContent = bunnyTagsMatch[1];
-    const parsedCharacters = parseBunnyMoTagsContent(tagsContent);
-    
-    // Also extract Linguistics blocks and add to character data
-    const linguisticsMatch = content.match(/&lt;linguistics&gt;([\s\S]*?)&lt;\/linguistics&gt;/i);
-    if (linguisticsMatch && parsedCharacters.length > 0) {
-        const linguisticsContent = linguisticsMatch[1].trim();
-        
-        // Extract LING: tags from the description
-        const lingMatches = linguisticsContent.match(/&lt;LING:([^&]+)&gt;/g);
-        if (lingMatches) {
-            // Add extracted LING tags to the first character
-            if (!parsedCharacters[0].tags.has('ling')) {
-                parsedCharacters[0].tags.set('ling', new Set());
+    const bunnyTagsRegex = /&lt;BunnyMoTags&gt;([\s\S]*?)&lt;\/BunnyMoTags&gt;/g;
+    const bunnyTagsMatches = [...content.matchAll(bunnyTagsRegex)];
+
+    if (bunnyTagsMatches.length === 0) return;
+
+    // Extract all Linguistics blocks
+    const linguisticsRegex = /&lt;linguistics&gt;([\s\S]*?)&lt;\/linguistics&gt;/gi;
+    const linguisticsMatches = [...content.matchAll(linguisticsRegex)];
+
+    // Build replacements array to do all replacements in one pass
+    const replacements = [];
+
+    // Process each BunnyMoTags block
+    bunnyTagsMatches.forEach((bunnyTagsMatch, blockIndex) => {
+        const tagsContent = bunnyTagsMatch[1];
+        const parsedCharacters = parseBunnyMoTagsContent(tagsContent);
+
+        // Match linguistics block with the corresponding character block
+        if (linguisticsMatches[blockIndex] && parsedCharacters.length > 0) {
+            const linguisticsContent = linguisticsMatches[blockIndex][1].trim();
+
+            // Extract LING: tags from the description
+            const lingMatches = linguisticsContent.match(/&lt;LING:([^&]+)&gt;/g);
+            if (lingMatches) {
+                // Add extracted LING tags to the first character in this block
+                if (!parsedCharacters[0].tags.has('ling')) {
+                    parsedCharacters[0].tags.set('ling', new Set());
+                }
+
+                lingMatches.forEach(match => {
+                    const lingTag = match.replace(/&lt;LING:([^&]+)&gt;/, '$1');
+                    parsedCharacters[0].tags.get('ling').add(lingTag);
+                });
             }
-            
-            lingMatches.forEach(match => {
-                const lingTag = match.replace(/&lt;LING:([^&]+)&gt;/, '$1');
-                parsedCharacters[0].tags.get('ling').add(lingTag);
-            });
+
+            // Add full linguistics description as a special section
+            if (!parsedCharacters[0].tags.has('linguistics_description')) {
+                parsedCharacters[0].tags.set('linguistics_description', new Set());
+            }
+            // Clean up the description (remove HTML entities and LING tags for display)
+            const cleanDescription = linguisticsContent
+                .replace(/&lt;LING:[^&]+&gt;/g, '')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .trim();
+            parsedCharacters[0].tags.get('linguistics_description').add(cleanDescription);
         }
-        
-        // Add full linguistics description as a special section
-        if (!parsedCharacters[0].tags.has('linguistics_description')) {
-            parsedCharacters[0].tags.set('linguistics_description', new Set());
-        }
-        // Clean up the description (remove HTML entities and LING tags for display)
-        const cleanDescription = linguisticsContent
-            .replace(/&lt;LING:[^&]+&gt;/g, '')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .trim();
-        parsedCharacters[0].tags.get('linguistics_description').add(cleanDescription);
-    }
-    
-    if (parsedCharacters.length === 0) return;
-    
-    // Create native ST reasoning-style block with individual character collapsibility
-    const reasoningBlock = createNativeBunnyMoTagsBlock(parsedCharacters, settings.autoExpand);
-    
-    // Replace the raw tags with the rendered block
-    content = content.replace(bunnyTagsMatch[0], reasoningBlock);
+
+        if (parsedCharacters.length === 0) return;
+
+        // Create native ST reasoning-style block with individual character collapsibility
+        const reasoningBlock = createNativeBunnyMoTagsBlock(parsedCharacters, settings.autoExpand);
+
+        // Store replacement data
+        replacements.push({
+            original: bunnyTagsMatch[0],
+            replacement: reasoningBlock,
+            index: bunnyTagsMatch.index
+        });
+    });
+
+    // Sort replacements by index in reverse order (work backwards to maintain positions)
+    replacements.sort((a, b) => b.index - a.index);
+
+    // Apply all replacements
+    replacements.forEach(rep => {
+        content = content.substring(0, rep.index) + rep.replacement + content.substring(rep.index + rep.original.length);
+    });
+
+    // Replace all Linguistics blocks (they're now integrated into BunnyMoTags)
+    content = content.replace(linguisticsRegex, '');
+
     mesText.innerHTML = content;
-    
+
     // Initialize interactivity
     initializeBunnyMoTagsInteractivity(mesText);
 }
@@ -7462,6 +7506,2053 @@ jQuery(async () => {
             });
         });
 
+        // =============================================================================
+        // 🐰 BABY BUNNY MODE - GUIDED AUTOMATION SYSTEM
+        // =============================================================================
+
+        // Check for completed BunnyMo sheets and trigger guided automation
+        async function checkForCompletedSheets(message, messageId) {
+            console.log('🐰 BABY BUNNY DEBUG: checkForCompletedSheets called', {
+                messageId: messageId,
+                hasMessage: !!message,
+                hasMessageText: !!message?.mes,
+                messageType: typeof message?.mes,
+                isUser: message?.is_user,
+                messagePreview: message?.mes?.substring(0, 200) + '...'
+            });
+
+            if (!message?.mes || typeof message.mes !== 'string') {
+                console.log('🐰 BABY BUNNY DEBUG: Skipping - no valid message text');
+                return;
+            }
+
+            const messageText = message.mes;
+
+            // STANDARDIZED EXTRACTION: Look for ALL BunnymoTags and Linguistics blocks
+            const extractedData = extractAllSheetData(messageText);
+
+            console.log('🐰 BABY BUNNY DEBUG: Standardized extraction results', {
+                messageLength: messageText.length,
+                bunnymoTagsFound: extractedData.bunnymoTags.length,
+                linguisticsFound: extractedData.linguistics.length,
+                totalBlocks: extractedData.bunnymoTags.length + extractedData.linguistics.length
+            });
+
+            if (extractedData.bunnymoTags.length === 0 && extractedData.linguistics.length === 0) {
+                console.log('🐰 BABY BUNNY DEBUG: No BunnymoTags or Linguistics blocks found');
+                return;
+            }
+
+            CarrotDebug.ui('🐰 Baby Bunny Mode: Detected completed sheet data', {
+                messageId: messageId,
+                bunnymoTagsCount: extractedData.bunnymoTags.length,
+                linguisticsCount: extractedData.linguistics.length,
+                messageLength: messageText.length
+            });
+
+            // Extract character data from all found blocks
+            const characterData = [];
+
+            // Process each BunnymoTags block with batch-specific parser
+            for (const bunnymoBlock of extractedData.bunnymoTags) {
+                console.log('🐰 BABY BUNNY DEBUG: Processing BunnymoTags block', {
+                    fullContent: bunnymoBlock.substring(0, 100) + '...',
+                    fullLength: bunnymoBlock.length
+                });
+
+                const characterInfo = extractCharacterFromBatchBlock(bunnymoBlock, messageText);
+                if (characterInfo) {
+                    characterData.push(characterInfo);
+                }
+            }
+
+            // If no BunnymoTags but we have Linguistics, create character from Linguistics
+            if (extractedData.bunnymoTags.length === 0 && extractedData.linguistics.length > 0) {
+                console.log('🐰 BABY BUNNY DEBUG: No BunnymoTags found, creating character from Linguistics only');
+                const characterInfo = extractCharacterFromSheetData('', extractedData.linguistics, messageText);
+                if (characterInfo) {
+                    characterData.push(characterInfo);
+                }
+            }
+
+            if (characterData.length > 0) {
+                console.log('🐰 BABY BUNNY DEBUG: About to show popup for characters', {
+                    characterCount: characterData.length,
+                    characters: characterData.map(c => ({ name: c.name, tagsLength: c.tags.length }))
+                });
+
+                // If multiple characters found, show batch popup
+                if (characterData.length > 1) {
+                    console.log('🐰 BABY BUNNY DEBUG: Multiple characters detected, showing batch popup');
+                    await showBatchBabyBunnyPopup(characterData);
+                } else {
+                    // Single character - show individual popup
+                    console.log('🐰 BABY BUNNY DEBUG: Calling showBabyBunnyPopup for character:', characterData[0].name);
+                    await showBabyBunnyPopup(characterData[0]);
+                    console.log('🐰 BABY BUNNY DEBUG: showBabyBunnyPopup completed for character:', characterData[0].name);
+                }
+            } else {
+                console.log('🐰 BABY BUNNY DEBUG: No character data found to show popup for');
+            }
+        }
+
+        // STANDARDIZED SHEET DATA EXTRACTION
+        function extractAllSheetData(messageText) {
+            const result = {
+                bunnymoTags: [],
+                linguistics: []
+            };
+
+            console.log('🐰 RAW MESSAGE DEBUG:', {
+                messageLength: messageText.length,
+                containsBunnymoTags: messageText.includes('BunnymoTags'),
+                bunnymoTagsCount: (messageText.match(/<BunnymoTags>/gi) || []).length,
+                messageSample: messageText.substring(messageText.indexOf('BunnymoTags') - 100, messageText.indexOf('BunnymoTags') + 500)
+            });
+
+            // Extract ALL BunnymoTags blocks (case-insensitive, flexible spacing)
+            const bunnymoRegexes = [
+                /<BunnymoTags>(.*?)<\/BunnymoTags>/gis,
+                /<bunnymotags>(.*?)<\/bunnymotags>/gis,
+                /<BunnyMoTags>(.*?)<\/BunnyMoTags>/gis,
+                /<bunnyMoTags>(.*?)<\/bunnyMoTags>/gis
+            ];
+
+            // Collect all BunnymoTags blocks first (deduplicate by content)
+            let allBlocks = [];
+            const seenBlocks = new Set();
+            for (const regex of bunnymoRegexes) {
+                const matches = [...messageText.matchAll(regex)];
+                console.log(`🐰 REGEX DEBUG: ${regex.source} found ${matches.length} matches`);
+                for (const match of matches) {
+                    const fullBlock = match[0].trim();
+                    // Normalize for comparison (lowercase, remove extra whitespace)
+                    const normalizedBlock = fullBlock.toLowerCase().replace(/\s+/g, ' ');
+
+                    if (!seenBlocks.has(normalizedBlock)) {
+                        seenBlocks.add(normalizedBlock);
+                        allBlocks.push(fullBlock);
+                        console.log(`🐰 BLOCK FOUND: ${fullBlock.substring(0, 100)}... (${fullBlock.length} chars)`);
+                    } else {
+                        console.log(`🐰 DUPLICATE BLOCK SKIPPED: ${fullBlock.substring(0, 50)}...`);
+                    }
+                }
+            }
+
+            // FALLBACK PARSER: If we found fewer than expected, try to find unclosed tags
+            if (allBlocks.length === 0 || (messageText.match(/<BunnymoTags>/gi) || []).length > allBlocks.length) {
+                console.log('🐰 FALLBACK PARSER: Detected unclosed or partial BunnymoTags, attempting recovery...');
+
+                // Find all opening tags and try to extract content until the next opening tag or end of message
+                const openingTagPattern = /<BunnymoTags>/gi;
+                const openingMatches = [...messageText.matchAll(openingTagPattern)];
+
+                console.log(`🐰 FALLBACK: Found ${openingMatches.length} opening tags`);
+
+                for (let i = 0; i < openingMatches.length; i++) {
+                    const startPos = openingMatches[i].index;
+                    const tagStart = startPos + openingMatches[i][0].length;
+
+                    // Find the end position: either a closing tag, the next opening tag, or end of message
+                    let endPos;
+                    const closingTagAfter = messageText.indexOf('</BunnymoTags>', tagStart);
+                    const nextOpeningTag = i < openingMatches.length - 1 ? openingMatches[i + 1].index : -1;
+
+                    if (closingTagAfter !== -1) {
+                        // Found a closing tag
+                        endPos = closingTagAfter + '</BunnymoTags>'.length;
+                    } else if (nextOpeningTag !== -1) {
+                        // No closing tag, but there's another opening tag - extract up to it
+                        endPos = nextOpeningTag;
+                        console.log('🐰 FALLBACK: No closing tag found, extracting until next opening tag');
+                    } else {
+                        // Last tag in message, no closing tag - extract to end
+                        endPos = messageText.length;
+                        console.log('🐰 FALLBACK: No closing tag found, extracting to end of message');
+                    }
+
+                    // Extract the block
+                    let extractedBlock = messageText.substring(startPos, endPos).trim();
+
+                    // Auto-close unclosed Linguistics tags (case-insensitive)
+                    const linguisticsOpenPattern = /<Linguistics>/gi;
+                    const linguisticsClosePattern = /<\/Linguistics>/gi;
+                    const openLingMatches = [...extractedBlock.matchAll(linguisticsOpenPattern)];
+                    const closeLingMatches = [...extractedBlock.matchAll(linguisticsClosePattern)];
+
+                    if (openLingMatches.length > closeLingMatches.length) {
+                        const unclosedCount = openLingMatches.length - closeLingMatches.length;
+                        console.log(`🐰 FALLBACK: Found ${unclosedCount} unclosed <Linguistics> tag(s), adding closing tag(s)`);
+
+                        // Add missing closing tags before the BunnymoTags closing tag
+                        for (let j = 0; j < unclosedCount; j++) {
+                            // Insert before </BunnymoTags> if it exists, otherwise at the end
+                            if (extractedBlock.includes('</BunnymoTags>')) {
+                                extractedBlock = extractedBlock.replace('</BunnymoTags>', '</linguistics></BunnymoTags>');
+                            } else {
+                                extractedBlock += '</linguistics>';
+                            }
+                        }
+                    }
+
+                    // If we didn't find a closing BunnymoTags tag, add one
+                    if (!extractedBlock.endsWith('</BunnymoTags>')) {
+                        extractedBlock += '</BunnymoTags>';
+                        console.log('🐰 FALLBACK: Added missing </BunnymoTags> closing tag');
+                    }
+
+                    // Check for duplicates
+                    const normalizedBlock = extractedBlock.toLowerCase().replace(/\s+/g, ' ');
+                    if (!seenBlocks.has(normalizedBlock)) {
+                        seenBlocks.add(normalizedBlock);
+                        allBlocks.push(extractedBlock);
+                        console.log(`🐰 FALLBACK: Recovered block ${i + 1}: ${extractedBlock.substring(0, 100)}... (${extractedBlock.length} chars)`);
+                    }
+                }
+            }
+
+            // Check if this looks like multiple separate character sheets vs fullsheet duplicates
+            if (allBlocks.length > 1) {
+                // Detect if blocks have different <Name:> tags (indicating separate characters)
+                const blockNames = allBlocks.map(block => {
+                    const nameMatch = block.match(/<Name:([^>]+)>/i);
+                    return nameMatch ? nameMatch[1].trim() : null;
+                }).filter(n => n);
+
+                const uniqueNames = new Set(blockNames);
+
+                if (uniqueNames.size > 1) {
+                    // Multiple different character names = separate character sheets
+                    console.log('🐰 MULTI-CHARACTER DETECTION: Found separate character sheets:', {
+                        totalBlocks: allBlocks.length,
+                        characterNames: Array.from(uniqueNames)
+                    });
+                    // Use ALL blocks
+                    result.bunnymoTags.push(...allBlocks);
+                } else {
+                    // Same character name or no names = fullsheet format duplicates
+                    // Sort by length (largest first) and complexity (most tags)
+                    allBlocks.sort((a, b) => {
+                        const aTagCount = (a.match(/</g) || []).length;
+                        const bTagCount = (b.match(/</g) || []).length;
+                        const aLength = a.length;
+                        const bLength = b.length;
+
+                        // Prefer blocks with more tags, then by length
+                        if (aTagCount !== bTagCount) return bTagCount - aTagCount;
+                        return bLength - aLength;
+                    });
+
+                    console.log('🐰 FULLSHEET DETECTION: Multiple BunnymoTags blocks found, prioritizing largest/most complete:', {
+                        totalBlocks: allBlocks.length,
+                        blockSizes: allBlocks.map(b => `${b.length} chars, ${(b.match(/</g) || []).length} tags`),
+                        selectedBlock: `${allBlocks[0].length} chars, ${(allBlocks[0].match(/</g) || []).length} tags`
+                    });
+
+                    // Use only the most complete block (TAG SYNTHESIS)
+                    result.bunnymoTags.push(allBlocks[0]);
+                }
+            } else if (allBlocks.length === 1) {
+                // Single block, use it
+                result.bunnymoTags.push(allBlocks[0]);
+            }
+
+            // Extract ALL Linguistics blocks (case-insensitive, flexible spacing)
+            const linguisticsRegexes = [
+                /<Linguistics>(.*?)<\/Linguistics>/gis,
+                /<linguistics>(.*?)<\/linguistics>/gis,
+                /<LINGUISTICS>(.*?)<\/LINGUISTICS>/gis
+            ];
+
+            for (const regex of linguisticsRegexes) {
+                const matches = [...messageText.matchAll(regex)];
+                for (const match of matches) {
+                    const fullBlock = match[0].trim();
+                    if (!result.linguistics.includes(fullBlock)) {
+                        result.linguistics.push(fullBlock);
+                    }
+                }
+            }
+
+            console.log('🐰 STANDARDIZED EXTRACTION DEBUG:', {
+                bunnymoTagsFound: result.bunnymoTags.length,
+                linguisticsFound: result.linguistics.length,
+                bunnymoSamples: result.bunnymoTags.map(b => b.substring(0, 50) + '...'),
+                linguisticsSamples: result.linguistics.map(l => l.substring(0, 50) + '...'),
+                bunnymoNames: result.bunnymoTags.map(b => {
+                    const nameMatch = b.match(/<Name:([^>]+)>/i);
+                    return nameMatch ? nameMatch[1].trim() : 'NO NAME';
+                })
+            });
+
+            return result;
+        }
+
+        // BATCH-SPECIFIC: Extract character from a single BunnymoTags block
+        // This parser treats the entire BunnymoTags block as complete - no appending
+        function extractCharacterFromBatchBlock(bunnymoBlock, fullMessageText) {
+            console.log('🐰 BATCH PARSER: Processing block', {
+                blockLength: bunnymoBlock.length,
+                preview: bunnymoBlock.substring(0, 100) + '...'
+            });
+
+            // Extract character name from <Name:> tag
+            let characterName = '';
+            const nameMatch = bunnymoBlock.match(/<Name:([^>]+)>/i);
+            if (nameMatch) {
+                characterName = nameMatch[1].trim();
+                console.log('🐰 BATCH PARSER: Found character name:', characterName);
+            } else {
+                // Fallback to trying to extract from linguistics or context
+                const lingMatch = bunnymoBlock.match(/([A-Z][a-z]+)'s\s+primary\s+mode\s+of\s+speech/i);
+                if (lingMatch) {
+                    characterName = lingMatch[1].trim();
+                } else {
+                    characterName = 'Character';
+                }
+                console.log('🐰 BATCH PARSER: Using fallback name:', characterName);
+            }
+
+            // The entire BunnymoTags block is the complete data
+            // DO NOT extract or append linguistics separately - they're already inside!
+            const completeCharacterData = bunnymoBlock.trim();
+
+            console.log('🐰 BATCH PARSER: Extraction complete', {
+                characterName,
+                dataLength: completeCharacterData.length,
+                containsLinguistics: completeCharacterData.includes('<Linguistics>') || completeCharacterData.includes('<linguistics>')
+            });
+
+            return {
+                name: characterName,
+                tags: completeCharacterData, // Complete BunnymoTags block as-is
+                bunnymoTags: completeCharacterData, // Same
+                linguistics: '', // Don't separate - it's already inside
+                fullText: fullMessageText
+            };
+        }
+
+        // Extract character information from standardized sheet data
+        function extractCharacterFromSheetData(bunnymoBlock, linguisticsBlocks, fullMessageText) {
+            // Try to find character name from multiple sources
+            let characterName = '';
+
+            // First priority: Look for <Name:> tag in BunnymoTags
+            if (bunnymoBlock) {
+                const nameMatch = bunnymoBlock.match(/<Name:([^>]+)>/i);
+                if (nameMatch) {
+                    characterName = nameMatch[1].trim();
+                    console.log('🐰 NAME EXTRACTION: Found from BunnymoTags <Name:> tag:', characterName);
+                }
+            }
+
+            // Second priority: Look for name in Linguistics blocks
+            if (!characterName && linguisticsBlocks.length > 0) {
+                for (const linguisticsBlock of linguisticsBlocks) {
+                    const patterns = [
+                        /([A-Z][a-z]+)'s\s+primary\s+mode\s+of\s+speech/i,
+                        /Character\s+uses\s+([A-Z][a-z]+)/i,
+                        /([A-Z][a-z]+)\s+uses\s+<LING:/i
+                    ];
+
+                    for (const pattern of patterns) {
+                        const match = linguisticsBlock.match(pattern);
+                        if (match) {
+                            characterName = match[1].trim();
+                            console.log('🐰 NAME EXTRACTION: Found from Linguistics:', { pattern: pattern.source, name: characterName });
+                            break;
+                        }
+                    }
+                    if (characterName) break;
+                }
+            }
+
+            // Third priority: Look in full message text
+            if (!characterName) {
+                const patterns = [
+                    /Character:\s*([A-Za-z_\s]+)/i,
+                    /Name.*?:\s*([A-Za-z_\s]+)/i,
+                    /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)'s\s+(?:sheet|character)/i
+                ];
+
+                for (const pattern of patterns) {
+                    const match = fullMessageText.match(pattern);
+                    if (match) {
+                        characterName = match[1].trim();
+                        console.log('🐰 NAME EXTRACTION: Found from full message:', { pattern: pattern.source, name: characterName });
+                        break;
+                    }
+                }
+            }
+
+            // Fallback name
+            if (!characterName) {
+                characterName = 'Character';
+                console.log('🐰 NAME EXTRACTION: Using fallback name');
+            }
+
+            // Combine all data
+            let completeCharacterData = '';
+
+            if (bunnymoBlock) {
+                completeCharacterData = bunnymoBlock;
+            }
+
+            if (linguisticsBlocks.length > 0) {
+                if (completeCharacterData) {
+                    completeCharacterData += '\n\n';
+                }
+                completeCharacterData += linguisticsBlocks.join('\n\n');
+            }
+
+            console.log('🐰 SHEET DATA EXTRACTION COMPLETE:', {
+                characterName: characterName,
+                hasBunnymoTags: !!bunnymoBlock,
+                linguisticsCount: linguisticsBlocks.length,
+                totalDataLength: completeCharacterData.length
+            });
+
+            return {
+                name: characterName,
+                tags: completeCharacterData, // Complete combined data
+                bunnymoTags: bunnymoBlock || '', // Just BunnymoTags
+                linguistics: linguisticsBlocks.join('\n\n') || '', // All Linguistics combined
+                fullText: fullMessageText
+            };
+        }
+
+        // Extract character information from BunnymoTags content
+        function extractCharacterFromTags(tagsContent, fullMessageText, fullTagsContent) {
+            // Try to find character name from tags
+            let characterName = '';
+
+            // Look for <Name:> tag first (check both inner content and full content)
+            let nameMatch = tagsContent.match(/<Name:([^>]+)>/i);
+            if (!nameMatch) {
+                nameMatch = fullTagsContent.match(/<Name:([^>]+)>/i);
+            }
+
+            if (nameMatch) {
+                characterName = nameMatch[1].trim();
+                console.log('🐰 BABY BUNNY DEBUG: Found name from tags:', characterName);
+            } else {
+                // Try different name patterns
+                const patterns = [
+                    /([A-Z][a-z]+)'s\s+primary\s+mode\s+of\s+speech/i, // From Linguistics section
+                    /Character\s+uses\s+.*?([A-Z][a-z]+)/i,
+                    /Character:\s*([A-Za-z_\s]+)/i,
+                    /Name.*?:\s*([A-Za-z_\s]+)/i,
+                    /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)'s\s+(?:sheet|character)/i,
+                    /<[^>]*>\s*([A-Z][a-z]+)/i // First capitalized word in tags
+                ];
+
+                for (const pattern of patterns) {
+                    const match = fullMessageText.match(pattern);
+                    if (match) {
+                        characterName = match[1].trim();
+                        console.log('🐰 BABY BUNNY DEBUG: Found name from pattern:', { pattern: pattern.source, name: characterName });
+                        break;
+                    }
+                }
+
+                if (!characterName) {
+                    characterName = 'Character';
+                    console.log('🐰 BABY BUNNY DEBUG: Using fallback name');
+                }
+            }
+
+            console.log('🐰 BABY BUNNY DEBUG: Character extraction', {
+                characterName: characterName,
+                tagsContentLength: tagsContent.length,
+                fullTagsContentLength: fullTagsContent.length,
+                usingFullContent: true
+            });
+
+            // Extract linguistics information if present
+            let linguisticsContent = '';
+            const linguisticsRegex = /<[lL]inguistics>\s*(.*?)\s*<\/[lL]inguistics>/gis;
+            const linguisticsMatch = fullMessageText.match(linguisticsRegex);
+            if (linguisticsMatch) {
+                linguisticsContent = linguisticsMatch[0]; // Include the full linguistics tags
+            }
+
+            // Combine BunnymoTags and Linguistics for complete character data
+            let completeCharacterData = fullTagsContent;
+            if (linguisticsContent) {
+                completeCharacterData += '\n\n' + linguisticsContent;
+            }
+
+            return {
+                name: characterName,
+                tags: completeCharacterData, // Include both BunnymoTags and Linguistics
+                bunnymoTags: fullTagsContent, // Just the BunnymoTags for editing
+                linguistics: linguisticsContent, // Just the linguistics for editing
+                fullText: fullMessageText
+            };
+        }
+
+        // Show comprehensive batch configuration popup for multiple characters
+        async function showBatchBabyBunnyPopup(charactersData) {
+            return new Promise(async (resolve) => {
+                const availableLorebooks = world_names?.length ? world_names : [];
+                const lorebookOptions = availableLorebooks.map(name =>
+                    `<option value="${name}">${name}</option>`
+                ).join('');
+
+                // Build character configuration sections - COLLAPSED by default
+                const characterSections = charactersData.map((char, index) => {
+                    const displayTags = char.tags
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/&lt;([^&]+)&gt;/g, '<span style="color: var(--SmartThemeQuoteColor); font-weight: 600;">&lt;$1&gt;</span>');
+
+                    return `
+                    <div class="batch-character-config" data-char-index="${index}" data-enabled="true" style="
+                        border: 2px solid var(--SmartThemeBorderColor);
+                        border-radius: 12px;
+                        background: linear-gradient(135deg, var(--SmartThemeBlurTintColor) 0%, rgba(var(--SmartThemeQuoteColorRGB, 78, 205, 196), 0.03) 100%);
+                        margin-bottom: 12px;
+                        transition: all 0.2s ease;
+                    ">
+                        <!-- Collapsible Header with Toggle -->
+                        <div class="batch-char-header" data-char-index="${index}" style="
+                            display: flex;
+                            align-items: center;
+                            gap: 12px;
+                            padding: 16px 20px;
+                            cursor: pointer;
+                            user-select: none;
+                        ">
+                            <!-- Enable/Disable Toggle Switch -->
+                            <label class="batch-char-toggle" style="
+                                position: relative;
+                                width: 44px;
+                                height: 24px;
+                                flex-shrink: 0;
+                            " onclick="event.stopPropagation();">
+                                <input type="checkbox" class="batch-char-toggle-input" data-char-index="${index}" checked style="
+                                    opacity: 0;
+                                    width: 0;
+                                    height: 0;
+                                    position: absolute;
+                                ">
+                                <span class="batch-char-toggle-slider" style="
+                                    position: absolute;
+                                    cursor: pointer;
+                                    top: 0;
+                                    left: 0;
+                                    right: 0;
+                                    bottom: 0;
+                                    background-color: var(--SmartThemeQuoteColor);
+                                    transition: 0.3s;
+                                    border-radius: 24px;
+                                ">
+                                    <span style="
+                                        position: absolute;
+                                        content: '';
+                                        height: 18px;
+                                        width: 18px;
+                                        left: 3px;
+                                        bottom: 3px;
+                                        background-color: white;
+                                        transition: 0.3s;
+                                        border-radius: 50%;
+                                    "></span>
+                                </span>
+                            </label>
+
+                            <!-- Character Number Badge -->
+                            <div style="
+                                background: var(--SmartThemeQuoteColor);
+                                color: var(--SmartThemeBlurTintColor);
+                                border-radius: 50%;
+                                width: 36px;
+                                height: 36px;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                font-size: 16px;
+                                font-weight: bold;
+                                flex-shrink: 0;
+                            ">${index + 1}</div>
+
+                            <!-- Character Info -->
+                            <div style="flex: 1; min-width: 0;">
+                                <div style="font-size: 18px; font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">
+                                    ${char.name}
+                                </div>
+                                <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">
+                                    ${char.tags.length} characters of data
+                                </div>
+                            </div>
+
+                            <!-- Expand/Collapse Icon -->
+                            <i class="fa-solid fa-chevron-down batch-char-chevron" data-char-index="${index}" style="
+                                color: var(--SmartThemeQuoteColor);
+                                font-size: 14px;
+                                transition: transform 0.2s ease;
+                                flex-shrink: 0;
+                            "></i>
+                        </div>
+
+                        <!-- Collapsible Content (hidden by default) -->
+                        <div class="batch-char-content" data-char-index="${index}" style="
+                            display: none;
+                            padding: 0 20px 20px 20px;
+                            border-top: 1px solid var(--SmartThemeBorderColor);
+                            margin-top: 0;
+                        ">
+
+                        <!-- Entry Name -->
+                        <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                            <label class="carrot-label">
+                                <span class="carrot-label-text">Entry Name</span>
+                                <span class="carrot-label-hint">Name that will appear in the lorebook entry list</span>
+                            </label>
+                            <input type="text" class="batch-entry-name carrot-input" data-char-index="${index}" value="${char.name}" style="font-size: 14px; padding: 12px;">
+                        </div>
+
+                        <!-- Trigger Keys -->
+                        <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                            <label class="carrot-label">
+                                <span class="carrot-label-text">Trigger Keys</span>
+                                <span class="carrot-label-hint">Character names and aliases that will activate this entry</span>
+                            </label>
+                            <div class="batch-triggers-container tag-input-container" data-char-index="${index}" style="
+                                border: 1px solid var(--SmartThemeBorderColor);
+                                border-radius: 6px;
+                                padding: 8px;
+                                background: var(--SmartThemeBlurTintColor);
+                                min-height: 50px;
+                                display: flex;
+                                flex-wrap: wrap;
+                                gap: 6px;
+                                align-items: flex-start;
+                                cursor: text;
+                            ">
+                                <div class="trigger-tag" data-tag="${char.name}" style="
+                                    background: var(--SmartThemeQuoteColor);
+                                    color: var(--SmartThemeBlurTintColor);
+                                    padding: 4px 8px;
+                                    border-radius: 4px;
+                                    font-size: 13px;
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 6px;
+                                ">
+                                    <span class="tag-text">${char.name}</span>
+                                    <i class="fa-solid fa-times tag-remove" style="cursor: pointer; opacity: 0.7;"></i>
+                                </div>
+                                <input type="text" class="batch-trigger-input" data-char-index="${index}" placeholder="Type and press Enter..." style="
+                                    border: none;
+                                    background: none;
+                                    outline: none;
+                                    flex: 1;
+                                    min-width: 150px;
+                                    font-size: 13px;
+                                    color: var(--SmartThemeBodyColor);
+                                ">
+                            </div>
+                        </div>
+
+                        <!-- Tag Preview/Edit -->
+                        <div class="carrot-setting-item">
+                            <label class="carrot-label">
+                                <span class="carrot-label-text">Character Data</span>
+                                <span class="carrot-label-hint">Click to edit tags</span>
+                            </label>
+                            <div class="tag-edit-container">
+                                <div class="batch-tag-preview" data-char-index="${index}" style="
+                                    font-family: var(--monoFontFamily);
+                                    font-size: 11px;
+                                    color: var(--SmartThemeQuoteColor);
+                                    padding: 12px;
+                                    background: var(--SmartThemeBlurTintColor);
+                                    border: 1px solid var(--SmartThemeBorderColor);
+                                    border-radius: 6px;
+                                    max-height: 200px;
+                                    overflow-y: auto;
+                                    cursor: pointer;
+                                    line-height: 1.3;
+                                ">${displayTags}</div>
+                                <textarea class="batch-tag-editor carrot-input" data-char-index="${index}" style="
+                                    font-family: var(--monoFontFamily);
+                                    font-size: 11px;
+                                    min-height: 200px;
+                                    display: none;
+                                    line-height: 1.3;
+                                ">${char.tags}</textarea>
+                                <div class="batch-tag-edit-actions" data-char-index="${index}" style="margin-top: 8px; display: none;">
+                                    <button class="batch-save-tags carrot-primary-btn" data-char-index="${index}" style="font-size: 12px; padding: 6px 12px;">
+                                        <i class="fa-solid fa-save"></i> Save
+                                    </button>
+                                    <button class="batch-cancel-edit carrot-secondary-btn" data-char-index="${index}" style="font-size: 12px; padding: 6px 12px; margin-left: 8px;">
+                                        <i class="fa-solid fa-times"></i> Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        </div><!-- Close batch-char-content -->
+                    </div><!-- Close batch-character-config -->
+                    `;
+                }).join('');
+
+                const popup = $(`
+                    <div class="carrot-popup-container baby-bunny-batch-popup" style="padding: 0; max-width: 900px; width: 95%;">
+                        <div class="carrot-card" style="margin: 0; height: auto;">
+                            <!-- Header -->
+                            <div class="carrot-card-header" style="padding: 24px 32px 16px;">
+                                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                                    <h3 style="margin: 0; font-size: 24px;">🐰 Baby Bunny Mode - Batch Import</h3>
+                                    <button id="batch-process-individually" class="carrot-secondary-btn" style="
+                                        font-size: 13px;
+                                        padding: 8px 16px;
+                                        display: flex;
+                                        align-items: center;
+                                        gap: 6px;
+                                        white-space: nowrap;
+                                    ">
+                                        <i class="fa-solid fa-user"></i>
+                                        Process Individually
+                                    </button>
+                                </div>
+                                <p class="carrot-card-subtitle" style="margin: 0; color: var(--SmartThemeQuoteColor);">
+                                    <span id="batch-selected-count">${charactersData.length}</span> of ${charactersData.length} characters selected
+                                </p>
+                            </div>
+
+                            <div class="carrot-card-body" style="padding: 0 32px 24px; display: flex; flex-direction: column; gap: 24px;">
+
+                                <!-- Step 1: Lorebook Configuration -->
+                                <div class="carrot-setup-step">
+                                    <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">1</span>
+                                        Lorebook Configuration
+                                    </h4>
+
+                                    <!-- Grouping Mode -->
+                                    <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Grouping Mode</span>
+                                            <span class="carrot-label-hint">How to organize these characters into lorebooks</span>
+                                        </label>
+                                        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+                                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 12px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: var(--SmartThemeBlurTintColor);">
+                                                <input type="radio" name="batch-grouping-mode" value="single-new" checked style="accent-color: var(--SmartThemeQuoteColor);">
+                                                <div>
+                                                    <div style="font-weight: 600;">Single New Lorebook</div>
+                                                    <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Put all characters in one new lorebook</div>
+                                                </div>
+                                            </label>
+                                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 12px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: var(--SmartThemeBlurTintColor);">
+                                                <input type="radio" name="batch-grouping-mode" value="multiple-new" style="accent-color: var(--SmartThemeQuoteColor);">
+                                                <div>
+                                                    <div style="font-weight: 600;">Separate New Lorebooks</div>
+                                                    <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Create a new lorebook for each character</div>
+                                                </div>
+                                            </label>
+                                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 12px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; background: var(--SmartThemeBlurTintColor);">
+                                                <input type="radio" name="batch-grouping-mode" value="single-existing" ${availableLorebooks.length === 0 ? 'disabled' : ''} style="accent-color: var(--SmartThemeQuoteColor);">
+                                                <div>
+                                                    <div style="font-weight: 600;">Single Existing Lorebook</div>
+                                                    <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Add all characters to one existing lorebook</div>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <!-- Lorebook Name (for single-new mode) -->
+                                    <div class="carrot-setting-item" id="batch-single-new-section">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">New Lorebook Name</span>
+                                            <span class="carrot-label-hint">Name for the shared lorebook</span>
+                                        </label>
+                                        <input type="text" id="batch-lorebook-name" value="Character Archive - ${charactersData.map(c => c.name).join(', ')}" class="carrot-input" style="font-size: 14px; padding: 12px;">
+                                    </div>
+
+                                    <!-- Existing Lorebook Selection (for single-existing mode) -->
+                                    <div class="carrot-setting-item" id="batch-single-existing-section" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Select Existing Lorebook</span>
+                                            <span class="carrot-label-hint">Choose from your available lorebooks</span>
+                                        </label>
+                                        <select id="batch-existing-lorebook" class="carrot-select" style="font-size: 14px; padding: 12px;">
+                                            <option value="">-- Select Lorebook --</option>
+                                            ${lorebookOptions}
+                                        </select>
+                                    </div>
+
+                                    <!-- Lorebook Names (for multiple-new mode) -->
+                                    <div class="carrot-setting-item" id="batch-multiple-new-section" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Lorebook Names</span>
+                                            <span class="carrot-label-hint">Name each character's lorebook</span>
+                                        </label>
+                                        <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 8px;">
+                                            ${charactersData.map((char, index) => `
+                                                <div style="display: flex; align-items: center; gap: 12px;">
+                                                    <div style="
+                                                        background: var(--SmartThemeQuoteColor);
+                                                        color: var(--SmartThemeBlurTintColor);
+                                                        border-radius: 50%;
+                                                        width: 28px;
+                                                        height: 28px;
+                                                        display: flex;
+                                                        align-items: center;
+                                                        justify-content: center;
+                                                        font-size: 12px;
+                                                        font-weight: bold;
+                                                        flex-shrink: 0;
+                                                    ">${index + 1}</div>
+                                                    <div style="flex: 1;">
+                                                        <input type="text"
+                                                            class="batch-multiple-lorebook-name carrot-input"
+                                                            data-char-index="${index}"
+                                                            value="${char.name} Character Archive"
+                                                            placeholder="Lorebook name for ${char.name}"
+                                                            style="font-size: 13px; padding: 10px; width: 100%;">
+                                                    </div>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Step 2: Character Configurations -->
+                                <div class="carrot-setup-step">
+                                    <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">2</span>
+                                        Configure Characters
+                                    </h4>
+
+                                    <div id="batch-character-configs" style="max-height: 500px; overflow-y: auto; padding-right: 8px;">
+                                        ${characterSections}
+                                    </div>
+                                </div>
+
+                                <!-- Step 3: Activation Scope -->
+                                <div class="carrot-setup-step">
+                                    <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">3</span>
+                                        Activation Scope
+                                    </h4>
+
+                                    <div class="carrot-setting-item">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Where to Activate</span>
+                                            <span class="carrot-label-hint">Choose where to activate the lorebook(s)</span>
+                                        </label>
+
+                                        <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px;">
+                                            <label class="carrot-toggle" style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                                <input type="radio" name="batch-lorebook-scope" value="character" checked style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                                <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                                    <i class="fa-solid fa-user" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                                    <div>
+                                                        <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Character Settings</div>
+                                                        <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply to ALL chats with this character</div>
+                                                    </div>
+                                                </div>
+                                            </label>
+
+                                            <label class="carrot-toggle" style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                                <input type="radio" name="batch-lorebook-scope" value="chat" style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                                <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                                    <i class="fa-solid fa-comments" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                                    <div>
+                                                        <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Chat Settings</div>
+                                                        <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply ONLY to this specific conversation</div>
+                                                    </div>
+                                                </div>
+                                            </label>
+
+                                            <label class="carrot-toggle" style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                                <input type="radio" name="batch-lorebook-scope" value="global" style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                                <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                                    <i class="fa-solid fa-globe" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                                    <div>
+                                                        <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Global Settings</div>
+                                                        <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply to all chats and characters</div>
+                                                    </div>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Action Buttons -->
+                                <div class="carrot-action-bar" style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--SmartThemeBorderColor);">
+                                    <button id="batch-bunny-cancel" class="carrot-secondary-btn" style="padding: 12px 24px; font-size: 14px;">
+                                        <i class="fa-solid fa-times"></i>
+                                        Cancel
+                                    </button>
+                                    <button id="batch-bunny-create" class="carrot-primary-btn" style="padding: 12px 24px; font-size: 14px;">
+                                        <i class="fa-solid fa-carrot"></i>
+                                        Create Archives
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `);
+
+                // Create overlay
+                const overlay = $(`
+                    <div class="baby-bunny-overlay" style="
+                        position: fixed !important;
+                        top: 0 !important;
+                        left: 0 !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        background: rgba(0,0,0,0.8) !important;
+                        z-index: 999999 !important;
+                        display: flex !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                        backdrop-filter: blur(4px) !important;
+                    "></div>
+                `);
+
+                popup.css({
+                    'max-width': '900px',
+                    'width': '95%',
+                    'max-height': '85vh',
+                    'overflow-y': 'auto',
+                    'z-index': '999999',
+                    'position': 'relative'
+                });
+
+                overlay.append(popup);
+                $('body').append(overlay);
+                overlay.show();
+                $('html, body').scrollTop(0);
+
+                console.log('🐰 BATCH BABY BUNNY DEBUG: Popup displayed for', charactersData.length, 'characters');
+
+                // === EVENT HANDLERS ===
+
+                // Character expand/collapse functionality
+                popup.find('.batch-char-header').on('click', function() {
+                    const charIndex = $(this).data('char-index');
+                    const content = popup.find(`.batch-char-content[data-char-index="${charIndex}"]`);
+                    const chevron = popup.find(`.batch-char-chevron[data-char-index="${charIndex}"]`);
+
+                    if (content.is(':visible')) {
+                        content.slideUp(200);
+                        chevron.css('transform', 'rotate(0deg)');
+                    } else {
+                        content.slideDown(200);
+                        chevron.css('transform', 'rotate(180deg)');
+                    }
+                });
+
+                // Toggle switch functionality
+                popup.find('.batch-char-toggle-input').on('change', function(e) {
+                    e.stopPropagation();
+                    const charIndex = $(this).data('char-index');
+                    const isEnabled = $(this).is(':checked');
+                    const config = popup.find(`.batch-character-config[data-char-index="${charIndex}"]`);
+                    const slider = $(this).siblings('.batch-char-toggle-slider');
+
+                    // Update visual state
+                    config.attr('data-enabled', isEnabled);
+
+                    if (isEnabled) {
+                        slider.css('background-color', 'var(--SmartThemeQuoteColor)');
+                        slider.find('span').css('transform', 'translateX(20px)');
+                        config.css('opacity', '1');
+                    } else {
+                        slider.css('background-color', '#ccc');
+                        slider.find('span').css('transform', 'translateX(0)');
+                        config.css('opacity', '0.5');
+                    }
+
+                    // Update selected count
+                    const selectedCount = popup.find('.batch-character-config[data-enabled="true"]').length;
+                    popup.find('#batch-selected-count').text(selectedCount);
+
+                    console.log('🐰 BATCH: Character toggle', { charIndex, enabled: isEnabled, selectedCount });
+                });
+
+                // Initialize toggle slider positions
+                popup.find('.batch-char-toggle-input:checked').each(function() {
+                    $(this).siblings('.batch-char-toggle-slider').find('span').css('transform', 'translateX(20px)');
+                });
+
+                // "Process Individually" button - sends each character through single popup
+                popup.find('#batch-process-individually').on('click', async function() {
+                    console.log('🐰 BATCH: Processing characters individually');
+                    overlay.remove();
+
+                    // Process each enabled character through the normal single-character popup
+                    for (let i = 0; i < charactersData.length; i++) {
+                        const isEnabled = popup.find(`.batch-character-config[data-char-index="${i}"]`).attr('data-enabled') === 'true';
+                        if (isEnabled) {
+                            console.log('🐰 BATCH: Processing character individually:', charactersData[i].name);
+                            await showBabyBunnyPopup(charactersData[i]);
+                        }
+                    }
+
+                    resolve(true);
+                });
+
+                // Grouping mode switching
+                popup.find('input[name="batch-grouping-mode"]').on('change', function() {
+                    const mode = $(this).val();
+                    popup.find('#batch-single-new-section').toggle(mode === 'single-new');
+                    popup.find('#batch-single-existing-section').toggle(mode === 'single-existing');
+                    popup.find('#batch-multiple-new-section').toggle(mode === 'multiple-new');
+                });
+
+                // Trigger key input for each character
+                popup.find('.batch-trigger-input').each(function() {
+                    const input = $(this);
+                    const charIndex = input.data('char-index');
+                    const container = popup.find(`.batch-triggers-container[data-char-index="${charIndex}"]`);
+
+                    input.on('keydown', function(e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const tagText = $(this).val().trim();
+                            if (tagText && !container.find(`[data-tag="${tagText}"]`).length) {
+                                const tagElement = $(`
+                                    <div class="trigger-tag" data-tag="${tagText}" style="
+                                        background: var(--SmartThemeQuoteColor);
+                                        color: var(--SmartThemeBlurTintColor);
+                                        padding: 4px 8px;
+                                        border-radius: 4px;
+                                        font-size: 13px;
+                                        display: flex;
+                                        align-items: center;
+                                        gap: 6px;
+                                    ">
+                                        <span class="tag-text">${tagText}</span>
+                                        <i class="fa-solid fa-times tag-remove" style="cursor: pointer; opacity: 0.7;"></i>
+                                    </div>
+                                `);
+                                tagElement.insertBefore(input);
+                                $(this).val('');
+                            }
+                        }
+                    });
+
+                    // Click container to focus input
+                    container.on('click', function(e) {
+                        if (e.target === this || e.target.classList.contains('batch-triggers-container')) {
+                            input.focus();
+                        }
+                    });
+                });
+
+                // Remove trigger tags
+                popup.on('click', '.tag-remove', function() {
+                    $(this).closest('.trigger-tag').remove();
+                });
+
+                // Tag editing for each character
+                popup.find('.batch-tag-preview').on('click', function() {
+                    const charIndex = $(this).data('char-index');
+                    $(this).hide();
+                    popup.find(`.batch-tag-editor[data-char-index="${charIndex}"]`).show();
+                    popup.find(`.batch-tag-edit-actions[data-char-index="${charIndex}"]`).show();
+                });
+
+                popup.find('.batch-save-tags').on('click', function() {
+                    const charIndex = $(this).data('char-index');
+                    const newTags = popup.find(`.batch-tag-editor[data-char-index="${charIndex}"]`).val();
+                    const newDisplayTags = newTags
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/&lt;([^&]+)&gt;/g, '<span style="color: var(--SmartThemeQuoteColor); font-weight: 600;">&lt;$1&gt;</span>');
+
+                    popup.find(`.batch-tag-preview[data-char-index="${charIndex}"]`).html(newDisplayTags);
+                    popup.find(`.batch-tag-editor[data-char-index="${charIndex}"]`).hide();
+                    popup.find(`.batch-tag-edit-actions[data-char-index="${charIndex}"]`).hide();
+                    popup.find(`.batch-tag-preview[data-char-index="${charIndex}"]`).show();
+
+                    // Update the character data
+                    charactersData[charIndex].tags = newTags;
+                });
+
+                popup.find('.batch-cancel-edit').on('click', function() {
+                    const charIndex = $(this).data('char-index');
+                    popup.find(`.batch-tag-editor[data-char-index="${charIndex}"]`).hide();
+                    popup.find(`.batch-tag-edit-actions[data-char-index="${charIndex}"]`).hide();
+                    popup.find(`.batch-tag-preview[data-char-index="${charIndex}"]`).show();
+                    // Reset to original value
+                    popup.find(`.batch-tag-editor[data-char-index="${charIndex}"]`).val(charactersData[charIndex].tags);
+                });
+
+                // Cancel button
+                popup.find('#batch-bunny-cancel').on('click', function() {
+                    console.log('🐰 BATCH BABY BUNNY DEBUG: Cancelled');
+                    overlay.remove();
+                    resolve(false);
+                });
+
+                // Create button
+                popup.find('#batch-bunny-create').on('click', async function() {
+                    const mode = popup.find('input[name="batch-grouping-mode"]:checked').val();
+                    const scope = popup.find('input[name="batch-lorebook-scope"]:checked').val();
+
+                    console.log('🐰 BATCH BABY BUNNY DEBUG: Creating archives', { mode, scope });
+
+                    // Collect character configurations - ONLY ENABLED ONES
+                    const characterConfigs = charactersData
+                        .map((char, index) => {
+                            // Check if this character is enabled
+                            const isEnabled = popup.find(`.batch-character-config[data-char-index="${index}"]`).attr('data-enabled') === 'true';
+
+                            if (!isEnabled) {
+                                return null; // Skip disabled characters
+                            }
+
+                            const entryName = popup.find(`.batch-entry-name[data-char-index="${index}"]`).val();
+                            const triggers = [];
+                            popup.find(`.batch-triggers-container[data-char-index="${index}"] .trigger-tag`).each(function() {
+                                triggers.push($(this).data('tag'));
+                            });
+                            const tags = popup.find(`.batch-tag-editor[data-char-index="${index}"]`).val();
+
+                            return {
+                                ...char,
+                                entryName,
+                                triggers,
+                                tags
+                            };
+                        })
+                        .filter(config => config !== null); // Remove disabled characters
+
+                    // Check if any characters are enabled
+                    if (characterConfigs.length === 0) {
+                        toastr.warning('Please enable at least one character to import');
+                        return;
+                    }
+
+                    console.log('🐰 BATCH: Processing', characterConfigs.length, 'enabled characters');
+
+                    overlay.remove();
+
+                    // Process based on mode
+                    if (mode === 'single-new') {
+                        const lorebookName = popup.find('#batch-lorebook-name').val().trim();
+                        if (!lorebookName) {
+                            toastr.error('Please enter a lorebook name');
+                            return;
+                        }
+
+                        // Create single lorebook for all characters
+                        await processBatchToSingleLorebook(characterConfigs, lorebookName, true, scope);
+
+                    } else if (mode === 'multiple-new') {
+                        // Create separate lorebooks for each, using custom names
+                        for (let i = 0; i < characterConfigs.length; i++) {
+                            const config = characterConfigs[i];
+                            const originalIndex = charactersData.indexOf(charactersData.find(c => c.name === config.name));
+
+                            // Get the custom lorebook name from the input field
+                            const lorebookName = popup.find(`.batch-multiple-lorebook-name[data-char-index="${originalIndex}"]`).val().trim();
+
+                            if (!lorebookName) {
+                                toastr.error(`Please enter a lorebook name for ${config.entryName}`);
+                                return;
+                            }
+
+                            await processSingleCharacterArchive(config, lorebookName, true, scope);
+                        }
+
+                    } else if (mode === 'single-existing') {
+                        const lorebookName = popup.find('#batch-existing-lorebook').val();
+                        if (!lorebookName) {
+                            toastr.error('Please select a lorebook');
+                            return;
+                        }
+
+                        // Add all to existing lorebook
+                        await processBatchToSingleLorebook(characterConfigs, lorebookName, false, scope);
+                    }
+
+                    resolve(true);
+                });
+            });
+        }
+
+        // Helper function: Process all characters to a single lorebook
+        async function processBatchToSingleLorebook(characterConfigs, lorebookName, createNew, scope) {
+            console.log('🐰 BATCH PROCESSING: Single lorebook mode', { lorebookName, createNew, characterCount: characterConfigs.length });
+
+            // Create or load the lorebook
+            let lorebook;
+            if (createNew) {
+                lorebook = await createNewLorebook(lorebookName);
+            } else {
+                lorebook = await loadExistingLorebook(lorebookName);
+            }
+
+            if (!lorebook) {
+                toastr.error('Failed to create/load lorebook');
+                return;
+            }
+
+            // Add each character as an entry
+            for (const config of characterConfigs) {
+                await addCharacterToLorebook(lorebook, config, lorebookName);
+            }
+
+            // Save and activate the lorebook
+            await saveLorebook(lorebook, lorebookName);
+            await activateLorebook(lorebookName, scope);
+
+            toastr.success(`Created ${characterConfigs.length} character archives in "${lorebookName}"`);
+        }
+
+        // Helper function: Process single character to its own archive
+        async function processSingleCharacterArchive(config, lorebookName, createNew, scope) {
+            console.log('🐰 BATCH PROCESSING: Single character mode', { name: config.entryName, lorebookName });
+
+            let lorebook;
+            if (createNew) {
+                lorebook = await createNewLorebook(lorebookName);
+            } else {
+                lorebook = await loadExistingLorebook(lorebookName);
+            }
+
+            if (!lorebook) {
+                toastr.error(`Failed to create/load lorebook for ${config.entryName}`);
+                return;
+            }
+
+            await addCharacterToLorebook(lorebook, config, lorebookName);
+            await saveLorebook(lorebook, lorebookName);
+            await activateLorebook(lorebookName, scope);
+
+            toastr.success(`Created character archive "${lorebookName}"`);
+        }
+
+        // Helper function: Add character to lorebook using ST's proper entry creation
+        async function addCharacterToLorebook(lorebook, config, lorebookName) {
+            // Use ST's createWorldInfoEntry function to create properly formatted entry
+            const newEntry = createWorldInfoEntry(lorebookName, lorebook);
+
+            if (!newEntry) {
+                console.error('🐰 BATCH PROCESSING ERROR: Failed to create entry for', config.entryName);
+                return;
+            }
+
+            // Configure the entry with character data (following Baby Bunny Mode format)
+            newEntry.comment = `${config.entryName} Character Archive - Generated by Baby Bunny Mode (Batch)`;
+            newEntry.content = config.tags; // Full BunnymoTags block
+            newEntry.key = config.triggers;
+            newEntry.keysecondary = [];
+            newEntry.selective = true;
+            newEntry.constant = false;
+            newEntry.order = 550;
+            newEntry.position = 4;
+            newEntry.disable = false;
+            newEntry.addMemo = true;
+            newEntry.excludeRecursion = true;
+            newEntry.preventRecursion = false;
+            newEntry.matchPersonaDescription = false;
+            newEntry.matchCharacterDescription = false;
+            newEntry.matchCharacterPersonality = false;
+            newEntry.matchCharacterDepthPrompt = false;
+            newEntry.matchScenario = false;
+            newEntry.matchCreatorNotes = false;
+            newEntry.delayUntilRecursion = false;
+            newEntry.scanDepth = null;
+            newEntry.caseSensitive = null;
+            newEntry.matchWholeWords = null;
+            newEntry.useGroupScoring = null;
+            newEntry.groupOverride = false;
+            newEntry.groupWeight = 100;
+            newEntry.group = '';
+            newEntry.probability = 100;
+            newEntry.useProbability = false;
+
+            console.log('🐰 BATCH PROCESSING: Added entry', {
+                name: config.entryName,
+                triggers: config.triggers,
+                uid: newEntry.uid
+            });
+        }
+
+        // Helper function: Create new lorebook using ST's API
+        async function createNewLorebook(name) {
+            try {
+                await createNewWorldInfo(name);
+                console.log('🐰 BATCH PROCESSING: Created new lorebook', { name });
+                return { name, entries: [] };
+            } catch (error) {
+                console.error('🐰 BATCH PROCESSING ERROR: Failed to create lorebook', error);
+                return null;
+            }
+        }
+
+        // Helper function: Load existing lorebook using ST's API
+        async function loadExistingLorebook(name) {
+            try {
+                const data = await loadWorldInfo(name);
+                console.log('🐰 BATCH PROCESSING: Loaded existing lorebook', { name, entryCount: data.entries?.length });
+                return data;
+            } catch (error) {
+                console.error('🐰 BATCH PROCESSING ERROR: Failed to load lorebook', error);
+                return null;
+            }
+        }
+
+        // Helper function: Save lorebook using ST's API
+        async function saveLorebook(lorebook, name) {
+            try {
+                await saveWorldInfo(name, lorebook);
+                console.log('🐰 BATCH PROCESSING: Saved lorebook', { name });
+                return true;
+            } catch (error) {
+                console.error('🐰 BATCH PROCESSING ERROR: Failed to save lorebook', error);
+                return false;
+            }
+        }
+
+        // Show the guided Baby Bunny Mode popup
+        async function showBabyBunnyPopup(characterData, options = {}) {
+            return new Promise(async (resolve) => {
+                // Get available lorebooks for dropdown
+                const availableLorebooks = world_names?.length ? world_names : [];
+
+                // Handle forced lorebook from batch processing
+                const forceLorebook = options.forceLorebook || null;
+                const createNew = options.createNew !== undefined ? options.createNew : true;
+                const skipLorebookUI = options.skipLorebookUI || false;
+
+                // Format tags properly to bypass ST's tag filtering and make them readable
+                const displayTags = characterData.tags
+                    .replace(/</g, '&lt;')  // Escape < to bypass ST filtering
+                    .replace(/>/g, '&gt;')  // Escape > to bypass ST filtering
+                    .replace(/&lt;([^&]+)&gt;/g, '<span style="color: var(--SmartThemeQuoteColor); font-weight: 600;">&lt;$1&gt;</span>'); // Colorize tags
+
+                const lorebookOptions = availableLorebooks.map(name =>
+                    `<option value="${name}">${name}</option>`
+                ).join('');
+
+                const popup = $(`
+                    <div class="carrot-popup-container baby-bunny-popup" style="padding: 0; max-width: 750px; width: 95%;">
+                        <div class="carrot-card" style="margin: 0; height: auto;">
+                            <!-- Header matching CarrotKernel style -->
+                            <div class="carrot-card-header" style="padding: 24px 32px 16px;">
+                                <h3 style="margin: 0 0 8px; font-size: 24px;">🐰 Baby Bunny Mode</h3>
+                                <p class="carrot-card-subtitle" style="margin: 0; color: var(--SmartThemeQuoteColor);">Guided Character Archive Creation</p>
+                            </div>
+
+                            <div class="carrot-card-body" style="padding: 0 32px 24px; display: flex; flex-direction: column; gap: 24px;">
+
+                                <!-- Step 1: Lorebook Selection -->
+                                <div class="carrot-setup-step">
+                                    <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">1</span>
+                                        Choose Archive Location
+                                    </h4>
+
+                                    <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Archive Type</span>
+                                            <span class="carrot-label-hint">Create a new lorebook or add to existing one</span>
+                                        </label>
+                                        <div style="display: flex; gap: 12px; margin-top: 8px;">
+                                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                                <input type="radio" name="lorebook-type" value="new" checked style="accent-color: var(--SmartThemeQuoteColor);">
+                                                <span>Create New Lorebook</span>
+                                            </label>
+                                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                                <input type="radio" name="lorebook-type" value="existing" ${availableLorebooks.length === 0 ? 'disabled' : ''} style="accent-color: var(--SmartThemeQuoteColor);">
+                                                <span>Add to Existing</span>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div class="carrot-setting-item" id="new-lorebook-section">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">New Lorebook Name</span>
+                                            <span class="carrot-label-hint">Name for the new character archive lorebook file</span>
+                                        </label>
+                                        <input type="text" id="baby-bunny-lorebook-name" value="${characterData.name} Character Archive" class="carrot-input" style="font-size: 14px; padding: 12px;">
+                                    </div>
+
+                                    <div class="carrot-setting-item" id="existing-lorebook-section" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Select Existing Lorebook</span>
+                                            <span class="carrot-label-hint">Choose from your available lorebooks</span>
+                                        </label>
+                                        <select id="baby-bunny-existing-lorebook" class="carrot-select" style="font-size: 14px; padding: 12px;">
+                                            <option value="">-- Select Lorebook --</option>
+                                            ${lorebookOptions}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- Step 2: Entry Configuration -->
+                                <div class="carrot-setup-step">
+                                    <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">2</span>
+                                        Configure Entry Details
+                                    </h4>
+
+                                    <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Entry Name</span>
+                                            <span class="carrot-label-hint">Name that will appear in the lorebook entry list</span>
+                                        </label>
+                                        <input type="text" id="baby-bunny-entry-name" value="${characterData.name}" class="carrot-input" style="font-size: 14px; padding: 12px;">
+                                    </div>
+
+                                    <div class="carrot-setting-item">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Trigger Keys</span>
+                                            <span class="carrot-label-hint">Character names and aliases that will activate this entry</span>
+                                        </label>
+                                        <div id="baby-bunny-triggers-container" class="tag-input-container" style="
+                                            border: 1px solid var(--SmartThemeBorderColor);
+                                            border-radius: 6px;
+                                            padding: 8px;
+                                            background: var(--SmartThemeBlurTintColor);
+                                            min-height: 50px;
+                                            display: flex;
+                                            flex-wrap: wrap;
+                                            gap: 6px;
+                                            align-items: flex-start;
+                                            cursor: text;
+                                        ">
+                                            <div class="trigger-tag" data-tag="${characterData.name}" style="
+                                                background: var(--SmartThemeQuoteColor);
+                                                color: var(--SmartThemeBlurTintColor);
+                                                padding: 4px 8px;
+                                                border-radius: 4px;
+                                                font-size: 13px;
+                                                display: flex;
+                                                align-items: center;
+                                                gap: 6px;
+                                            ">
+                                                <span class="tag-text">${characterData.name}</span>
+                                                <i class="fa-solid fa-times tag-remove" style="cursor: pointer; opacity: 0.7;" data-tag="${characterData.name}"></i>
+                                            </div>
+                                            <input type="text" id="baby-bunny-trigger-input" placeholder="Type trigger name and press Enter or Space..." style="
+                                                border: none;
+                                                background: none;
+                                                outline: none;
+                                                flex: 1;
+                                                min-width: 200px;
+                                                font-size: 13px;
+                                                color: var(--SmartThemeBodyColor);
+                                            ">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Step 3: Tag Review and Edit -->
+                                <div class="carrot-setup-step">
+                                    <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">3</span>
+                                        Review & Edit Character Data
+                                    </h4>
+
+                                    <div class="carrot-setting-item">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Character Tags</span>
+                                            <span class="carrot-label-hint">BunnyMoTags and Linguistics data - click to edit</span>
+                                        </label>
+                                        <div class="tag-edit-container">
+                                            <div id="tag-preview" class="carrot-preview-box" style="
+                                                font-family: var(--monoFontFamily);
+                                                font-size: 12px;
+                                                color: var(--SmartThemeQuoteColor);
+                                                padding: 16px;
+                                                background: var(--SmartThemeBlurTintColor);
+                                                border: 1px solid var(--SmartThemeBorderColor);
+                                                border-radius: 6px;
+                                                max-height: 300px;
+                                                overflow-y: auto;
+                                                cursor: pointer;
+                                                line-height: 1.4;
+                                            ">${displayTags}</div>
+                                            <textarea id="tag-editor" class="carrot-input" style="
+                                                font-family: var(--monoFontFamily);
+                                                font-size: 12px;
+                                                min-height: 300px;
+                                                display: none;
+                                                line-height: 1.4;
+                                            ">${characterData.tags}</textarea>
+                                            <div style="margin-top: 8px; display: none;" id="tag-edit-actions">
+                                                <button id="save-tags" class="carrot-primary-btn" style="font-size: 12px; padding: 6px 12px;">
+                                                    <i class="fa-solid fa-save"></i> Save Changes
+                                                </button>
+                                                <button id="cancel-edit" class="carrot-secondary-btn" style="font-size: 12px; padding: 6px 12px; margin-left: 8px;">
+                                                    <i class="fa-solid fa-times"></i> Cancel
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Step 4: Loadout Management -->
+                                <div class="carrot-setup-step">
+                                    <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">4</span>
+                                        Activate Lorebook
+                                    </h4>
+
+                                    <div class="carrot-setting-item">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Activation Scope</span>
+                                            <span class="carrot-label-hint">Choose where to activate this lorebook</span>
+                                        </label>
+
+                                        <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px;">
+                                            <!-- Character Settings Option -->
+                                            <label class="carrot-toggle" style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                                <input type="radio" name="lorebook-scope" value="character" checked style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                                <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                                    <i class="fa-solid fa-user" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                                    <div>
+                                                        <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Character Settings</div>
+                                                        <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply to ALL chats with this character</div>
+                                                    </div>
+                                                </div>
+                                            </label>
+
+                                            <!-- Chat Settings Option -->
+                                            <label class="carrot-toggle" style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                                <input type="radio" name="lorebook-scope" value="chat" style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                                <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                                    <i class="fa-solid fa-comments" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                                    <div>
+                                                        <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Chat Settings</div>
+                                                        <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply ONLY to this specific conversation</div>
+                                                    </div>
+                                                </div>
+                                            </label>
+
+                                            <!-- Global Settings Option -->
+                                            <label class="carrot-toggle" style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                                <input type="radio" name="lorebook-scope" value="global" style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                                <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                                    <i class="fa-solid fa-globe" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                                    <div>
+                                                        <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Global Settings</div>
+                                                        <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply to all chats and characters (default)</div>
+                                                    </div>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Action Buttons -->
+                                <div class="carrot-action-bar" style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--SmartThemeBorderColor);">
+                                    <button id="baby-bunny-cancel" class="carrot-secondary-btn" style="padding: 12px 24px; font-size: 14px;">
+                                        <i class="fa-solid fa-times"></i>
+                                        Cancel
+                                    </button>
+                                    <button id="baby-bunny-create" class="carrot-primary-btn" style="padding: 12px 24px; font-size: 14px;">
+                                        <i class="fa-solid fa-carrot"></i>
+                                        Create Archive
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `);
+
+                // Create custom overlay with maximum z-index to ensure visibility
+                const overlay = $(`
+                    <div class="baby-bunny-overlay" style="
+                        position: fixed !important;
+                        top: 0 !important;
+                        left: 0 !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        background: rgba(0,0,0,0.8) !important;
+                        z-index: 999999 !important;
+                        display: flex !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                        backdrop-filter: blur(4px) !important;
+                    "></div>
+                `);
+
+                // Style the popup for better positioning with high priority
+                popup.css({
+                    'max-width': '600px',
+                    'width': '90%',
+                    'max-height': '80vh',
+                    'overflow-y': 'auto',
+                    'z-index': '999999',
+                    'position': 'relative'
+                });
+
+                overlay.append(popup);
+                $('body').append(overlay);
+
+                // Force visibility and scroll to top to ensure user sees it
+                overlay.show();
+                $('html, body').scrollTop(0);
+
+                console.log('🐰 BABY BUNNY DEBUG: Popup displayed', {
+                    overlayAdded: true,
+                    overlayVisible: overlay.is(':visible'),
+                    overlayInDOM: overlay.parent().length > 0,
+                    bodyChildren: $('body').children().length,
+                    overlayOffset: overlay.offset(),
+                    overlayDimensions: {
+                        width: overlay.width(),
+                        height: overlay.height()
+                    },
+                    popupVisible: popup.is(':visible'),
+                    computedZIndex: overlay.css('z-index')
+                });
+
+                // Additional debug: test that the overlay is actually clickable
+                setTimeout(() => {
+                    console.log('🐰 BABY BUNNY DEBUG: Popup still visible after 1 second?', {
+                        overlayVisible: overlay.is(':visible'),
+                        overlayExists: $('.baby-bunny-overlay').length > 0
+                    });
+                }, 1000);
+
+                // Add interactive functionality for the new popup elements
+
+                // 1. Lorebook type radio button switching
+                popup.find('input[name="lorebook-type"]').on('change', function() {
+                    const isNew = $(this).val() === 'new';
+                    popup.find('#new-lorebook-section').toggle(isNew);
+                    popup.find('#existing-lorebook-section').toggle(!isNew);
+                });
+
+                // 2. Tag input functionality for trigger keys
+                const triggerContainer = popup.find('#baby-bunny-triggers-container');
+                const triggerInput = popup.find('#baby-bunny-trigger-input');
+
+                // Add tags on Enter or Space
+                triggerInput.on('keydown', function(e) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        const tagText = $(this).val().trim();
+                        if (tagText && !popup.find(`[data-tag="${tagText}"]`).length) {
+                            addTriggerTag(tagText);
+                            $(this).val('');
+                        }
+                    }
+                });
+
+                // Click container to focus input
+                triggerContainer.on('click', function(e) {
+                    if (e.target === this || e.target.classList.contains('tag-input-container')) {
+                        triggerInput.focus();
+                    }
+                });
+
+                // Remove tags with X button
+                triggerContainer.on('click', '.tag-remove', function() {
+                    $(this).closest('.trigger-tag').remove();
+                });
+
+                // Function to add new trigger tags
+                function addTriggerTag(tagText) {
+                    const tagElement = $(`
+                        <div class="trigger-tag" data-tag="${tagText}" style="
+                            background: var(--SmartThemeQuoteColor);
+                            color: var(--SmartThemeBlurTintColor);
+                            padding: 4px 8px;
+                            border-radius: 4px;
+                            font-size: 13px;
+                            display: flex;
+                            align-items: center;
+                            gap: 6px;
+                        ">
+                            <span class="tag-text">${tagText}</span>
+                            <i class="fa-solid fa-times tag-remove" style="cursor: pointer; opacity: 0.7;" data-tag="${tagText}"></i>
+                        </div>
+                    `);
+                    tagElement.insertBefore(triggerInput);
+                }
+
+                // 3. Tag editing functionality
+                popup.find('#tag-preview').on('click', function() {
+                    $(this).hide();
+                    popup.find('#tag-editor').show();
+                    popup.find('#tag-edit-actions').show();
+                });
+
+                popup.find('#save-tags').on('click', function() {
+                    const newTags = popup.find('#tag-editor').val();
+                    const newDisplayTags = newTags
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/&lt;([^&]+)&gt;/g, '<span style="color: var(--SmartThemeQuoteColor); font-weight: 600;">&lt;$1&gt;</span>');
+
+                    popup.find('#tag-preview').html(newDisplayTags).show();
+                    popup.find('#tag-editor').hide();
+                    popup.find('#tag-edit-actions').hide();
+
+                    // Update the character data for saving
+                    characterData.tags = newTags;
+                });
+
+                popup.find('#cancel-edit').on('click', function() {
+                    popup.find('#tag-preview').show();
+                    popup.find('#tag-editor').hide();
+                    popup.find('#tag-edit-actions').hide();
+                });
+
+                // Handle button clicks
+                popup.find('#baby-bunny-cancel').on('click', () => {
+                    overlay.remove();
+                    resolve(false);
+                });
+
+                popup.find('#baby-bunny-create').on('click', async () => {
+                    const isNewLorebook = popup.find('input[name="lorebook-type"]:checked').val() === 'new';
+                    const entryName = popup.find('#baby-bunny-entry-name').val().trim();
+                    const activationScope = popup.find('input[name="lorebook-scope"]:checked').val();
+
+                    // Get lorebook name based on type
+                    let lorebookName;
+                    if (isNewLorebook) {
+                        lorebookName = popup.find('#baby-bunny-lorebook-name').val().trim();
+                    } else {
+                        lorebookName = popup.find('#baby-bunny-existing-lorebook').val();
+                    }
+
+                    // Get triggers from tag elements
+                    const triggers = [];
+                    popup.find('.trigger-tag').each(function() {
+                        triggers.push($(this).find('.tag-text').text().trim());
+                    });
+
+                    if (!entryName || !lorebookName || triggers.length === 0) {
+                        toastr.warning('Please fill in all required fields and add at least one trigger.');
+                        return;
+                    }
+
+                    overlay.remove();
+
+                    // Create the character archive with activation scope
+                    await createCharacterArchive(entryName, triggers, lorebookName, characterData.tags, isNewLorebook, activationScope);
+                    resolve(true);
+                });
+
+                // Close on overlay click (outside popup)
+                overlay.on('click', function(e) {
+                    if (e.target === this) {
+                        overlay.remove();
+                        resolve(false);
+                    }
+                });
+            });
+        }
+
+        // Expose checkForCompletedSheets to global scope for button access
+        window.checkForCompletedSheets = checkForCompletedSheets;
+
+        // Activate lorebook based on selected scope using SillyTavern's world info system
+        async function activateLorebook(lorebookName, activationScope) {
+            try {
+                CarrotDebug.ui('🐰 Activating lorebook', { lorebookName, activationScope });
+
+                const context = getContext();
+
+                switch (activationScope) {
+                    case 'character':
+                        // Activate for current character across all chats
+                        if (context.characterId && context.characters[context.characterId]) {
+                            const characterData = context.characters[context.characterId];
+                            if (!characterData.data.extensions) {
+                                characterData.data.extensions = {};
+                            }
+                            if (!characterData.data.extensions[METADATA_KEY]) {
+                                characterData.data.extensions[METADATA_KEY] = {};
+                            }
+                            if (!characterData.data.extensions[METADATA_KEY].world) {
+                                characterData.data.extensions[METADATA_KEY].world = [];
+                            }
+
+                            // Add lorebook to character if not already present
+                            if (!characterData.data.extensions[METADATA_KEY].world.includes(lorebookName)) {
+                                characterData.data.extensions[METADATA_KEY].world.push(lorebookName);
+                                await context.saveChat();
+                                CarrotDebug.ui('🐰 Activated lorebook for character:', characterData.name);
+                            }
+                        }
+                        break;
+
+                    case 'chat':
+                        // Activate for current chat only
+                        if (chat_metadata && chat_metadata.world !== undefined) {
+                            if (!Array.isArray(chat_metadata.world)) {
+                                chat_metadata.world = chat_metadata.world ? [chat_metadata.world] : [];
+                            }
+                            if (!chat_metadata.world.includes(lorebookName)) {
+                                chat_metadata.world.push(lorebookName);
+                                await saveMetadataDebounced();
+                                CarrotDebug.ui('🐰 Activated lorebook for chat');
+                            }
+                        }
+                        break;
+
+                    case 'global':
+                        // Add to global worldinfo settings (this would require direct modification of ST settings)
+                        // For now, we'll add it to the extension settings as a global lorebook
+                        const settings = extension_settings[extensionName];
+                        if (!settings.globalLorebooks) {
+                            settings.globalLorebooks = [];
+                        }
+                        if (!settings.globalLorebooks.includes(lorebookName)) {
+                            settings.globalLorebooks.push(lorebookName);
+                            saveSettingsDebounced();
+                            CarrotDebug.ui('🐰 Added to global lorebooks list');
+                        }
+
+                        // Also show user how to activate globally since we can't directly modify ST's global settings
+                        toastr.info(`To fully activate "${lorebookName}" globally, please go to World Info settings and enable it manually.`);
+                        break;
+                }
+
+            } catch (error) {
+                CarrotDebug.error('Failed to activate lorebook', error);
+                toastr.warning('Lorebook created but activation failed: ' + error.message);
+            }
+        }
+
+        // Create character archive lorebook with tags
+        async function createCharacterArchive(characterName, triggers, lorebookName, tags, isNewLorebook = true, activationScope = 'character') {
+            try {
+                CarrotDebug.ui('🐰 Creating character archive', {
+                    characterName,
+                    triggers,
+                    lorebookName,
+                    tagsLength: tags.length
+                });
+
+                // Step 1: Handle lorebook creation/selection based on user choice
+                let currentWorldInfo;
+
+                if (isNewLorebook) {
+                    // Check if lorebook already exists for new lorebooks
+                    if (world_names.includes(lorebookName)) {
+                        // Show conflict resolution popup
+                        const userChoice = await showLorebookConflictDialog(lorebookName);
+                        if (userChoice === 'cancel') {
+                            throw new Error('Operation cancelled by user.');
+                        } else if (userChoice === 'use_existing') {
+                            // Use existing lorebook instead
+                            isNewLorebook = false;
+                            currentWorldInfo = await loadWorldInfo(lorebookName);
+                        } else if (userChoice === 'rename') {
+                            // This would require re-prompting the user, for now just throw error
+                            throw new Error(`Lorebook "${lorebookName}" already exists. Please choose a different name.`);
+                        }
+                    }
+
+                    if (isNewLorebook) {
+                        // Create lorebook structure manually without calling createNewWorldInfo
+                        CarrotDebug.ui('🐰 Creating new lorebook manually:', lorebookName);
+                        currentWorldInfo = {
+                            entries: {}
+                        };
+                    }
+                } else {
+                    // Load existing lorebook
+                    currentWorldInfo = await loadWorldInfo(lorebookName);
+                    if (!currentWorldInfo) {
+                        throw new Error(`Selected lorebook "${lorebookName}" not found.`);
+                    }
+                }
+
+                // Step 3: Create character entry with BunnymoTags
+
+                if (!currentWorldInfo) {
+                    throw new Error(`Failed to load created lorebook: ${lorebookName}`);
+                }
+
+                console.log('🐰 BABY BUNNY DEBUG: Creating entry with currentWorldInfo', {
+                    lorebookName,
+                    existingEntries: Object.keys(currentWorldInfo.entries || {}).length,
+                    currentWorldInfoStructure: currentWorldInfo,
+                    isNewLorebook: isNewLorebook
+                });
+
+                let newEntry;
+                if (isNewLorebook) {
+                    // For new lorebooks, create entry manually to avoid UI updates
+                    const newUid = Math.floor(Math.random() * 1000000); // Generate random UID
+                    newEntry = {
+                        uid: newUid,
+                        key: [],
+                        keysecondary: [],
+                        comment: '',
+                        content: '',
+                        constant: false,
+                        selective: true,
+                        addMemo: true,
+                        disable: false,
+                        useProbability: true,
+                        order: 550,
+                        probability: 100,
+                        selectiveLogic: 0,
+                        position: 4,
+                        excludeRecursion: true,
+                        preventRecursion: false,
+                        matchPersonaDescription: false,
+                        matchCharacterDescription: false,
+                        matchCharacterPersonality: false,
+                        matchCharacterDepthPrompt: false,
+                        matchScenario: false,
+                        matchCreatorNotes: false,
+                        delayUntilRecursion: false,
+                        depth: 2,
+                        group: '',
+                        groupOverride: false,
+                        groupWeight: 100,
+                        role: 2,
+                        vectorized: false,
+                        ignoreBudget: true,
+                        scanDepth: 1,
+                        caseSensitive: false,
+                        matchWholeWords: true,
+                        automationId: '',
+                        sticky: 0,
+                        cooldown: 0,
+                        delay: 0,
+                        triggers: [],
+                        displayIndex: 0,
+                        useGroupScoring: null,
+                        outletName: ''
+                    };
+
+                    // Add entry to our manually created structure
+                    currentWorldInfo.entries[newUid] = newEntry;
+                } else {
+                    // For existing lorebooks, use the normal method
+                    newEntry = createWorldInfoEntry(lorebookName, currentWorldInfo);
+                    if (!newEntry) {
+                        throw new Error('Failed to create lorebook entry using currentWorldInfo');
+                    }
+                }
+
+                // Configure the entry with character data (following Egyptian Royalty example EXACTLY)
+                newEntry.comment = `${characterName} Character Archive - Generated by Baby Bunny Mode`;
+                newEntry.content = tags; // Use full tags content including <BunnymoTags> wrapper
+                newEntry.key = triggers;
+                newEntry.keysecondary = [];
+                newEntry.selective = true;
+                newEntry.constant = false;
+                newEntry.order = 550; // Match Egyptian Royalty format
+                newEntry.position = 4; // Match Egyptian Royalty format
+                newEntry.disable = false;
+                newEntry.addMemo = true;
+                newEntry.excludeRecursion = true; // Match Egyptian Royalty format
+                newEntry.preventRecursion = false; // Match Egyptian Royalty format
+                newEntry.matchPersonaDescription = false; // Match Egyptian Royalty format
+                newEntry.matchCharacterDescription = false; // Match Egyptian Royalty format
+                newEntry.matchCharacterPersonality = false; // Match Egyptian Royalty format
+                newEntry.matchCharacterDepthPrompt = false; // Match Egyptian Royalty format
+                newEntry.matchScenario = false; // Match Egyptian Royalty format
+                newEntry.matchCreatorNotes = false; // Match Egyptian Royalty format
+                newEntry.delayUntilRecursion = false;
+                newEntry.depth = 2; // Match Egyptian Royalty format
+                newEntry.selectiveLogic = 0;
+                newEntry.group = '';
+                newEntry.groupOverride = false;
+                newEntry.groupWeight = 100;
+                newEntry.probability = 100;
+                newEntry.useProbability = true;
+                newEntry.role = 2; // Match Egyptian Royalty format
+                newEntry.vectorized = false;
+                newEntry.ignoreBudget = true; // Match Egyptian Royalty format
+                newEntry.scanDepth = 1;
+                newEntry.caseSensitive = false;
+                newEntry.matchWholeWords = true;
+                newEntry.automationId = ''; // Match Egyptian Royalty format
+                newEntry.sticky = 0; // Match Egyptian Royalty format
+                newEntry.cooldown = 0; // Match Egyptian Royalty format
+                newEntry.delay = 0; // Match Egyptian Royalty format
+                newEntry.triggers = []; // Match Egyptian Royalty format
+                newEntry.displayIndex = 0; // Match Egyptian Royalty format
+                newEntry.useGroupScoring = null; // Match Egyptian Royalty format
+                newEntry.outletName = ''; // Match Egyptian Royalty format
+
+                console.log('🐰 BABY BUNNY DEBUG: Entry configured', {
+                    entryId: newEntry.uid,
+                    contentLength: newEntry.content.length,
+                    triggers: newEntry.key,
+                    comment: newEntry.comment
+                });
+
+                console.log('🐰 BABY BUNNY DEBUG: About to save lorebook (NemoLore approach)', {
+                    lorebookName,
+                    entriesCount: Object.keys(currentWorldInfo.entries || {}).length,
+                    entriesStructure: currentWorldInfo.entries,
+                    newEntryUid: newEntry.uid,
+                    currentWorldInfoStructure: Object.keys(currentWorldInfo)
+                });
+
+                // Save the updated lorebook (following NemoLore's exact pattern)
+                await saveWorldInfo(lorebookName, currentWorldInfo);
+
+                // Step 4.5: Wait a moment and verify the save actually worked
+                await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second for file system
+
+                // Verify the lorebook was actually saved with entries
+                const verificationWorldInfo = await loadWorldInfo(lorebookName);
+                const savedEntriesCount = Object.keys(verificationWorldInfo?.entries || {}).length;
+
+                console.log('🐰 BABY BUNNY DEBUG: Save verification', {
+                    lorebookName,
+                    savedEntriesCount,
+                    verificationPassed: savedEntriesCount > 0,
+                    savedEntries: Object.keys(verificationWorldInfo?.entries || {})
+                });
+
+                if (savedEntriesCount === 0) {
+                    throw new Error('Lorebook was created but entries were not saved properly');
+                }
+
+                // Only update the UI AFTER verification passes
+                await updateWorldInfoList();
+
+                // Step 5: Register as character repo in CarrotKernel settings
+                const settings = extension_settings[extensionName];
+                if (!settings.characterRepoBooks.includes(lorebookName)) {
+                    settings.characterRepoBooks.push(lorebookName);
+                    characterRepoBooks.add(lorebookName);
+                    saveSettingsDebounced();
+
+                    CarrotDebug.ui('🐰 Registered as character repo:', lorebookName);
+                }
+
+                // Step 6: Activate lorebook based on selected scope
+                await activateLorebook(lorebookName, activationScope);
+
+                // Step 7: Success notification (after verification)
+                const scopeText = {
+                    'character': 'for this character',
+                    'chat': 'for this chat',
+                    'global': 'globally'
+                }[activationScope];
+                toastr.success(`🐰 Baby Bunny Mode: Successfully created "${lorebookName}" with ${savedEntriesCount} entries (${triggers.length} triggers) and activated ${scopeText}!`);
+
+                CarrotDebug.ui('🐰 Character archive created successfully', {
+                    lorebookName,
+                    characterName,
+                    entryId: newEntry.uid,
+                    triggersCount: triggers.length,
+                    tagsLength: tags.length,
+                    activationScope
+                });
+
+            } catch (error) {
+                CarrotDebug.ui('❌ Baby Bunny Mode error creating archive', error);
+                toastr.error('Failed to create character archive: ' + error.message);
+            }
+        }
+
 
         // Apply initial master enable state
         applyMasterEnableState(extension_settings[extensionName].enabled);
@@ -7585,15 +9676,108 @@ jQuery(async () => {
                 CarrotDebug.error('❌ Error in processActivatedLorebookEntries:', error);
             }
         });
-        
+
+        // Show conflict resolution dialog when lorebook name already exists
+        async function showLorebookConflictDialog(lorebookName) {
+            return new Promise((resolve) => {
+                const conflictOverlay = $(`
+                    <div class="baby-bunny-overlay" style="
+                        position: fixed !important;
+                        top: 0 !important;
+                        left: 0 !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        background: rgba(0,0,0,0.8) !important;
+                        z-index: 999999 !important;
+                        display: flex !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                    "></div>
+                `);
+
+                const conflictPopup = $(`
+                    <div class="carrot-popup-container" style="max-width: 500px; width: 90%;">
+                        <div class="carrot-card">
+                            <div class="carrot-card-header">
+                                <h3>⚠️ Lorebook Already Exists</h3>
+                                <p class="carrot-card-subtitle">The lorebook "${lorebookName}" already exists.</p>
+                            </div>
+                            <div class="carrot-card-body">
+                                <p style="margin-bottom: 20px;">What would you like to do?</p>
+
+                                <div class="carrot-action-bar" style="display: flex; gap: 12px; justify-content: center; flex-direction: column;">
+                                    <button id="conflict-use-existing" class="carrot-primary-btn">
+                                        <i class="fa-solid fa-folder"></i>
+                                        Use Existing Lorebook
+                                    </button>
+                                    <button id="conflict-rename" class="carrot-secondary-btn">
+                                        <i class="fa-solid fa-edit"></i>
+                                        Choose Different Name
+                                    </button>
+                                    <button id="conflict-cancel" class="carrot-secondary-btn">
+                                        <i class="fa-solid fa-times"></i>
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `);
+
+                conflictOverlay.append(conflictPopup);
+                $('body').append(conflictOverlay);
+
+                // Handle choices
+                conflictPopup.find('#conflict-use-existing').on('click', () => {
+                    conflictOverlay.remove();
+                    resolve('use_existing');
+                });
+
+                conflictPopup.find('#conflict-rename').on('click', () => {
+                    conflictOverlay.remove();
+                    resolve('rename');
+                });
+
+                conflictPopup.find('#conflict-cancel').on('click', () => {
+                    conflictOverlay.remove();
+                    resolve('cancel');
+                });
+
+                // Close on overlay click
+                conflictOverlay.on('click', function(e) {
+                    if (e.target === this) {
+                        conflictOverlay.remove();
+                        resolve('cancel');
+                    }
+                });
+            });
+        }
+
         // Hook into CHARACTER_MESSAGE_RENDERED to display thinking blocks and add persistent tags
         eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
             const settings = extension_settings[extensionName];
             
-            // CHARACTER_MESSAGE_RENDERED fires for AI messages, but we only want to show cards 
+            // CHARACTER_MESSAGE_RENDERED fires for AI messages, but we only want to show cards
             // when we have pending data from a previous user message that triggered WORLD_INFO_ACTIVATED
             const message = chat.find(msg => msg.index === messageId);
-            
+
+            console.log('🐰 BABY BUNNY DEBUG: Message lookup details');
+            console.log('  messageId:', messageId);
+            console.log('  chatLength:', chat.length);
+            console.log('  messageFound:', !!message);
+            console.log('  chatIndexes:', chat.map(msg => msg.index));
+            console.log('  lastMessage:', chat[chat.length - 1]);
+            console.log('  lastMessageIndex:', chat[chat.length - 1]?.index);
+            console.log('  targetMessage:', message);
+
+            // Try alternative lookup methods
+            const messageByLength = chat[chat.length - 1];
+            const messageByIdDirect = chat.find(msg => msg.id === messageId);
+            console.log('🐰 BABY BUNNY DEBUG: Alternative lookups');
+            console.log('  lastMessageByLength:', messageByLength);
+            console.log('  messageByIdDirect:', messageByIdDirect);
+            console.log('  lastMessageContent preview:', messageByLength?.mes?.substring(0, 200));
+
             CarrotDebug.ui(`🎭 CHARACTER_MESSAGE_RENDERED fired for message ${messageId}`, {
                 messageId: messageId,
                 isUser: message?.is_user,
@@ -7677,8 +9861,31 @@ jQuery(async () => {
             
             // Add persistent tags
             addPersistentTagsToMessage(messageId);
+
+            // 🐰 Baby Bunny Mode: Detect completed sheets and trigger guided automation
+            console.log('🐰 BABY BUNNY DEBUG: Checking if Baby Bunny Mode should trigger', {
+                babyBunnyMode: settings.babyBunnyMode,
+                isUser: message?.is_user,
+                messageId: messageId,
+                shouldTrigger: settings.babyBunnyMode && !message?.is_user
+            });
+
+            if (settings.babyBunnyMode && !message?.is_user) {
+                console.log('🐰 BABY BUNNY DEBUG: Triggering Baby Bunny Mode detection');
+
+                // If message lookup failed, try using the last message as fallback
+                let targetMessage = message;
+                if (!targetMessage && messageByLength && !messageByLength.is_user) {
+                    console.log('🐰 BABY BUNNY DEBUG: Using fallback - last message from chat array');
+                    targetMessage = messageByLength;
+                }
+
+                checkForCompletedSheets(targetMessage, messageId);
+            } else {
+                console.log('🐰 BABY BUNNY DEBUG: Not triggering - either disabled or user message');
+            }
         });
-        
+
         // Hook into CHAT_CHANGED to restore thinking blocks after page refresh/chat switch
         eventSource.on(event_types.CHAT_CHANGED, async () => {
             const settings = extension_settings[extensionName];
@@ -7748,6 +9955,8 @@ function applyMasterEnableState(isEnabled) {
         '#carrot_display_mode',
         '#carrot_auto_expand',
         '#carrot_debug_mode',
+        '#carrot_filter_context',
+        '#carrot_baby_bunny_mode',
         '#carrot_injection_depth',
         '#carrot_max_characters',
         '#carrot-scan-btn',
@@ -7870,6 +10079,7 @@ function bindSettingsEvents() {
         // Update status panels
         updateStatusPanels();
 
+
         console.log('🎯 MASTER TOGGLE DEBUG: Saving settings...');
         saveSettingsDebounced();
         CarrotDebug.setting('masterEnable', !isEnabled, isEnabled);
@@ -7912,7 +10122,30 @@ function bindSettingsEvents() {
         extension_settings[extensionName].filterFromContext = newValue;
         saveSettingsDebounced();
     });
-    
+
+    // Baby Bunny Mode
+    $('#carrot_baby_bunny_mode').prop('checked', settings.babyBunnyMode).on('change', function() {
+        const newValue = Boolean($(this).prop('checked'));
+        CarrotDebug.setting('babyBunnyMode', settings.babyBunnyMode, newValue);
+        extension_settings[extensionName].babyBunnyMode = newValue;
+        saveSettingsDebounced();
+
+        console.log('🐰 BABY BUNNY DEBUG: Toggle changed', {
+            oldValue: settings.babyBunnyMode,
+            newValue: newValue,
+            settingsSaved: true
+        });
+
+        if (newValue) {
+            toastr.info('🐰 Baby Bunny Mode enabled! I\'ll now guide you through creating character archives when you complete sheet commands.');
+            console.log('🐰 BABY BUNNY DEBUG: Baby Bunny Mode ENABLED - will detect BunnymoTags in AI responses');
+        } else {
+            toastr.info('🐰 Baby Bunny Mode disabled.');
+            console.log('🐰 BABY BUNNY DEBUG: Baby Bunny Mode DISABLED');
+        }
+
+    });
+
     // Injection depth
     $('#carrot_injection_depth').val(settings.injectionDepth).on('change', function() {
         extension_settings[extensionName].injectionDepth = parseInt($(this).val()) || 4;
@@ -8184,9 +10417,28 @@ function bindSettingsEvents() {
             button.prop('disabled', false).html(originalText);
         }
     });
-    
+
     // Add loadout manager status card (4th card next to System Status, Character Repository, AI Injection)
     addLoadoutManagerCard();
+
+    // Initialize Baby Bunny Mode button (using qvink_memory timing)
+    jQuery(function() {
+        initialize_baby_bunny_message_button();
+
+        // Add buttons to all existing messages after template is set up
+        setTimeout(() => {
+            add_baby_bunny_buttons_to_all_existing_messages();
+        }, 500);
+    });
+
+    // Hook into message rendering events to ensure buttons appear on new messages
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
+        add_baby_bunny_button_to_message(messageId);
+    });
+
+    eventSource.on(event_types.USER_MESSAGE_RENDERED, (messageId) => {
+        add_baby_bunny_button_to_message(messageId);
+    });
 }
 
 // Update pack list UI with current pack status
@@ -16018,6 +18270,122 @@ Most common categories:<br/>
 
 // Close the main CarrotKernel object
 };
+
+// =============================================================================
+// BABY BUNNY MODE MESSAGE BUTTON (following qvink_memory pattern)
+// =============================================================================
+
+function initialize_baby_bunny_message_button() {
+    // Add the message button to the chat messages
+    console.log("🐰 Initializing message button")
+
+    let html = `
+<div title="🐰 Manual Baby Bunny Mode - Process this message as a character sheet" class="mes_button ${baby_bunny_button_class}" tabindex="0">
+    <svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8.097.298a2.19 2.19 0 0 0-2.145.687a4.03 4.03 0 0 0-.735 3.981c.534 1.742 1.517 4.657 2.264 6.743c.044.12.157.2.284.201h8.094a.31.31 0 0 0 .272-.19c.249-.627.533-1.362.83-2.144a.26.26 0 0 0-.107-.308a5.8 5.8 0 0 1-1.327-1.185a10.4 10.4 0 0 1-2.3-3.851a.1.1 0 0 0-.07-.024a.07.07 0 0 0-.071.06c-.225.912-.77 3.222-1.043 4.443a.31.31 0 0 1-.296.237a.284.284 0 0 1-.285-.237c-.438-2.086-.948-4.432-1.315-5.842C9.602.96 8.654.439 8.097.297m11.755 8.627a1.67 1.67 0 0 0 1.244-2.37a9.36 9.36 0 0 0-3.496-4.16a5.3 5.3 0 0 0-2.133-.532c-.533 0-.983.142-1.125.568c-.439 1.185 1.185 3.875 2.145 4.954a4.18 4.18 0 0 0 3.365 1.54M2.74 14.873c0 .654.531 1.185 1.186 1.185h2.192a.32.32 0 0 1 .225.094a.3.3 0 0 1 .071.237l-.794 5.522a1.6 1.6 0 0 0 .427 1.327c.349.339.817.526 1.303.522h8.177a1.85 1.85 0 0 0 1.303-.521c.356-.345.527-.837.462-1.328l-.794-5.522a.3.3 0 0 1 .071-.237a.32.32 0 0 1 .226-.094h2.488a1.185 1.185 0 1 0 0-2.37H3.878a1.185 1.185 0 0 0-1.137 1.185"/>
+    </svg>
+</div>
+`
+
+    $("#message_template .mes_buttons .extraMesButtons").prepend(html);
+
+    // button events
+    let $chat = $("div#chat")
+    $chat.on("click", `.${baby_bunny_button_class}`, async function () {
+        const message_block = $(this).closest(".mes");
+        const message_id = Number(message_block.attr("mesid"));
+
+        console.log('🐰 Baby Bunny button clicked for message:', message_id);
+
+        // Debug: Log message info
+        console.log('🐰 Debugging message lookup:', {
+            message_id: message_id,
+            messageIdType: typeof message_id,
+            chatLength: chat.length,
+            firstMessage: chat[0] ? Object.keys(chat[0]) : 'No messages',
+            sampleMessageIds: chat.slice(0, 3).map(msg => ({ index: msg.index, mesId: msg.mes_id, id: msg.id }))
+        });
+
+        // Try multiple ways to find the message
+        let targetMessage = chat.find(msg => msg.index == message_id);
+        if (!targetMessage) {
+            targetMessage = chat.find(msg => msg.mes_id == message_id);
+        }
+        if (!targetMessage) {
+            targetMessage = chat.find(msg => msg.id == message_id);
+        }
+        if (!targetMessage) {
+            // Try by array index (mesid might be array position)
+            targetMessage = chat[message_id];
+        }
+
+        if (!targetMessage) {
+            console.warn('🐰 Could not find message in chat array after trying all methods');
+            toastr.warning('Could not find message to process.');
+            return;
+        }
+
+        console.log('🐰 Manual Baby Bunny Mode triggered - processing message as character sheet');
+        toastr.success('🐰 Processing message with Baby Bunny Mode...');
+
+        // Manually trigger the Baby Bunny Mode processing
+        await checkForCompletedSheets(targetMessage, message_id);
+    });
+}
+
+// Add Baby Bunny button to specific message (for MESSAGE_RENDERED events)
+function add_baby_bunny_button_to_message(messageId) {
+    console.log(`🐰 Adding button to message ${messageId}`);
+
+    // Find the specific message by mesid attribute
+    const messageElement = $(`.mes[mesid="${messageId}"]`);
+    if (messageElement.length === 0) {
+        console.log(`🐰 Message ${messageId} not found in DOM`);
+        return;
+    }
+
+    const extraButtons = messageElement.find('.mes_buttons .extraMesButtons');
+    if (extraButtons.length === 0) {
+        console.log(`🐰 No extraMesButtons found in message ${messageId}`);
+        return;
+    }
+
+    // Check if button already exists
+    if (extraButtons.find(`.${baby_bunny_button_class}`).length > 0) {
+        console.log(`🐰 Button already exists in message ${messageId}`);
+        return;
+    }
+
+    // Add the button
+    let html = `<div title="🐰 Manual Baby Bunny Mode - Process this message as a character sheet" class="mes_button ${baby_bunny_button_class}" tabindex="0">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8.097.298a2.19 2.19 0 0 0-2.145.687a4.03 4.03 0 0 0-.735 3.981c.534 1.742 1.517 4.657 2.264 6.743c.044.12.157.2.284.201h8.094a.31.31 0 0 0 .272-.19c.249-.627.533-1.362.83-2.144a.26.26 0 0 0-.107-.308a5.8 5.8 0 0 1-1.327-1.185a10.4 10.4 0 0 1-2.3-3.851a.1.1 0 0 0-.07-.024a.07.07 0 0 0-.071.06c-.225.912-.77 3.222-1.043 4.443a.31.31 0 0 1-.296.237a.284.284 0 0 1-.285-.237c-.438-2.086-.948-4.432-1.315-5.842C9.602.96 8.654.439 8.097.297m11.755 8.627a1.67 1.67 0 0 0 1.244-2.37a9.36 9.36 0 0 0-3.496-4.16a5.3 5.3 0 0 0-2.133-.532c-.533 0-.983.142-1.125.568c-.439 1.185 1.185 3.875 2.145 4.954a4.18 4.18 0 0 0 3.365 1.54M2.74 14.873c0 .654.531 1.185 1.186 1.185h2.192a.32.32 0 0 1 .225.094a.3.3 0 0 1 .071.237l-.794 5.522a1.6 1.6 0 0 0 .427 1.327c.349.339.817.526 1.303.522h8.177a1.85 1.85 0 0 0 1.303-.521c.356-.345.527-.837.462-1.328l-.794-5.522a.3.3 0 0 1 .071-.237a.32.32 0 0 1 .226-.094h2.488a1.185 1.185 0 1 0 0-2.37H3.878a1.185 1.185 0 0 0-1.137 1.185"/>
+        </svg>
+    </div>`;
+    extraButtons.prepend(html);
+
+    console.log(`🐰 ✅ Button added to message ${messageId}`);
+}
+
+// Add Baby Bunny buttons to all existing messages (called on extension load)
+function add_baby_bunny_buttons_to_all_existing_messages() {
+    console.log('🐰 Adding Baby Bunny buttons to all existing messages...');
+
+    const allMessages = $("#chat .mes");
+    console.log(`🐰 Found ${allMessages.length} existing messages to process`);
+
+    let addedCount = 0;
+    allMessages.each(function() {
+        const messageId = $(this).attr("mesid");
+        if (messageId) {
+            add_baby_bunny_button_to_message(messageId);
+            addedCount++;
+        }
+    });
+
+    console.log(`🐰 ✅ Added Baby Bunny buttons to ${addedCount} existing messages`);
+}
+
 
 // 🥕 WB TRACKER DEBUG - WORLD INFO ENTRY TRIGGER DEBUGGING
 console.log('🥕 WB TRACKER DEBUG: Setting up world info trigger debugging...');
