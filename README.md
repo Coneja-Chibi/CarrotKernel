@@ -58,8 +58,7 @@ AI responds: *Alice's face flushes red as she looks away* "I-It's not like I wan
 - Lorebooks containing character data in BunnymoTags format
 
 ### Step 1: Installation
-1. Download the CarrotKernel extension files
-2. Place in your SillyTavern extensions directory: `public/scripts/extensions/third-party/CarrotKernel/`
+1. Use the Github Link: https://github.com/Coneja-Chibi/CarrotKernel and place it in the extension adder in ST
 3. Restart SillyTavern
 4. Enable CarrotKernel in Extensions menu
 
