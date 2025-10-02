@@ -33,15 +33,12 @@
                             <div class="carrot-help-text">Send character data to AI context for consistency</div>
                         </div>
                         <div class="carrot-setting-item">
-                            <label class="carrot-label">
-                                <span class="carrot-label-text">Display Mode</span>
-                                <span class="carrot-label-hint">How to show injected character data</span>
-                            </label>
                             <select id="carrot_display_mode" class="carrot-select">
                                 <option value="none">No Display</option>
                                 <option value="thinking">Thinking Box Style</option>
                                 <option value="cards">Character Cards</option>
                             </select>
+                            <div class="carrot-help-text">Choose how character data appears in chat</div>
                         </div>
                         <div class="carrot-setting-item">
                             <label class="carrot-toggle">
@@ -49,6 +46,7 @@
                                 <span class="carrot-toggle-slider"></span>
                                 <span class="carrot-toggle-label">Auto-expand thinking boxes</span>
                             </label>
+                            <div class="carrot-help-text">Automatically expand thinking boxes when displayed</div>
                         </div>
                         <div class="carrot-setting-item">
                             <label class="carrot-toggle">
@@ -64,7 +62,7 @@
                                 <span class="carrot-toggle-slider"></span>
                                 <span class="carrot-toggle-label">Filter tags from AI context</span>
                             </label>
-                            <div class="carrot-help-text">Hide BunnyMoTags from AI (like ST's reasoning system)</div>
+                            <div class="carrot-help-text">Remove BunnyMoTags blocks from chat history before sending to AI - saves tokens and prevents AI confusion while still letting CarrotKernel use the data</div>
                         </div>
                         <div class="carrot-setting-item">
                             <label class="carrot-toggle">
@@ -73,6 +71,14 @@
                                 <span class="carrot-toggle-label">🐰 Baby Bunny Mode</span>
                             </label>
                             <div class="carrot-help-text">Guided automation for sheet processing and character archive creation</div>
+                        </div>
+                        <div class="carrot-setting-item">
+                            <label class="carrot-toggle">
+                                <input type="checkbox" id="carrot_worldbook_tracker">
+                                <span class="carrot-toggle-slider"></span>
+                                <span class="carrot-toggle-label">🌍 WorldBook Tracker</span>
+                            </label>
+                            <div class="carrot-help-text">Show WorldBook Tracker icon and panel for monitoring active lorebook entries</div>
                         </div>
                     </div>
                 </div>
@@ -259,43 +265,80 @@
                 </div>
             </div>
             
-            <!-- Smart Help Section -->
+            <!-- Tutorial Picker Section -->
             <div class="carrot-help-section">
                 <div class="carrot-help-header">
                     <h4>💡 Need Help?</h4>
-                    <p class="carrot-help-subtitle">Click any status panel above for contextual guidance and tutorials</p>
+                    <p class="carrot-help-subtitle">Click any tutorial below to learn how to use CarrotKernel</p>
                 </div>
-                
-                <div class="carrot-help-flow">
-                    <div class="carrot-help-step">
-                        <div class="carrot-help-number">1</div>
-                        <div class="carrot-help-text">
-                            <strong>System Status:</strong> Click for setup tutorial
+
+                <div class="carrot-tutorial-grid">
+                    <div class="carrot-tutorial-card" onclick="CarrotKernel.openSystemTutorial()">
+                        <div class="carrot-tutorial-number">1</div>
+                        <div class="carrot-tutorial-content">
+                            <strong>System Setup</strong>
+                            <span>Learn basic configuration and how to enable CarrotKernel</span>
                         </div>
+                        <div class="carrot-tutorial-arrow">→</div>
                     </div>
-                    <div class="carrot-help-arrow">→</div>
-                    <div class="carrot-help-step">
-                        <div class="carrot-help-number">2</div>
-                        <div class="carrot-help-text">
-                            <strong>Character Repository:</strong> Click to manage repositories
+
+                    <div class="carrot-tutorial-card" onclick="CarrotKernel.openRepositoryTutorial()">
+                        <div class="carrot-tutorial-number">2</div>
+                        <div class="carrot-tutorial-content">
+                            <strong>Character Repository</strong>
+                            <span>Scan lorebooks and manage your character data</span>
                         </div>
+                        <div class="carrot-tutorial-arrow">→</div>
                     </div>
-                    <div class="carrot-help-arrow">→</div>
-                    <div class="carrot-help-step">
-                        <div class="carrot-help-number">3</div>
-                        <div class="carrot-help-text">
-                            <strong>AI Injection:</strong> Hover for technical details
+
+                    <div class="carrot-tutorial-card" onclick="CarrotKernel.openInjectionTutorial()">
+                        <div class="carrot-tutorial-number">3</div>
+                        <div class="carrot-tutorial-content">
+                            <strong>AI Injection</strong>
+                            <span>Understand how character data reaches your AI</span>
                         </div>
+                        <div class="carrot-tutorial-arrow">→</div>
+                    </div>
+
+                    <div class="carrot-tutorial-card" onclick="CarrotKernel.openLoadoutTutorial()">
+                        <div class="carrot-tutorial-number">4</div>
+                        <div class="carrot-tutorial-content">
+                            <strong>Loadout Manager</strong>
+                            <span>Create context-specific settings for characters and chats</span>
+                        </div>
+                        <div class="carrot-tutorial-arrow">→</div>
+                    </div>
+
+                    <div class="carrot-tutorial-card" onclick="CarrotKernel.openTemplateEditorTutorial()">
+                        <div class="carrot-tutorial-number">5</div>
+                        <div class="carrot-tutorial-content">
+                            <strong>Template Editor</strong>
+                            <span>Customize how character data is formatted for AI</span>
+                        </div>
+                        <div class="carrot-tutorial-arrow">→</div>
+                    </div>
+
+                    <div class="carrot-tutorial-card" onclick="CarrotKernel.openBabyBunnyTutorial()">
+                        <div class="carrot-tutorial-number">6</div>
+                        <div class="carrot-tutorial-content">
+                            <strong>Baby Bunny Mode</strong>
+                            <span>Create character archives from AI-generated sheets</span>
+                        </div>
+                        <div class="carrot-tutorial-arrow">→</div>
                     </div>
                 </div>
-                
+
                 <div class="carrot-format-example">
                     <div class="carrot-format-header">
                         <i class="fa-solid fa-code"></i>
                         <strong>Character Repository Format Example</strong>
                     </div>
                     <div class="carrot-format-code">
-                        <code>&lt;BunnymoTags&gt;&lt;NAME:Alice Cooper&gt;, &lt;SPECIES:Human&gt;, &lt;PERSONALITY:Tsundere&gt;, &lt;TRAIT:Intelligent&gt;, &lt;APPEARANCE:Long blonde hair&gt;&lt;/BunnymoTags&gt;</code>
+                        <code>&lt;BunnymoTags&gt;&lt;Name:Atsu_Ibn_Oba_Al-Masri&gt;, &lt;GENRE:FANTASY&gt; &lt;PHYSICAL&gt; &lt;SPECIES:HUMAN&gt;, &lt;GENDER:MALE&gt;, &lt;BUILD:Muscular&gt;, &lt;BUILD:Tall&gt;, &lt;SKIN:FAIR&gt;, &lt;HAIR:BLACK&gt;, &lt;STYLE:ANCIENT_EGYPTIAN_ROYALTY&gt;,&lt;/PHYSICAL&gt; &lt;PERSONALITY&gt;&lt;Dere:Sadodere&gt;, &lt;Dere:Oujidere&gt;, &lt;ENTJ-U&gt;, &lt;TRAIT:CRUEL&gt;, &lt;TRAIT:INTELLIGENT&gt;, &lt;TRAIT:POWERFUL&gt;, &lt;TRAIT:DANGEROUS&gt;, &lt;TRAIT:SELFISH&gt;, &lt;TRAIT:HEDONISTIC&gt;, &lt;ATTACHMENT:FEARFUL_AVOIDANT&gt;, &lt;CONFLICT:COMPETITIVE&gt;, &lt;BOUNDARIES:RIGID&gt;,&lt;FLIRTING:AGGRESSIVE&gt;, &lt;/PERSONALITY&gt; &lt;NSFW&gt;&lt;ORIENTATION:PANSEXUAL&gt;, &lt;POWER:DOMINANT&gt;, &lt;KINK:BRAT_TAMING&gt;, &lt;KINK:PUBLIC_HUMILIATION&gt;, &lt;KINK:POWER_PLAY&gt;, &lt;KINK:EXHIBITIONISM&gt;, &lt;CHEMISTRY:ANTAGONISTIC&gt;, &lt;AROUSAL:DOMINANCE&gt;, &lt;TRAUMA:CHILDHOOD&gt;, &lt;JEALOUSY:POSSESSIVE&gt;,&lt;/NSFW&gt;
+
+ &lt;Genre&gt; This story primarily uses &lt;GENRE:BLANK&gt; as its most prominent narrative foundation, establishing the core structure and pacing. This is often blended with &lt;GENRE:ROMANCE&gt; as a secondary layer, adding emotional stakes and relationship development to the primary genre framework. &lt;/Genre&gt;
+
+&lt;Linguistics&gt; Character uses &lt;LING:COMMANDING&gt; as his primary mode of speech, asserting authority and control. This is almost always blended with &lt;LING:SUGGESTIVE&gt;, using a tone of cruel flirtation, possessive pet names, and psychological manipulation to achieve his goals. &lt;/linguistics&gt;&lt;/BunnymoTags&gt;</code>
                     </div>
                     <div class="carrot-format-note">
                         <i class="fa-solid fa-lightbulb"></i>

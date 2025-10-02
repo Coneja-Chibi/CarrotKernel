@@ -1,6 +1,6 @@
 import { eventSource, event_types, chat, saveSettingsDebounced, chat_metadata, addOneMessage } from '../../../../script.js';
 import { extension_settings, getContext, writeExtensionField, saveMetadataDebounced } from '../../../extensions.js';
-import { loadWorldInfo, world_names, createNewWorldInfo, createWorldInfoEntry, saveWorldInfo, updateWorldInfoList, METADATA_KEY } from '../../../world-info.js';
+import { loadWorldInfo, world_names, createNewWorldInfo, createWorldInfoEntry, saveWorldInfo, updateWorldInfoList, selected_world_info, world_info, METADATA_KEY } from '../../../world-info.js';
 import { executeSlashCommandsWithOptions } from '../../../slash-commands.js';
 import { getMessageTimeStamp } from '../../../RossAscends-mods.js';
 import { CarrotWorldBookTracker } from './worldbook-tracker.js';
@@ -2914,7 +2914,8 @@ const defaultSettings = {
     maxCharactersShown: 6,
     debugMode: false,
     filterFromContext: true,  // Hide BunnyMoTags from AI context (like ST's reasoning system)
-    babyBunnyMode: false     // 🐰 Baby Bunny Mode - guided automation for sheet processing
+    babyBunnyMode: false,     // 🐰 Baby Bunny Mode - guided automation for sheet processing
+    worldBookTrackerEnabled: true  // WorldBook Tracker toggle
 };
 
 // Debug logging function - now uses centralized CarrotDebug module
@@ -8189,6 +8190,38 @@ jQuery(async () => {
                             </div>
                         </div>
 
+                        <!-- Selection Mode -->
+                        <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                            <label class="carrot-label">
+                                <span class="carrot-label-text">Entry Selection Mode</span>
+                                <span class="carrot-label-hint">How this character's data should be activated</span>
+                            </label>
+
+                            <div style="display: flex; gap: 12px; margin-top: 12px;">
+                                <label class="carrot-toggle" style="flex: 1; flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 2px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                    <input type="radio" name="selection-mode-${index}" class="batch-selection-mode" data-char-index="${index}" value="selective" checked style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                    <div style="flex: 1;">
+                                        <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                            <i class="fa-solid fa-hand-pointer" style="color: var(--SmartThemeQuoteColor);"></i>
+                                            Selective
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--SmartThemeFadedColor); line-height: 1.4;">Entry only fires when triggers are mentioned in chat</div>
+                                    </div>
+                                </label>
+
+                                <label class="carrot-toggle" style="flex: 1; flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 2px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                    <input type="radio" name="selection-mode-${index}" class="batch-selection-mode" data-char-index="${index}" value="constant" style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                    <div style="flex: 1;">
+                                        <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                            <i class="fa-solid fa-infinity" style="color: var(--SmartThemeQuoteColor);"></i>
+                                            Constant
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--SmartThemeFadedColor); line-height: 1.4;">Always active - for MAIN characters only</div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
                         <!-- Tag Preview/Edit -->
                         <div class="carrot-setting-item">
                             <label class="carrot-label">
@@ -8647,12 +8680,14 @@ jQuery(async () => {
                                 triggers.push($(this).data('tag'));
                             });
                             const tags = popup.find(`.batch-tag-editor[data-char-index="${index}"]`).val();
+                            const selectionMode = popup.find(`.batch-selection-mode[data-char-index="${index}"]:checked`).val() || 'selective';
 
                             return {
                                 ...char,
                                 entryName,
                                 triggers,
-                                tags
+                                tags,
+                                selectionMode
                             };
                         })
                         .filter(config => config !== null); // Remove disabled characters
@@ -8778,8 +8813,8 @@ jQuery(async () => {
             newEntry.content = config.tags; // Full BunnymoTags block
             newEntry.key = config.triggers;
             newEntry.keysecondary = [];
-            newEntry.selective = true;
-            newEntry.constant = false;
+            newEntry.selective = config.selectionMode === 'selective';
+            newEntry.constant = config.selectionMode === 'constant';
             newEntry.order = 550;
             newEntry.position = 4;
             newEntry.disable = false;
@@ -8980,10 +9015,49 @@ jQuery(async () => {
                                     </div>
                                 </div>
 
-                                <!-- Step 3: Tag Review and Edit -->
+                                <!-- Step 3: Activation Mode -->
                                 <div class="carrot-setup-step">
                                     <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
                                         <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">3</span>
+                                        Activation Mode
+                                    </h4>
+
+                                    <div class="carrot-setting-item">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Entry Selection Mode</span>
+                                            <span class="carrot-label-hint">How this character's data should be activated</span>
+                                        </label>
+
+                                        <div style="display: flex; gap: 12px; margin-top: 12px;">
+                                            <label class="carrot-toggle" style="flex: 1; flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 2px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                                <input type="radio" name="selection-mode" value="selective" checked style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                                <div style="flex: 1;">
+                                                    <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                                        <i class="fa-solid fa-hand-pointer" style="color: var(--SmartThemeQuoteColor);"></i>
+                                                        Selective
+                                                    </div>
+                                                    <div style="font-size: 12px; color: var(--SmartThemeFadedColor); line-height: 1.4;">Entry only fires when triggers are mentioned in chat</div>
+                                                </div>
+                                            </label>
+
+                                            <label class="carrot-toggle" style="flex: 1; flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 2px solid var(--SmartThemeBorderColor); border-radius: 8px; cursor: pointer; background: var(--SmartThemeBlurTintColor); transition: all 0.2s ease;">
+                                                <input type="radio" name="selection-mode" value="constant" style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                                <div style="flex: 1;">
+                                                    <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                                        <i class="fa-solid fa-infinity" style="color: var(--SmartThemeQuoteColor);"></i>
+                                                        Constant
+                                                    </div>
+                                                    <div style="font-size: 12px; color: var(--SmartThemeFadedColor); line-height: 1.4;">Always active - for MAIN characters only</div>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Step 4: Tag Review and Edit -->
+                                <div class="carrot-setup-step">
+                                    <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">4</span>
                                         Review & Edit Character Data
                                     </h4>
 
@@ -9025,10 +9099,10 @@ jQuery(async () => {
                                     </div>
                                 </div>
 
-                                <!-- Step 4: Loadout Management -->
+                                <!-- Step 5: Loadout Management -->
                                 <div class="carrot-setup-step">
                                     <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
-                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">4</span>
+                                        <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">5</span>
                                         Activate Lorebook
                                     </h4>
 
@@ -9245,6 +9319,7 @@ jQuery(async () => {
                     const isNewLorebook = popup.find('input[name="lorebook-type"]:checked').val() === 'new';
                     const entryName = popup.find('#baby-bunny-entry-name').val().trim();
                     const activationScope = popup.find('input[name="lorebook-scope"]:checked').val();
+                    const selectionMode = popup.find('input[name="selection-mode"]:checked').val() || 'selective';
 
                     // Get lorebook name based on type
                     let lorebookName;
@@ -9267,8 +9342,8 @@ jQuery(async () => {
 
                     overlay.remove();
 
-                    // Create the character archive with activation scope
-                    await createCharacterArchive(entryName, triggers, lorebookName, characterData.tags, isNewLorebook, activationScope);
+                    // Create the character archive with activation scope and selection mode
+                    await createCharacterArchive(entryName, triggers, lorebookName, characterData.tags, isNewLorebook, activationScope, selectionMode);
                     resolve(true);
                 });
 
@@ -9285,7 +9360,7 @@ jQuery(async () => {
         // Expose checkForCompletedSheets to global scope for button access
         window.checkForCompletedSheets = checkForCompletedSheets;
 
-        // Activate lorebook based on selected scope using SillyTavern's world info system
+        // Activate lorebook based on selected scope using SillyTavern's native world info system
         async function activateLorebook(lorebookName, activationScope) {
             try {
                 CarrotDebug.ui('🐰 Activating lorebook', { lorebookName, activationScope });
@@ -9294,57 +9369,74 @@ jQuery(async () => {
 
                 switch (activationScope) {
                     case 'character':
-                        // Activate for current character across all chats
-                        if (context.characterId && context.characters[context.characterId]) {
-                            const characterData = context.characters[context.characterId];
-                            if (!characterData.data.extensions) {
-                                characterData.data.extensions = {};
-                            }
-                            if (!characterData.data.extensions[METADATA_KEY]) {
-                                characterData.data.extensions[METADATA_KEY] = {};
-                            }
-                            if (!characterData.data.extensions[METADATA_KEY].world) {
-                                characterData.data.extensions[METADATA_KEY].world = [];
+                        // Add to auxiliary lorebooks using ST's world_info.charLore structure
+                        if (context.characterId !== undefined && context.characters && context.characters[context.characterId]) {
+                            const char = context.characters[context.characterId];
+                            const charFileName = char.avatar.replace(/\.(png|webp)$/, '');
+
+                            // Initialize charLore if needed
+                            if (!world_info.charLore) {
+                                world_info.charLore = [];
                             }
 
-                            // Add lorebook to character if not already present
-                            if (!characterData.data.extensions[METADATA_KEY].world.includes(lorebookName)) {
-                                characterData.data.extensions[METADATA_KEY].world.push(lorebookName);
-                                await context.saveChat();
-                                CarrotDebug.ui('🐰 Activated lorebook for character:', characterData.name);
+                            // Find or create charLore entry for this character
+                            let charLoreEntry = world_info.charLore.find(e => e.name === charFileName);
+                            if (!charLoreEntry) {
+                                charLoreEntry = { name: charFileName, extraBooks: [] };
+                                world_info.charLore.push(charLoreEntry);
                             }
+
+                            // Add lorebook to extraBooks if not already there
+                            if (!charLoreEntry.extraBooks.includes(lorebookName)) {
+                                charLoreEntry.extraBooks.push(lorebookName);
+                                saveSettingsDebounced();
+
+                                CarrotDebug.ui('🐰 ✅ Added lorebook to character auxiliary lorebooks:', char.name);
+                                toastr.success(`Lorebook "${lorebookName}" added as auxiliary lorebook for ${char.name}`);
+                            } else {
+                                CarrotDebug.ui('🐰 Lorebook already in character auxiliary lorebooks');
+                                toastr.info(`Lorebook "${lorebookName}" is already an auxiliary lorebook for ${char.name}`);
+                            }
+                        } else {
+                            CarrotDebug.ui('🐰 ⚠️ No character loaded - cannot activate character-scoped lorebook');
+                            toastr.warning('No character is currently loaded. Lorebook created but not activated.');
                         }
                         break;
 
                     case 'chat':
-                        // Activate for current chat only
-                        if (chat_metadata && chat_metadata.world !== undefined) {
-                            if (!Array.isArray(chat_metadata.world)) {
-                                chat_metadata.world = chat_metadata.world ? [chat_metadata.world] : [];
-                            }
-                            if (!chat_metadata.world.includes(lorebookName)) {
-                                chat_metadata.world.push(lorebookName);
-                                await saveMetadataDebounced();
-                                CarrotDebug.ui('🐰 Activated lorebook for chat');
-                            }
+                        // Set as chat's lorebook using ST's native structure
+                        // Stored in: chat_metadata['world_info'] (string, not array!)
+                        if (typeof chat_metadata !== 'undefined') {
+                            // ST uses 'world_info' as the key, stores a single string
+                            chat_metadata['world_info'] = lorebookName;
+
+                            // Save chat metadata
+                            await saveMetadataDebounced();
+
+                            // Update UI - add 'world_set' class to chat lorebook button
+                            $('.chat_lorebook_button').addClass('world_set');
+
+                            CarrotDebug.ui('🐰 ✅ Activated lorebook for chat');
+                            toastr.success(`Lorebook "${lorebookName}" activated for this chat`);
                         }
                         break;
 
                     case 'global':
-                        // Add to global worldinfo settings (this would require direct modification of ST settings)
-                        // For now, we'll add it to the extension settings as a global lorebook
-                        const settings = extension_settings[extensionName];
-                        if (!settings.globalLorebooks) {
-                            settings.globalLorebooks = [];
-                        }
-                        if (!settings.globalLorebooks.includes(lorebookName)) {
-                            settings.globalLorebooks.push(lorebookName);
-                            saveSettingsDebounced();
-                            CarrotDebug.ui('🐰 Added to global lorebooks list');
-                        }
+                        // Activate lorebook globally by directly adding to selected_world_info
+                        CarrotDebug.ui('🐰 Activating lorebook globally:', lorebookName);
 
-                        // Also show user how to activate globally since we can't directly modify ST's global settings
-                        toastr.info(`To fully activate "${lorebookName}" globally, please go to World Info settings and enable it manually.`);
+                        // Directly add to selected_world_info array and save
+                        if (!selected_world_info.includes(lorebookName)) {
+                            selected_world_info.push(lorebookName);
+                            saveSettingsDebounced();
+                            await updateWorldInfoList(); // Update UI to show selection
+
+                            CarrotDebug.ui('🐰 ✅ Added to selected_world_info and saved settings');
+                            toastr.success(`Lorebook "${lorebookName}" activated globally`);
+                        } else {
+                            CarrotDebug.ui('🐰 Lorebook already in selected_world_info');
+                            toastr.info(`Lorebook "${lorebookName}" is already active globally`);
+                        }
                         break;
                 }
 
@@ -9355,13 +9447,14 @@ jQuery(async () => {
         }
 
         // Create character archive lorebook with tags
-        async function createCharacterArchive(characterName, triggers, lorebookName, tags, isNewLorebook = true, activationScope = 'character') {
+        async function createCharacterArchive(characterName, triggers, lorebookName, tags, isNewLorebook = true, activationScope = 'character', selectionMode = 'selective') {
             try {
                 CarrotDebug.ui('🐰 Creating character archive', {
                     characterName,
                     triggers,
                     lorebookName,
-                    tagsLength: tags.length
+                    tagsLength: tags.length,
+                    selectionMode
                 });
 
                 // Step 1: Handle lorebook creation/selection based on user choice
@@ -9422,8 +9515,8 @@ jQuery(async () => {
                         keysecondary: [],
                         comment: '',
                         content: '',
-                        constant: false,
-                        selective: true,
+                        constant: selectionMode === 'constant',
+                        selective: selectionMode === 'selective',
                         addMemo: true,
                         disable: false,
                         useProbability: true,
@@ -9475,8 +9568,8 @@ jQuery(async () => {
                 newEntry.content = tags; // Use full tags content including <BunnymoTags> wrapper
                 newEntry.key = triggers;
                 newEntry.keysecondary = [];
-                newEntry.selective = true;
-                newEntry.constant = false;
+                newEntry.selective = selectionMode === 'selective';
+                newEntry.constant = selectionMode === 'constant';
                 newEntry.order = 550; // Match Egyptian Royalty format
                 newEntry.position = 4; // Match Egyptian Royalty format
                 newEntry.disable = false;
@@ -9958,6 +10051,11 @@ jQuery(async () => {
         try {
             CarrotWorldBookTracker.init();
             CarrotDebug.init('WorldBook Tracker initialized successfully');
+
+            // Apply initial enabled state
+            if (!extension_settings[extensionName]?.worldBookTrackerEnabled) {
+                CarrotWorldBookTracker.disable();
+            }
         } catch (error) {
             CarrotDebug.error('WorldBook Tracker initialization failed', error);
         }
@@ -9991,6 +10089,7 @@ function applyMasterEnableState(isEnabled) {
         '#carrot_debug_mode',
         '#carrot_filter_context',
         '#carrot_baby_bunny_mode',
+        '#carrot_worldbook_tracker',
         '#carrot_injection_depth',
         '#carrot_max_characters',
         '#carrot-scan-btn',
@@ -10019,6 +10118,17 @@ function applyMasterEnableState(isEnabled) {
     if (isEnabled) {
         console.log('🎯 MASTER ENABLE DEBUG: Enabling UI - removing disabled class');
         $('#carrot_settings').removeClass('carrot-disabled');
+
+        // Re-enable WorldBook Tracker if it was enabled in settings
+        if (extension_settings[extensionName]?.worldBookTrackerEnabled) {
+            CarrotWorldBookTracker.enable();
+        }
+
+        // Re-add Baby Bunny buttons if enabled in settings
+        if (extension_settings[extensionName]?.babyBunnyMode) {
+            add_baby_bunny_buttons_to_all_existing_messages();
+        }
+
         CarrotDebug.ui('UI elements ENABLED');
     } else {
         console.log('🎯 MASTER ENABLE DEBUG: Disabling UI - adding disabled class and clearing displays');
@@ -10030,10 +10140,16 @@ function applyMasterEnableState(isEnabled) {
         existingDisplays.forEach(el => {
             el.remove();
         });
-        
+
         // Clear scanned character data
         scannedCharacters.clear();
-        
+
+        // Disable WorldBook Tracker when master is disabled
+        CarrotWorldBookTracker.disable();
+
+        // Remove all Baby Bunny buttons when master is disabled
+        remove_all_baby_bunny_buttons();
+
         CarrotDebug.ui('UI elements DISABLED and data cleared');
     }
 }
@@ -10123,7 +10239,17 @@ function bindSettingsEvents() {
     
     // Display mode
     $('#carrot_display_mode').val(settings.displayMode).on('change', function() {
-        extension_settings[extensionName].displayMode = String($(this).val());
+        const newMode = String($(this).val());
+        const oldMode = extension_settings[extensionName].displayMode;
+        extension_settings[extensionName].displayMode = newMode;
+
+        // Clear existing displays when switching to 'none'
+        if (newMode === 'none') {
+            const existingDisplays = document.querySelectorAll('.carrot-reasoning-details, .carrot-cards-container, .carrot-thinking-details');
+            existingDisplays.forEach(el => el.remove());
+            CarrotDebug.ui(`Cleared ${existingDisplays.length} character displays (switched to 'none')`);
+        }
+
         saveSettingsDebounced();
     });
     
@@ -10171,13 +10297,31 @@ function bindSettingsEvents() {
         });
 
         if (newValue) {
+            add_baby_bunny_buttons_to_all_existing_messages();
             toastr.info('🐰 Baby Bunny Mode enabled! I\'ll now guide you through creating character archives when you complete sheet commands.');
             console.log('🐰 BABY BUNNY DEBUG: Baby Bunny Mode ENABLED - will detect BunnymoTags in AI responses');
         } else {
+            remove_all_baby_bunny_buttons();
             toastr.info('🐰 Baby Bunny Mode disabled.');
             console.log('🐰 BABY BUNNY DEBUG: Baby Bunny Mode DISABLED');
         }
 
+    });
+
+    // WorldBook Tracker toggle
+    $('#carrot_worldbook_tracker').prop('checked', settings.worldBookTrackerEnabled).on('change', function() {
+        const newValue = Boolean($(this).prop('checked'));
+        CarrotDebug.setting('worldBookTrackerEnabled', settings.worldBookTrackerEnabled, newValue);
+        extension_settings[extensionName].worldBookTrackerEnabled = newValue;
+        saveSettingsDebounced();
+
+        if (newValue) {
+            CarrotWorldBookTracker.enable();
+            toastr.info('🥕 WorldBook Tracker enabled');
+        } else {
+            CarrotWorldBookTracker.disable();
+            toastr.info('🥕 WorldBook Tracker disabled');
+        }
     });
 
     // Injection depth
@@ -10459,19 +10603,25 @@ function bindSettingsEvents() {
     jQuery(function() {
         initialize_baby_bunny_message_button();
 
-        // Add buttons to all existing messages after template is set up
+        // Add buttons to all existing messages after template is set up (only if enabled)
         setTimeout(() => {
-            add_baby_bunny_buttons_to_all_existing_messages();
+            if (extension_settings[extensionName]?.babyBunnyMode) {
+                add_baby_bunny_buttons_to_all_existing_messages();
+            }
         }, 500);
     });
 
-    // Hook into message rendering events to ensure buttons appear on new messages
+    // Hook into message rendering events to ensure buttons appear on new messages (only if enabled)
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
-        add_baby_bunny_button_to_message(messageId);
+        if (extension_settings[extensionName]?.babyBunnyMode) {
+            add_baby_bunny_button_to_message(messageId);
+        }
     });
 
     eventSource.on(event_types.USER_MESSAGE_RENDERED, (messageId) => {
-        add_baby_bunny_button_to_message(messageId);
+        if (extension_settings[extensionName]?.babyBunnyMode) {
+            add_baby_bunny_button_to_message(messageId);
+        }
     });
 }
 
@@ -10924,19 +11074,19 @@ async function buildLoadoutManagerHTML(context, currentSettings) {
                             </div>
                         </div>
                         
-                        <div class="carrot-status-panel carrot-status-tutorial carrot-clickable" 
-                             data-context="tutorial" 
-                             data-tooltip="Click to open comprehensive tutorial about Character vs Chat settings"
-                             onclick="CarrotKernel.openLoadoutTutorial()">
+                        <div class="carrot-status-panel carrot-status-reset carrot-clickable"
+                             data-context="reset"
+                             data-tooltip="Reset settings for the currently active context (${contextMode === 'character' ? 'Character' : contextMode === 'chat' ? 'Chat' : 'Global'})"
+                             onclick="resetCurrentContextSettings('${contextMode}')">
                             <div class="carrot-status-icon">
-                                <i class="fa-solid fa-graduation-cap"></i>
+                                <i class="fa-solid fa-rotate-left"></i>
                             </div>
                             <div class="carrot-status-content">
-                                <div class="carrot-status-title">Loadout Tutorial</div>
-                                <div class="carrot-status-value">Character vs Chat</div>
-                                <div class="carrot-status-detail">Click to learn the differences</div>
+                                <div class="carrot-status-title">Reset Settings</div>
+                                <div class="carrot-status-value">${contextMode === 'character' ? 'Character' : contextMode === 'chat' ? 'Chat' : 'Global'} Context</div>
+                                <div class="carrot-status-detail">Click to restore defaults</div>
                             </div>
-                            <div class="carrot-status-indicator info">
+                            <div class="carrot-status-indicator warning">
                                 <div class="carrot-pulse-dot"></div>
                             </div>
                             <div class="carrot-click-hint">
@@ -11164,6 +11314,35 @@ async function switchLoadoutContext(selectedContext, context, currentSettings) {
     CarrotDebug.ui(`Switched loadout context to: ${selectedContext}`);
 }
 
+// Reset settings for the currently active context
+async function resetCurrentContextSettings(contextMode) {
+    const contextName = contextMode === 'character' ? 'Character' :
+                       contextMode === 'chat' ? 'Chat' : 'Global';
+
+    const confirmMessage = `Reset all ${contextName} settings to default?\n\nThis will restore global defaults for this context and cannot be undone.`;
+
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log(`🥕 LOADOUT DEBUG: Resetting ${contextMode} context settings`);
+    }
+
+    // Clear settings for the specified context
+    if (contextMode === 'character' || contextMode === 'chat') {
+        await CarrotStorage.clearSettings(contextMode);
+
+        // Reload the loadout manager to show updated state
+        await CarrotKernel.openLoadoutManager();
+
+        // Show success message
+        toastr.success(`${contextName} settings reset to defaults`, 'CarrotKernel', { timeOut: 3000 });
+
+        CarrotDebug.ui(`Reset ${contextMode} context settings to defaults`);
+    }
+}
+
 // Update loadout interface content based on selected context
 function updateLoadoutInterface(contextMode, contextSettings, context) {
     // Update main title and subtitle
@@ -11226,15 +11405,12 @@ function generateContextSettings(currentSettings, contextMode) {
             <div class="carrot-help-text">Send character data to AI context for consistency</div>
         </div>
         <div class="carrot-setting-item">
-            <label class="carrot-label">
-                <span class="carrot-label-text">Display Mode</span>
-                <span class="carrot-label-hint">How to show injected character data</span>
-            </label>
             <select id="carrot_context_display_mode" class="carrot-select">
                 <option value="none">No Display</option>
                 <option value="thinking" selected>Thinking Box Style</option>
                 <option value="cards">Character Cards</option>
             </select>
+            <div class="carrot-help-text">Choose how character data appears in chat</div>
         </div>
         <div class="carrot-setting-item">
             <label class="carrot-toggle">
@@ -11242,6 +11418,7 @@ function generateContextSettings(currentSettings, contextMode) {
                 <span class="carrot-toggle-slider"></span>
                 <span class="carrot-toggle-label">Auto-expand thinking boxes</span>
             </label>
+            <div class="carrot-help-text">Automatically expand thinking boxes when displayed</div>
         </div>
         <div class="carrot-setting-item">
             <label class="carrot-toggle">
@@ -12225,7 +12402,7 @@ window.CarrotKernel = {
             title: 'Loadout Manager Tutorial',
             steps: [
                 {
-                    target: '#carrot-loadout-manager',
+                    target: '.carrot-loadout-context-cards',
                     title: 'Context-Specific Settings',
                     content: `
                         Create different settings for different characters and chats.
@@ -12323,34 +12500,197 @@ window.CarrotKernel = {
                     `
                 }
             ]
+        },
+        'baby-bunny': {
+            title: 'Baby Bunny Mode Tutorial',
+            steps: [
+                {
+                    target: '.carrot-info-box',
+                    title: 'What is Baby Bunny Mode?',
+                    content: `
+                        The <strong style="color: var(--ck-primary);">🎩🐰 rabbit-in-hat button</strong> appears on all AI message cards.
+                        <br><br>
+                        Click it to manually declare that a message contains a character sheet, which opens this Baby Bunny Mode popup.
+                        <br><br>
+                        This guided interface helps you transform AI-generated character sheets (with or without &lt;BunnymoTags&gt;) into permanent lorebook entries.
+                        <br><br>
+                        Let's walk through the process!
+                    `
+                },
+                {
+                    target: '#tutorial-step-1',
+                    title: 'Step 1: Choose Archive Location',
+                    content: `
+                        First, decide where to save this character archive:
+                        <br><br>
+                        • <strong>Create New Lorebook:</strong> Makes a fresh lorebook file just for this character
+                        <br>
+                        • <strong>Add to Existing:</strong> Adds this character to an existing lorebook
+                        <br><br>
+                        <strong>Tip:</strong> Group related characters together in the same lorebook!
+                    `
+                },
+                {
+                    target: '#tutorial-step-2',
+                    title: 'Step 2: Configure Entry Details',
+                    content: `
+                        Set up how this character entry will be identified:
+                        <br><br>
+                        • <strong>Entry Name:</strong> What the lorebook entry is called
+                        <br>
+                        • <strong>Selection Mode:</strong> Constant (always active) or Selective (trigger-based)
+                        <br>
+                        • <strong>Trigger Keys:</strong> Words that activate the data (if Selective)
+                        <br><br>
+                        <strong>Tip:</strong> Use Constant for main characters, Selective for supporting cast!
+                    `
+                },
+                {
+                    target: '#tutorial-trigger-keys',
+                    title: 'Adding Trigger Keys',
+                    content: `
+                        Click the input field and type a trigger word, then press <strong>Enter</strong> or <strong>Space</strong> to add it.
+                        <br><br>
+                        Example triggers for "Atsu_Ibn_Oba_Al-Masri":
+                        <br>
+                        • Atsu
+                        <br>
+                        • Ibn Oba
+                        <br>
+                        • Al-Masri
+                        <br>
+                        • The Pharaoh
+                        <br><br>
+                        Click the X on any tag to remove it!
+                    `
+                },
+                {
+                    target: '#tutorial-step-3',
+                    title: 'Step 3: Review Character Data',
+                    content: `
+                        This shows all the BunnymoTags parsed from the AI's character sheet:
+                        <br><br>
+                        • <strong>Physical</strong> tags (species, build, appearance)
+                        <br>
+                        • <strong>Personality</strong> tags (traits, dere types, MBTI)
+                        <br>
+                        • <strong>NSFW</strong> tags (orientation, kinks, chemistry)
+                        <br>
+                        • <strong>Linguistics</strong> (speech patterns)
+                        <br><br>
+                        In real use, you can click this to edit the tags before saving!
+                    `
+                },
+                {
+                    target: '#tutorial-step-4',
+                    title: 'Step 4: Activate Lorebook',
+                    content: `
+                        Choose when this character's lorebook should be active:
+                        <br><br>
+                        • <strong>Character Settings:</strong> Active in ALL chats with this character
+                        <br>
+                        • <strong>Chat Settings:</strong> Active ONLY in this specific conversation
+                        <br>
+                        • <strong>Global Settings:</strong> Active in all chats everywhere
+                        <br><br>
+                        <strong>Recommended:</strong> Use Character Settings for best results!
+                    `
+                },
+                {
+                    target: '#tutorial-step-5',
+                    title: 'Create the Archive!',
+                    content: `
+                        Click <strong>"Create Archive"</strong> to save this character to your lorebook!
+                        <br><br>
+                        What happens next:
+                        <br>
+                        1. Character data saved to lorebook entry
+                        <br>
+                        2. Lorebook activated for the chosen scope
+                        <br>
+                        3. Character automatically injected when mentioned in chat
+                        <br><br>
+                        <strong>Tutorial Mode:</strong> This demo button is disabled - in real use, it would create the archive!
+                    `
+                }
+            ]
         }
     },
-    
+
     // Open system tutorial - shows basic setup and configuration tutorial
     openSystemTutorial() {
+        // Tutorial doesn't need any specific panel open
         this.startTutorial('basic-setup');
     },
-    
+
     // Open repository tutorial - shows character repository vs tag library tutorial
     openRepositoryTutorial() {
+        // Tutorial doesn't need any specific panel open
         this.startTutorial('repository-management');
     },
-    
+
     // Open injection tutorial - shows AI injection system tutorial
     openInjectionTutorial() {
+        // Tutorial doesn't need any specific panel open
         this.startTutorial('injection-system');
     },
 
     // Open loadout manager tutorial - shows character vs chat context tutorial
-    openLoadoutTutorial() {
-        this.startTutorial('loadout-manager');
+    async openLoadoutTutorial() {
+        // Open the loadout manager popup first
+        await this.openLoadoutManager();
+
+        // Wait for popup to render, then start tutorial
+        setTimeout(() => {
+            this.startTutorial('loadout-manager');
+        }, 500);
     },
 
     // Open template editor tutorial - shows how to use the template system
     openTemplateEditorTutorial() {
-        this.startTutorial('template-editor');
+        // Open the template editor modal first
+        if (typeof openTemplateEditorModal === 'function') {
+            openTemplateEditorModal();
+        } else {
+            // Fallback: try to click the template editor button
+            const templateButton = document.querySelector('[onclick*="openTemplateEditorModal"]');
+            if (templateButton) {
+                templateButton.click();
+            }
+        }
+
+        // Wait for modal to render, then start tutorial
+        setTimeout(() => {
+            this.startTutorial('template-editor');
+        }, 500);
     },
-    
+
+    // Open Baby Bunny Mode tutorial - shows how to use the character archive creator
+    openBabyBunnyTutorial() {
+        // Create a tutorial-specific Baby Bunny popup with example data
+        const tutorialBunnyData = `<BunnymoTags><Name:Atsu_Ibn_Oba_Al-Masri>, <GENRE:FANTASY>
+<PHYSICAL>
+<SPECIES:HUMAN>, <GENDER:MALE>, <BUILD:Muscular>, <BUILD:Tall>, <SKIN:FAIR>, <HAIR:BLACK>, <STYLE:ANCIENT_EGYPTIAN_ROYALTY>,</PHYSICAL>
+<PERSONALITY><Dere:Sadodere>, <Dere:Oujidere>, <ENTJ-U>, <TRAIT:CRUEL>, <TRAIT:INTELLIGENT>, <TRAIT:POWERFUL>, <TRAIT:DANGEROUS>, <TRAIT:SELFISH>, <TRAIT:HEDONISTIC>, <ATTACHMENT:FEARFUL_AVOIDANT>, <CONFLICT:COMPETITIVE>, <BOUNDARIES:RIGID>,<FLIRTING:AGGRESSIVE>, </PERSONALITY>
+<NSFW><ORIENTATION:PANSEXUAL>, <POWER:DOMINANT>, <KINK:BRAT_TAMING>, <KINK:PUBLIC_HUMILIATION>, <KINK:POWER_PLAY>, <KINK:EXHIBITIONISM>, <CHEMISTRY:ANTAGONISTIC>, <AROUSAL:DOMINANCE>, <TRAUMA:CHILDHOOD>, <JEALOUSY:POSSESSIVE>,</NSFW>
+
+<Genre>
+This story primarily uses <GENRE:BLANK> as its most prominent narrative foundation, establishing the core structure and pacing. This is often blended with <GENRE:ROMANCE> as a secondary layer, adding emotional stakes and relationship development to the primary genre framework.
+</Genre>
+
+<Linguistics>
+Character uses <LING:COMMANDING> as his primary mode of speech, asserting authority and control. This is almost always blended with <LING:SUGGESTIVE>, using a tone of cruel flirtation, possessive pet names, and psychological manipulation to achieve his goals.
+</linguistics></BunnymoTags>`;
+
+        // Show tutorial-specific Baby Bunny popup
+        this.showTutorialBabyBunnyPopup(tutorialBunnyData);
+
+        // Wait for popup to render, then start tutorial
+        setTimeout(() => {
+            this.startTutorial('baby-bunny');
+        }, 500);
+    },
+
     // Open repository manager popup with tutorial option
     openRepositoryManager() {
         const settings = extension_settings[extensionName];
@@ -15876,7 +16216,324 @@ window.CarrotKernel = {
         
         $('#carrot-popup-overlay').addClass('active').show();
     },
-    
+
+    // Show tutorial-specific Baby Bunny popup (doesn't create actual archives)
+    showTutorialBabyBunnyPopup(bunnyData) {
+        const characterData = {
+            name: 'Atsu_Ibn_Oba_Al-Masri',
+            tags: bunnyData
+        };
+
+        // Format tags properly to bypass ST's tag filtering
+        const displayTags = characterData.tags
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/&lt;([^&]+)&gt;/g, '<span style="color: var(--SmartThemeQuoteColor); font-weight: 600;">&lt;$1&gt;</span>');
+
+        const popup = $(`
+            <div class="carrot-popup-container baby-bunny-popup baby-bunny-tutorial" style="padding: 0; max-width: 750px; width: 95%;">
+                <div class="carrot-card" style="margin: 0; height: auto;">
+                    <!-- Header matching CarrotKernel style -->
+                    <div class="carrot-card-header" style="padding: 24px 32px 16px;">
+                        <h3 style="margin: 0 0 8px; font-size: 24px;">🐰 Baby Bunny Mode - Tutorial</h3>
+                        <p class="carrot-card-subtitle" style="margin: 0; color: var(--SmartThemeQuoteColor);">Learn how to create character archives from AI-generated sheets</p>
+                    </div>
+
+                    <div class="carrot-card-body" style="padding: 0 32px 24px; display: flex; flex-direction: column; gap: 24px;">
+
+                        <!-- Introduction: The Baby Bunny Button -->
+                        <div class="carrot-info-box" style="background: var(--black30a); border-left: 3px solid var(--SmartThemeQuoteColor); padding: 16px; border-radius: 6px;">
+                            <h4 style="margin: 0 0 12px; color: var(--SmartThemeBodyColor); font-size: 16px; display: flex; align-items: center; gap: 8px;">
+                                🎩🐰 What is the Baby Bunny Button?
+                            </h4>
+                            <p style="margin: 0 0 12px; color: var(--SmartThemeQuoteColor); line-height: 1.6;">
+                                The <strong style="color: var(--ck-primary);">rabbit-in-hat button</strong> appears on all AI message cards.
+                                Click it to manually declare that a message contains a character sheet.
+                            </p>
+                            <p style="margin: 0; color: var(--SmartThemeQuoteColor); line-height: 1.6;">
+                                This opens <strong>Baby Bunny Mode</strong> - a guided interface for transforming AI-generated character sheets
+                                (with or without <code style="background: var(--black70a); padding: 2px 6px; border-radius: 3px;">&lt;BunnymoTags&gt;</code>)
+                                into permanent lorebook entries. This tutorial walks you through the process!
+                            </p>
+                        </div>
+
+                        <!-- Step 1: Lorebook Selection -->
+                        <div class="carrot-setup-step" id="tutorial-step-1">
+                            <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">1</span>
+                                Choose Archive Location
+                            </h4>
+
+                            <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                                <label class="carrot-label">
+                                    <span class="carrot-label-text">Archive Type</span>
+                                    <span class="carrot-label-hint">Create a new lorebook or add to existing one</span>
+                                </label>
+                                <div style="display: flex; gap: 12px; margin-top: 8px;">
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                        <input type="radio" name="lorebook-type-tutorial" value="new" checked disabled style="accent-color: var(--SmartThemeQuoteColor);">
+                                        <span>Create New Lorebook</span>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: not-allowed; opacity: 0.6;">
+                                        <input type="radio" name="lorebook-type-tutorial" value="existing" disabled style="accent-color: var(--SmartThemeQuoteColor);">
+                                        <span>Add to Existing</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="carrot-setting-item">
+                                <label class="carrot-label">
+                                    <span class="carrot-label-text">New Lorebook Name</span>
+                                    <span class="carrot-label-hint">Name for the new character archive lorebook file</span>
+                                </label>
+                                <input type="text" value="${characterData.name} Character Archive" class="carrot-input" style="font-size: 14px; padding: 12px;" disabled>
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Entry Configuration -->
+                        <div class="carrot-setup-step" id="tutorial-step-2">
+                            <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">2</span>
+                                Configure Entry Details
+                            </h4>
+
+                            <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                                <label class="carrot-label">
+                                    <span class="carrot-label-text">Entry Name</span>
+                                    <span class="carrot-label-hint">Name that will appear in the lorebook entry list</span>
+                                </label>
+                                <input type="text" value="${characterData.name}" class="carrot-input" style="font-size: 14px; padding: 12px;" disabled>
+                            </div>
+
+                            <div class="carrot-setting-item" style="margin-bottom: 16px;">
+                                <label class="carrot-label">
+                                    <span class="carrot-label-text">Entry Selection Mode</span>
+                                    <span class="carrot-label-hint">How this character's data should be activated</span>
+                                </label>
+
+                                <div style="display: flex; gap: 12px; margin-top: 12px;">
+                                    <label class="carrot-toggle" style="flex: 1; flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 2px solid var(--SmartThemeBorderColor); border-radius: 8px; background: var(--SmartThemeBlurTintColor); opacity: 0.8; display: flex;">
+                                        <input type="radio" name="selection-mode-tutorial" value="selective" checked disabled style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                                <i class="fa-solid fa-hand-pointer" style="color: var(--SmartThemeQuoteColor);"></i>
+                                                Selective
+                                            </div>
+                                            <div style="font-size: 12px; color: var(--SmartThemeFadedColor); line-height: 1.4;">Entry only fires when triggers are mentioned in chat</div>
+                                        </div>
+                                    </label>
+
+                                    <label class="carrot-toggle" style="flex: 1; flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 2px solid var(--SmartThemeBorderColor); border-radius: 8px; background: var(--SmartThemeBlurTintColor); opacity: 0.8; display: flex;">
+                                        <input type="radio" name="selection-mode-tutorial" value="constant" disabled style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                                <i class="fa-solid fa-infinity" style="color: var(--SmartThemeQuoteColor);"></i>
+                                                Constant
+                                            </div>
+                                            <div style="font-size: 12px; color: var(--SmartThemeFadedColor); line-height: 1.4;">Always active - for MAIN characters only</div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="carrot-setting-item" id="tutorial-trigger-keys">
+                                <label class="carrot-label">
+                                    <span class="carrot-label-text">Trigger Keys</span>
+                                    <span class="carrot-label-hint">Character names and aliases that will activate this entry</span>
+                                </label>
+                                <div class="tag-input-container" style="
+                                    border: 1px solid var(--SmartThemeBorderColor);
+                                    border-radius: 6px;
+                                    padding: 8px;
+                                    background: var(--SmartThemeBlurTintColor);
+                                    min-height: 50px;
+                                    display: flex;
+                                    flex-wrap: wrap;
+                                    gap: 6px;
+                                    align-items: flex-start;
+                                    opacity: 0.7;
+                                ">
+                                    <div class="trigger-tag" style="
+                                        background: var(--SmartThemeQuoteColor);
+                                        color: var(--SmartThemeBlurTintColor);
+                                        padding: 4px 8px;
+                                        border-radius: 4px;
+                                        font-size: 13px;
+                                        display: flex;
+                                        align-items: center;
+                                        gap: 6px;
+                                    ">
+                                        <span class="tag-text">${characterData.name}</span>
+                                        <i class="fa-solid fa-times" style="cursor: not-allowed; opacity: 0.5;"></i>
+                                    </div>
+                                    <input type="text" placeholder="Type trigger name..." style="
+                                        border: none;
+                                        background: none;
+                                        outline: none;
+                                        flex: 1;
+                                        min-width: 200px;
+                                        font-size: 13px;
+                                        color: var(--SmartThemeBodyColor);
+                                    " disabled>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 3: Tag Review -->
+                        <div class="carrot-setup-step" id="tutorial-step-3">
+                            <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">3</span>
+                                Review & Edit Character Data
+                            </h4>
+
+                            <div class="carrot-setting-item">
+                                <label class="carrot-label">
+                                    <span class="carrot-label-text">Character Tags</span>
+                                    <span class="carrot-label-hint">BunnyMoTags and Linguistics data - click to edit</span>
+                                </label>
+                                <div class="carrot-preview-box" style="
+                                    font-family: var(--monoFontFamily);
+                                    font-size: 12px;
+                                    color: var(--SmartThemeQuoteColor);
+                                    padding: 16px;
+                                    background: var(--SmartThemeBlurTintColor);
+                                    border: 1px solid var(--SmartThemeBorderColor);
+                                    border-radius: 6px;
+                                    max-height: 300px;
+                                    overflow-y: auto;
+                                    line-height: 1.4;
+                                    opacity: 0.9;
+                                ">${displayTags}</div>
+                            </div>
+                        </div>
+
+                        <!-- Step 4: Loadout Management -->
+                        <div class="carrot-setup-step" id="tutorial-step-4">
+                            <h4 style="margin: 0 0 16px; color: var(--SmartThemeBodyColor); font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: var(--SmartThemeQuoteColor); color: var(--SmartThemeBlurTintColor); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;">4</span>
+                                Activate Lorebook
+                            </h4>
+
+                            <div class="carrot-setting-item">
+                                <label class="carrot-label">
+                                    <span class="carrot-label-text">Activation Scope</span>
+                                    <span class="carrot-label-hint">Choose where to activate this lorebook</span>
+                                </label>
+
+                                <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px;">
+                                    <label style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: var(--SmartThemeBlurTintColor); opacity: 0.8; display: flex;">
+                                        <input type="radio" name="lorebook-scope-tutorial" value="character" checked disabled style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                        <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                            <i class="fa-solid fa-user" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                            <div>
+                                                <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Character Settings</div>
+                                                <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply to ALL chats with this character</div>
+                                            </div>
+                                        </div>
+                                    </label>
+
+                                    <label style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: var(--SmartThemeBlurTintColor); opacity: 0.8; display: flex;">
+                                        <input type="radio" name="lorebook-scope-tutorial" value="chat" disabled style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                        <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                            <i class="fa-solid fa-comments" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                            <div>
+                                                <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Chat Settings</div>
+                                                <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply ONLY to this specific conversation</div>
+                                            </div>
+                                        </div>
+                                    </label>
+
+                                    <label style="flex-direction: row; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; background: var(--SmartThemeBlurTintColor); opacity: 0.8; display: flex;">
+                                        <input type="radio" name="lorebook-scope-tutorial" value="global" disabled style="accent-color: var(--SmartThemeQuoteColor); margin: 0;">
+                                        <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                                            <i class="fa-solid fa-globe" style="color: var(--SmartThemeQuoteColor); font-size: 18px; width: 20px; text-align: center;"></i>
+                                            <div>
+                                                <div style="font-weight: 600; color: var(--SmartThemeBodyColor); margin-bottom: 2px;">Global Settings</div>
+                                                <div style="font-size: 12px; color: var(--SmartThemeFadedColor);">Apply to all chats and characters (default)</div>
+                                            </div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tutorial Notice & Action Buttons -->
+                        <div style="background: color-mix(in srgb, #3b82f6 10%, transparent); border-left: 4px solid #3b82f6; border-radius: 6px; padding: 16px; margin-top: 8px;">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <i class="fa-solid fa-info-circle" style="color: #3b82f6; font-size: 20px;"></i>
+                                <div style="color: var(--SmartThemeBodyColor); font-size: 14px;">
+                                    <strong>Tutorial Mode:</strong> This is a demonstration. In real use, clicking "Create Archive" would save this character to your lorebook.
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="carrot-action-bar" id="tutorial-step-5" style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 16px; padding-top: 24px; border-top: 1px solid var(--SmartThemeBorderColor);">
+                            <button id="tutorial-baby-bunny-close" class="carrot-secondary-btn" style="padding: 12px 24px; font-size: 14px;">
+                                <i class="fa-solid fa-times"></i>
+                                Close Tutorial
+                            </button>
+                            <button class="carrot-primary-btn" style="padding: 12px 24px; font-size: 14px; opacity: 0.6; cursor: not-allowed;" disabled>
+                                <i class="fa-solid fa-carrot"></i>
+                                Create Archive (Disabled)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `);
+
+        // Create custom overlay
+        const overlay = $(`
+            <div class="baby-bunny-overlay baby-bunny-tutorial-overlay" style="
+                position: fixed !important;
+                top: 0 !important;
+                left: 0 !important;
+                width: 100% !important;
+                height: 100% !important;
+                background: rgba(0,0,0,0.8) !important;
+                z-index: 999999 !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                backdrop-filter: blur(4px) !important;
+            "></div>
+        `);
+
+        popup.css({
+            'max-width': '750px',
+            'width': '90%',
+            'max-height': '80vh',
+            'overflow-y': 'auto',
+            'z-index': '999999',
+            'position': 'relative'
+        });
+
+        overlay.append(popup);
+        $('body').append(overlay);
+        overlay.show();
+        $('html, body').scrollTop(0);
+
+        // Close button handler
+        popup.find('#tutorial-baby-bunny-close').on('click', () => {
+            overlay.remove();
+            this.endTutorial();
+        });
+    },
+
+    // Close Baby Bunny tutorial popup
+    closeBabyBunnyTutorial() {
+        this.closePopup();
+        this.endTutorial();
+    },
+
+    // Parse BunnymoTags to extract basic info
+    parseBunnymoTags(text) {
+        const nameMatch = text.match(/<Name:([^>]+)>/i);
+        return {
+            name: nameMatch ? nameMatch[1].trim() : 'Unknown Character'
+        };
+    },
+
     // DEBUG: Utility function to inspect modal sizing
     debugModalSizing() {
         console.log('🔍 MODAL SIZING DEBUG REPORT:');
@@ -18418,6 +19075,17 @@ function add_baby_bunny_buttons_to_all_existing_messages() {
     });
 
     console.log(`🐰 ✅ Added Baby Bunny buttons to ${addedCount} existing messages`);
+}
+
+// Remove all Baby Bunny buttons from messages
+function remove_all_baby_bunny_buttons() {
+    console.log('🐰 Removing all Baby Bunny buttons...');
+
+    const buttons = $(`.${baby_bunny_button_class}`);
+    const count = buttons.length;
+    buttons.remove();
+
+    console.log(`🐰 ✅ Removed ${count} Baby Bunny buttons`);
 }
 
 
