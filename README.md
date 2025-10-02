@@ -312,8 +312,6 @@ CarrotKernel is actively developed. Suggestions welcome for:
 CarrotKernel builds upon the foundation laid by **BunnyMoTags** - we're grateful for the innovation and community that made this possible. This is a spiritual successor, designed to push character consistency and lorebook management into the future while honoring what came before.
 
 **Special thanks to:**
-- The SillyTavern development team
-- BunnyMoTags original creators
 - The AI roleplaying community
 - Beta testers and feedback providers
 
