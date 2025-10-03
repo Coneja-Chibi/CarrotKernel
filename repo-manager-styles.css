@@ -1,0 +1,493 @@
+/* ===== CHARACTER REPOSITORY MANAGER - PACK MANAGER STYLE ===== */
+
+/* Main Container */
+.carrot-repo-browser {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+}
+
+/* Header Card */
+.carrot-repo-header-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+}
+
+.carrot-repo-title-section {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+}
+
+.carrot-repo-title-text h2 {
+    margin: 0 0 4px 0;
+    color: white;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+.carrot-repo-subtitle {
+    margin: 0;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+}
+
+.carrot-repo-header-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.carrot-repo-header-btn {
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    color: white;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+.carrot-repo-header-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.carrot-repo-header-btn i {
+    margin-right: 6px;
+}
+
+/* Stats Row */
+.carrot-repo-stats-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.carrot-repo-stat-badge {
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 8px;
+    padding: 10px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 80px;
+}
+
+.carrot-repo-stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: white;
+}
+
+.carrot-repo-stat-label {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.8);
+    margin-top: 2px;
+}
+
+/* Main Content - Two Panel Layout */
+.carrot-repo-main-content {
+    display: flex;
+    gap: 16px;
+    flex: 1;
+    min-height: 0;
+}
+
+.carrot-repo-browser-card,
+.carrot-repo-preview-card {
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.carrot-repo-browser-card {
+    flex: 1;
+    min-width: 0;
+}
+
+.carrot-repo-preview-card {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Card Headers */
+.carrot-repo-card-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.carrot-repo-card-header h3 {
+    margin: 0;
+    color: var(--SmartThemeEmColor);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.carrot-repo-card-header h3 i {
+    margin-right: 8px;
+}
+
+/* Breadcrumb Navigation */
+.carrot-repo-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.carrot-repo-breadcrumb-item {
+    color: var(--SmartThemeEmText);
+    font-size: 14px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.carrot-repo-breadcrumb-item i {
+    font-size: 13px;
+}
+
+.carrot-repo-breadcrumb-item.carrot-clickable:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--SmartThemeEmColor);
+}
+
+.carrot-repo-breadcrumb-active {
+    color: var(--SmartThemeEmColor);
+    font-weight: 600;
+}
+
+.carrot-repo-breadcrumb-sep {
+    font-size: 10px;
+    color: var(--SmartThemeEmText);
+    opacity: 0.5;
+}
+
+/* File List */
+.carrot-repo-file-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+}
+
+.carrot-repo-summary {
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--SmartThemeEmText);
+}
+
+.carrot-repo-summary p {
+    margin: 0;
+}
+
+.carrot-repo-file-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    margin-bottom: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.carrot-repo-file-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--SmartThemeEmColor);
+    transform: translateX(4px);
+}
+
+.carrot-repo-file-item.carrot-repo-selected {
+    background: rgba(102, 126, 234, 0.2);
+    border-color: #667eea;
+    border-width: 2px;
+}
+
+.carrot-repo-file-icon {
+    font-size: 24px;
+    color: var(--SmartThemeEmColor);
+    width: 32px;
+    text-align: center;
+}
+
+.carrot-repo-file-info {
+    flex: 1;
+}
+
+.carrot-repo-file-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--SmartThemeEmText);
+    margin-bottom: 2px;
+}
+
+.carrot-repo-file-meta {
+    font-size: 12px;
+    color: var(--SmartThemeEmText);
+    opacity: 0.7;
+}
+
+.carrot-repo-status-active {
+    font-size: 10px;
+}
+
+/* Preview Content */
+.carrot-repo-preview-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.carrot-repo-empty-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+    color: var(--SmartThemeEmText);
+    opacity: 0.6;
+}
+
+.carrot-repo-preview-info h4 {
+    margin: 0 0 12px 0;
+    color: var(--SmartThemeEmColor);
+    font-size: 18px;
+}
+
+.carrot-repo-preview-info p {
+    margin: 0 0 16px 0;
+    color: var(--SmartThemeEmText);
+}
+
+.carrot-repo-character-quick-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.carrot-repo-character-quick-list li {
+    padding: 6px 12px;
+    margin-bottom: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+/* Character Preview List */
+.carrot-repo-character-preview-list {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.carrot-repo-character-preview-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.carrot-repo-character-preview-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--SmartThemeEmColor);
+    transform: translateX(2px);
+}
+
+.carrot-repo-preview-icon {
+    font-size: 12px;
+}
+
+.carrot-repo-preview-name {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--SmartThemeEmText);
+}
+
+.carrot-repo-preview-tags {
+    font-size: 11px;
+    opacity: 0.7;
+    color: var(--SmartThemeEmText);
+}
+
+/* Close Button */
+.carrot-repo-close-btn {
+    width: 36px;
+    padding: 8px;
+}
+
+.carrot-repo-close-btn i {
+    margin: 0;
+}
+
+/* Character Detail View */
+.carrot-repo-character-detail {
+    width: 100%;
+}
+
+.carrot-repo-detail-header {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.carrot-repo-detail-avatar {
+    font-size: 64px;
+    color: var(--SmartThemeEmColor);
+}
+
+.carrot-repo-detail-info h3 {
+    margin: 0 0 8px 0;
+    color: var(--SmartThemeEmText);
+    font-size: 20px;
+}
+
+.carrot-repo-detail-info p {
+    margin: 0;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.carrot-repo-badge {
+    padding: 4px 8px;
+    background: var(--SmartThemeEmColor);
+    color: white;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.carrot-repo-badge-active {
+    padding: 4px 8px;
+    background: #10b981;
+    color: white;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.carrot-repo-badge-inactive {
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.2);
+    color: var(--SmartThemeEmText);
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* Tags Section */
+.carrot-repo-tags-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.carrot-repo-tag-category h4 {
+    margin: 0 0 8px 0;
+    color: var(--SmartThemeEmColor);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.carrot-repo-tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.carrot-repo-tag {
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 12px;
+    font-size: 12px;
+    color: var(--SmartThemeEmText);
+}
+
+.carrot-repo-no-tags {
+    text-align: center;
+    padding: 40px;
+    color: var(--SmartThemeEmText);
+    opacity: 0.6;
+}
+
+/* Empty State */
+.carrot-repo-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--SmartThemeEmText);
+}
+
+.carrot-repo-empty-state p {
+    margin: 8px 0;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    .carrot-repo-main-content {
+        flex-direction: column;
+    }
+
+    .carrot-repo-browser-card,
+    .carrot-repo-preview-card {
+        min-height: 300px;
+    }
+
+    .carrot-repo-header-card {
+        padding: 16px;
+    }
+
+    .carrot-repo-title-text h2 {
+        font-size: 18px;
+    }
+
+    .carrot-repo-stats-row {
+        gap: 8px;
+    }
+
+    .carrot-repo-stat-badge {
+        min-width: 70px;
+        padding: 8px 12px;
+    }
+
+    .carrot-repo-stat-value {
+        font-size: 20px;
+    }
+}

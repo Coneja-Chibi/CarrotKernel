@@ -1725,6 +1725,9 @@ const init = () => {
     let currentY = 0;
     let offsetX, offsetY;
     let repositionMode = false;
+    let startDragX = 0;
+    let startDragY = 0;
+    const MOVEMENT_THRESHOLD = 10; // Minimum pixels to count as movement
 
     function updatePosition() {
         if (isDragging) {
@@ -1744,13 +1747,22 @@ const init = () => {
 
     // Start drag (mouse or touch)
     function handleDragStart(e) {
-        if (!repositionMode) return;
+        if (!repositionMode) {
+            // Still track initial position for movement threshold
+            const coords = getClientCoords(e);
+            startDragX = coords.clientX;
+            startDragY = coords.clientY;
+            hasMoved = false;
+            return;
+        }
         if (isResizing) return; // Don't drag while resizing
 
         isDragging = true;
         hasMoved = false;
 
         const coords = getClientCoords(e);
+        startDragX = coords.clientX;
+        startDragY = coords.clientY;
         const rect = trigger.getBoundingClientRect();
         offsetX = coords.clientX - rect.left;
         offsetY = coords.clientY - rect.top;
@@ -1766,9 +1778,18 @@ const init = () => {
     // Move drag (mouse or touch)
     function handleDragMove(e) {
         if (isResizing) return; // Don't drag while resizing
-        if (isDragging) {
+
+        const coords = getClientCoords(e);
+
+        // Check if movement exceeds threshold
+        const deltaX = Math.abs(coords.clientX - startDragX);
+        const deltaY = Math.abs(coords.clientY - startDragY);
+
+        if (deltaX > MOVEMENT_THRESHOLD || deltaY > MOVEMENT_THRESHOLD) {
             hasMoved = true;
-            const coords = getClientCoords(e);
+        }
+
+        if (isDragging) {
             currentX = coords.clientX - offsetX;
             currentY = coords.clientY - offsetY;
         }
