@@ -888,7 +888,7 @@ const CarrotTemplateManager = {
     // Macro processors - exposed as property so macro display system can access them
     macroProcessors: {
             'CHARACTERS': () => {
-                const triggeredChars = CarrotTemplateManager.CarrotTemplateManager.getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 if (triggeredChars.length === 0) return 'No characters triggered in conversation';
                 
                 let output = '';
@@ -906,10 +906,10 @@ const CarrotTemplateManager = {
 
             // Individual character name macros
             'CHARACTER1': () => {
-                const triggeredChars = CarrotTemplateManager.CarrotTemplateManager.getTriggeredCharacters();
+                const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length >= 1 ? triggeredChars[0].name : 'No character 1';
             },
-            
+
             'CHARACTER2': () => {
                 const triggeredChars = CarrotTemplateManager.getTriggeredCharacters();
                 return triggeredChars.length >= 2 ? triggeredChars[1].name : 'No character 2';
@@ -2521,13 +2521,26 @@ class CarrotContextManager {
     getCurrentContext() {
         // Use ST's native context detection directly (same as ST's getContext())
         const freshContext = getContext();
+
+        // Get a human-readable name for the context
+        let contextName = 'Global';
+        if (freshContext.groupId) {
+            const groupData = freshContext.groups?.find(g => g.id === freshContext.groupId);
+            contextName = groupData?.name || `Group ${freshContext.groupId}`;
+        } else if (freshContext.characterId) {
+            const charData = freshContext.characters?.[freshContext.characterId];
+            contextName = charData?.name || `Character ${freshContext.characterId}`;
+        }
+
         return {
             characterId: freshContext.characterId,
             chatId: freshContext.chatId,
             groupId: freshContext.groupId,
             isGroup: !!freshContext.groupId,
             characters: freshContext.characters,
-            groups: freshContext.groups
+            groups: freshContext.groups,
+            name: contextName,
+            level: freshContext.groupId ? 'chat' : (freshContext.characterId ? 'character' : 'global')
         };
     }
     
@@ -3271,7 +3284,7 @@ async function injectCharacterData(activeCharacters) {
     CarrotDebug.inject('Starting AI injection process', {
         activeCharacters: activeCharacters,
         sendToAI: settings.sendToAI,
-        maxCharactersShown: settings.maxCharactersShown,
+        maxCharactersDisplay: settings.maxCharactersDisplay,
         injectionDepth: settings.injectionDepth,
         injectionRole: settings.injectionRole
     });
@@ -3285,13 +3298,13 @@ async function injectCharacterData(activeCharacters) {
         return null;
     }
     
-    // IMPORTANT: Limit characters based on maxCharactersShown setting
-    const maxChars = Math.min(activeCharacters.length, settings.maxCharactersShown);
+    // IMPORTANT: Limit characters based on maxCharactersDisplay setting
+    const maxChars = Math.min(activeCharacters.length, settings.maxCharactersDisplay);
     const charactersToInject = activeCharacters.slice(0, maxChars);
     
     CarrotDebug.inject('Characters limited for injection', {
         totalDetected: activeCharacters.length,
-        maxAllowed: settings.maxCharactersShown,
+        maxAllowed: settings.maxCharactersDisplay,
         willInject: charactersToInject.length,
         skipped: activeCharacters.length - charactersToInject.length
     });
@@ -3449,11 +3462,11 @@ function renderAsThinkingBox(activeCharacters) {
     CarrotDebug.ui('Rendering ST-native thinking box display', {
         activeCharacters: activeCharacters,
         autoExpand: settings.autoExpand,
-        maxCharactersShown: settings.maxCharactersShown
+        maxCharactersDisplay: settings.maxCharactersDisplay
     });
     
-    // Respect maxCharactersShown limit
-    const maxChars = Math.min(activeCharacters.length, settings.maxCharactersShown);
+    // Respect maxCharactersDisplay limit
+    const maxChars = Math.min(activeCharacters.length, settings.maxCharactersDisplay);
     const charactersToShow = activeCharacters.slice(0, maxChars);
     
     CarrotDebug.ui('Characters filtered for display', {
@@ -3855,8 +3868,8 @@ function restoreThinkingBlocksFromChat() {
 function renderAsCards(activeCharacters) {
     const settings = extension_settings[extensionName];
     
-    // Respect maxCharactersShown limit  
-    const maxChars = Math.min(activeCharacters.length, settings.maxCharactersShown);
+    // Respect maxCharactersDisplay limit  
+    const maxChars = Math.min(activeCharacters.length, settings.maxCharactersDisplay);
     const charactersToShow = activeCharacters.slice(0, maxChars);
     
     // Load CSS styles first (create style element if needed)
@@ -4817,7 +4830,7 @@ async function sendCarrotSystemMessage(characterData) {
             newLink.href = '/scripts/extensions/third-party/BunnyMoTags/style.css';
             document.head.appendChild(newLink);
         }
-        
+
         // Create system message content
         let messageText = `🥕 Character Information (${characterCount} ${characterCount === 1 ? 'character' : 'characters'})\n\n`;
         messageText += '<div class="carrot-data-anchor" style="display: none;">\n';
@@ -4826,7 +4839,7 @@ async function sendCarrotSystemMessage(characterData) {
         messageText += '\n<div class="carrot-summary" style="font-style: italic; color: #888; margin-top: 10px;">';
         messageText += `📋 ${characterCount} character card${characterCount === 1 ? '' : 's'} loaded - `;
         messageText += 'visual cards will appear below this message</div>';
-        
+
         const carrotMessage = {
             name: 'BunnyMoTags',
             is_user: false,
@@ -5062,7 +5075,6 @@ function createExternalCardContainer(characterData, messageIndex) {
         z-index: 1;
     `;
     if (extension_settings[extensionName]?.debugMode) {
-        console.log('🚨 DEBUG appendChild: container.appendChild(accentLayer)', { container, accentLayer });
     }
     container.appendChild(accentLayer);
 
@@ -5129,15 +5141,12 @@ function createExternalCardContainer(characterData, messageIndex) {
     
     // Assemble header
     if (extension_settings[extensionName]?.debugMode) {
-        console.log('🚨 DEBUG appendChild: header.appendChild(headerTitle)', { header, headerTitle });
     }
     header.appendChild(headerTitle);
     if (extension_settings[extensionName]?.debugMode) {
-        console.log('🚨 DEBUG appendChild: header.appendChild(headerInfo)', { header, headerInfo });
     }
     header.appendChild(headerInfo);
     if (extension_settings[extensionName]?.debugMode) {
-        console.log('🚨 DEBUG appendChild: header.appendChild(toggleButton)', { header, headerTitle, headerInfo, toggleButton });
     }
     header.appendChild(toggleButton);
     
@@ -5268,7 +5277,6 @@ function createExternalCardContainer(characterData, messageIndex) {
         
         tabButton.addEventListener('click', () => switchTab(tab.id, tab.color));
         if (extension_settings[extensionName]?.debugMode) {
-            console.log('🚨 DEBUG appendChild: tabNavigation.appendChild(tabButton)', { tabNavigation, tabButton, tabId: tab.id });
         }
         tabNavigation.appendChild(tabButton);
     });
@@ -5345,7 +5353,6 @@ function createExternalCardContainer(characterData, messageIndex) {
     `;
     
     if (extension_settings[extensionName]?.debugMode) {
-        console.log('🚨 DEBUG appendChild: collapsibleContent.appendChild(tabNavigation)', { collapsibleContent, tabNavigation });
     }
     collapsibleContent.appendChild(tabNavigation);
     
@@ -5376,7 +5383,6 @@ function createExternalCardContainer(characterData, messageIndex) {
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         `;
         if (extension_settings[extensionName]?.debugMode) {
-            console.log('🚨 DEBUG appendChild: contentContainer.appendChild(tabContent)', { contentContainer, tabContent, tabId: tab.id });
         }
         contentContainer.appendChild(tabContent);
         tabContents[tab.id] = tabContent; // Store reference
@@ -5458,15 +5464,12 @@ function createExternalCardContainer(characterData, messageIndex) {
     });
 
     if (extension_settings[extensionName]?.debugMode) {
-        console.log('🚨 DEBUG appendChild: mainContent.appendChild(header)', { mainContent, header });
     }
     mainContent.appendChild(header);
     if (extension_settings[extensionName]?.debugMode) {
-        console.log('🚨 DEBUG appendChild: mainContent.appendChild(collapsibleContent)', { mainContent, collapsibleContent });
     }
     mainContent.appendChild(collapsibleContent);
     if (extension_settings[extensionName]?.debugMode) {
-        console.log('🚨 DEBUG appendChild: container.appendChild(mainContent)', { container, mainContent });
     }
     container.appendChild(mainContent);
 
@@ -7526,12 +7529,19 @@ jQuery(async () => {
         // Load settings HTML
         const settingsHtml = await $.get(`scripts/extensions/third-party/${extensionName}/settings.html`);
         $('#extensions_settings').append(settingsHtml);
-        
+
         // Update lorebook list
         updateLorebookList();
-        
+
         // Bind settings events
         bindSettingsEvents();
+
+        // Check if context-specific loadout is active and overlay warning if so (after DOM is ready)
+        setTimeout(() => {
+            if (typeof checkAndOverlayLoadoutWarning === 'function') {
+                checkAndOverlayLoadoutWarning();
+            }
+        }, 100);
 
 
         // Debug all carrot-related icon clicks in world info
@@ -10908,20 +10918,145 @@ function addLoadoutManagerCard() {
     // Update the loadout card status initially and on context changes
     updateLoadoutCardStatus();
     
-    // Set up event listeners to update loadout card when context changes
+    // Set up event listeners to update loadout card AND load context settings when context changes
     if (CarrotContext?.stContext?.eventSource) {
-        CarrotContext.stContext.eventSource.on(event_types.CHAT_CHANGED, updateLoadoutCardStatus);
-        CarrotContext.stContext.eventSource.on(event_types.CHARACTER_PAGE_LOADED, updateLoadoutCardStatus);
-        CarrotContext.stContext.eventSource.on(event_types.GROUP_UPDATED, updateLoadoutCardStatus);
+        CarrotContext.stContext.eventSource.on(event_types.CHAT_CHANGED, async () => {
+            updateLoadoutCardStatus();
+            await loadAndApplyContextSettings();
+            checkAndOverlayLoadoutWarning(); // Update overlay when context changes
+        });
+        CarrotContext.stContext.eventSource.on(event_types.CHARACTER_PAGE_LOADED, async () => {
+            updateLoadoutCardStatus();
+            await loadAndApplyContextSettings();
+            checkAndOverlayLoadoutWarning(); // Update overlay when context changes
+        });
+        CarrotContext.stContext.eventSource.on(event_types.GROUP_UPDATED, async () => {
+            updateLoadoutCardStatus();
+            await loadAndApplyContextSettings();
+            checkAndOverlayLoadoutWarning(); // Update overlay when context changes
+        });
     }
-    
+
+    // Load context settings immediately on initialization
+    setTimeout(() => loadAndApplyContextSettings(), 500);
+
     CarrotDebug.ui('Loadout Manager status card added successfully');
+}
+
+// Check if context-specific loadout is active and overlay the main settings with a warning
+async function checkAndOverlayLoadoutWarning() {
+    if (!CarrotContext || !CarrotStorage) return;
+
+    const settingsPanel = $('#carrot_settings');
+    if (!settingsPanel.length) return;
+
+    // Remove any existing overlay
+    $('#carrot-loadout-overlay-warning').remove();
+    // Don't show overlay if Loadout Manager is currently open
+    const loadoutManagerOpen = $('#carrot-popup-overlay').is(':visible');
+    if (loadoutManagerOpen) return;
+
+
+    // Check if context-specific settings exist
+    const hasContextSettings = CarrotStorage.hasSettingsAt('chat') || CarrotStorage.hasSettingsAt('character');
+
+    if (hasContextSettings) {
+        const context = CarrotContext.getCurrentContext();
+        const contextType = CarrotStorage.hasSettingsAt('chat') ? 'Chat' : 'Character';
+        const contextName = context.name || contextType;
+
+        // Get the applied template info if it exists
+        const currentSettings = await CarrotStorage.getSettings();
+        let templateInfo = '';
+        if (currentSettings._appliedTemplate) {
+            const templateNames = {
+                'general': 'General Purpose',
+                'roleplay': 'Roleplay Focus',
+                'minimal': 'Minimal Setup'
+            };
+            const templateName = templateNames[currentSettings._appliedTemplate] || currentSettings._appliedTemplate;
+            templateInfo = ` (${templateName} template)`;
+        }
+
+        // Create overlay
+        const overlay = $(`
+            <div id="carrot-loadout-overlay-warning" style="
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.85);
+                backdrop-filter: blur(4px);
+                z-index: 1000;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 8px;
+            ">
+                <div style="
+                    text-align: center;
+                    padding: 40px;
+                    max-width: 500px;
+                ">
+                    <i class="fa-solid fa-layer-group" style="
+                        font-size: 64px;
+                        color: #667eea;
+                        margin-bottom: 20px;
+                        display: block;
+                    "></i>
+                    <h3 style="
+                        margin: 0 0 16px 0;
+                        color: var(--SmartThemeEmColor);
+                        font-size: 20px;
+                    ">Currently Using Customized Loadout Settings</h3>
+                    <p style="
+                        margin: 0 0 24px 0;
+                        color: var(--SmartThemeBodyColor);
+                        line-height: 1.6;
+                        opacity: 0.9;
+                    ">
+                        This ${contextType.toLowerCase()} (<strong>${contextName}</strong>) has custom settings${templateInfo}.<br>
+                        Global settings are disabled to prevent conflicts.
+                    </p>
+                    <button id="carrot-open-loadout-manager-btn" class="carrot-primary-btn" style="
+                        margin-right: 12px;
+                    ">
+                        <i class="fa-solid fa-cog"></i> Open Loadout Manager
+                    </button>
+                    <button id="carrot-clear-context-loadout-btn" class="carrot-secondary-btn">
+                        <i class="fa-solid fa-eraser"></i> Clear ${contextType} Settings
+                    </button>
+                </div>
+            </div>
+        `);
+
+        // Make settings panel position relative so overlay can be absolutely positioned
+        settingsPanel.css('position', 'relative');
+        settingsPanel.append(overlay);
+
+        // Bind button handlers
+        $('#carrot-open-loadout-manager-btn').on('click', function() {
+            openLoadoutManager();
+        });
+
+        $('#carrot-clear-context-loadout-btn').on('click', async function() {
+            const contextLevel = CarrotStorage.hasSettingsAt('chat') ? 'chat' : 'character';
+            const confirmed = confirm(`Are you sure you want to clear ${contextType} settings and revert to global settings?`);
+            if (confirmed) {
+                await CarrotStorage.clearSettings(contextLevel);
+                await loadAndApplyContextSettings(); // Reload settings (will fall back to global)
+                checkAndOverlayLoadoutWarning(); // Refresh overlay state
+                toastr.success(`${contextType} settings cleared. Using global settings now.`, 'Settings Cleared');
+            }
+        });
+    }
 }
 
 // Update the loadout manager card status
 async function updateLoadoutCardStatus() {
     if (!CarrotContext || !CarrotStorage) return;
-    
+
     const context = CarrotContext.getCurrentContext();
     const currentSettings = await CarrotStorage.getSettings();
     
@@ -10949,9 +11084,130 @@ async function updateLoadoutCardStatus() {
     
     $('#carrot-loadout-status').text(statusText);
     $('#carrot-loadout-indicator').removeClass('active').addClass(indicatorClass);
-    
+
     // Update tooltip with current context
     $('#carrot-loadout-card').attr('title', `Loadout Manager - Current: ${contextInfo}`);
+
+    // Update "Active Loadout" display in the Loadout Manager
+    const loadoutNameEl = document.getElementById('carrot-current-loadout-name');
+    const loadoutDescEl = document.getElementById('carrot-current-loadout-desc');
+
+    if (loadoutNameEl && loadoutDescEl) {
+        // Check if a template was applied
+        if (currentSettings._appliedTemplate) {
+            const templateNames = {
+                'general': 'General Purpose',
+                'roleplay': 'Roleplay Focus',
+                'minimal': 'Minimal Setup'
+            };
+            const templateDescs = {
+                'general': 'Balanced settings for everyday use',
+                'roleplay': 'Enhanced for immersive storytelling',
+                'minimal': 'Lightweight performance config'
+            };
+            const templateIcons = {
+                'general': 'fa-star',
+                'roleplay': 'fa-theater-masks',
+                'minimal': 'fa-minimize'
+            };
+            const templateColors = {
+                'general': '#fbbf24',  // Amber/Gold for General Purpose (star)
+                'roleplay': '#a78bfa',  // Purple for Roleplay Focus (theater masks)
+                'minimal': '#60a5fa'    // Blue for Minimal Setup (minimize)
+            };
+
+            const templateName = templateNames[currentSettings._appliedTemplate] || currentSettings._appliedTemplate;
+            const templateIcon = templateIcons[currentSettings._appliedTemplate] || 'fa-bookmark';
+            const templateColor = templateColors[currentSettings._appliedTemplate] || '#667eea';
+
+            loadoutNameEl.innerHTML = `<i class="fa-solid ${templateIcon}" style="margin-right: 8px; color: ${templateColor};"></i>${templateName}`;
+            loadoutDescEl.textContent = templateDescs[currentSettings._appliedTemplate] || 'Template applied';
+        } else {
+            loadoutNameEl.textContent = 'None Assigned';
+            loadoutDescEl.textContent = 'Click below to assign a loadout';
+        }
+    }
+}
+
+// Load and apply context-specific settings when context changes
+async function loadAndApplyContextSettings() {
+    if (!CarrotContext || !CarrotStorage) {
+        CarrotDebug.ui('Context/Storage not initialized - skipping context settings load');
+        return;
+    }
+
+    try {
+        const context = CarrotContext.getCurrentContext();
+        const contextSettings = await CarrotStorage.getSettings();
+
+        CarrotDebug.ui(`Loading context settings for ${context.characterId || context.chatId || 'global'}`);
+
+        // Apply settings to global extension_settings
+        if (contextSettings.enabled !== undefined) {
+            extension_settings[extensionName].enabled = contextSettings.enabled;
+        }
+        if (contextSettings.sendToAI !== undefined) {
+            extension_settings[extensionName].sendToAI = contextSettings.sendToAI;
+        }
+        if (contextSettings.displayMode !== undefined) {
+            extension_settings[extensionName].displayMode = contextSettings.displayMode;
+        }
+        if (contextSettings.autoExpand !== undefined) {
+            extension_settings[extensionName].autoExpand = contextSettings.autoExpand;
+        }
+        if (contextSettings.babyBunnyMode !== undefined) {
+            extension_settings[extensionName].babyBunnyMode = contextSettings.babyBunnyMode;
+        }
+        if (contextSettings.worldBookTrackerEnabled !== undefined) {
+            extension_settings[extensionName].worldBookTrackerEnabled = contextSettings.worldBookTrackerEnabled;
+        }
+        if (contextSettings.autoRescanOnChatLoad !== undefined) {
+            extension_settings[extensionName].autoRescanOnChatLoad = contextSettings.autoRescanOnChatLoad;
+        }
+        if (contextSettings.debugMode !== undefined) {
+            extension_settings[extensionName].debugMode = contextSettings.debugMode;
+        }
+        if (contextSettings.maxCharactersDisplay !== undefined) {
+            extension_settings[extensionName].maxCharactersDisplay = contextSettings.maxCharactersDisplay;
+        }
+        if (contextSettings.maxCharactersInject !== undefined) {
+            extension_settings[extensionName].maxCharactersInject = contextSettings.maxCharactersInject;
+        }
+
+        // Apply lorebook selections
+        if (contextSettings.selectedLorebooks) {
+            selectedLorebooks.clear();
+            contextSettings.selectedLorebooks.forEach(book => selectedLorebooks.add(book));
+        }
+
+        if (contextSettings.characterRepoBooks) {
+            characterRepoBooks.clear();
+            contextSettings.characterRepoBooks.forEach(book => characterRepoBooks.add(book));
+        }
+
+        // Save to ST's global settings so they persist
+        saveSettings();
+
+        // Apply WorldBook Tracker visibility
+        if (contextSettings.worldBookTrackerEnabled !== undefined) {
+            const trackerIcon = document.querySelector('.ck-trigger');
+            if (trackerIcon) {
+                trackerIcon.style.display = contextSettings.worldBookTrackerEnabled ? 'block' : 'none';
+            }
+        }
+
+        // Rescan if lorebooks changed and auto-rescan is enabled
+        if (contextSettings.selectedLorebooks && contextSettings.selectedLorebooks.length > 0) {
+            const autoRescan = extension_settings[extensionName]?.autoRescanOnChatLoad ?? true;
+            if (autoRescan) {
+                await scanSelectedLorebooks(contextSettings.selectedLorebooks);
+            }
+        }
+
+        CarrotDebug.ui('Context settings applied successfully');
+    } catch (error) {
+        console.error('🥕 Error loading context settings:', error);
+    }
 }
 
 // Open the comprehensive Loadout Manager interface
@@ -11088,9 +11344,11 @@ function showCarrotLoadoutOverlay(loadoutHTML, context, currentSettings) {
     
     // Bind event handlers for context switching after overlay is shown
     bindLoadoutManagerEvents(context, currentSettings);
-    
-    // Update loadouts display
-    updateLoadoutsDisplay(context);
+
+    // Update loadouts display after a small delay to ensure DOM is ready
+    setTimeout(() => {
+        updateLoadoutsDisplay(context);
+    }, 50);
     
     // Close on overlay background click
     overlay.addEventListener('click', (e) => {
@@ -11658,85 +11916,104 @@ function generateAdvancedContextSettings(currentSettings) {
     `;
 }
 
-// Generate profile management section
+// Generate profile management section - redesigned for clarity
 function generateProfileManagement(contextMode) {
-    const contextName = contextMode === 'character' ? 'Character' : 
-                       contextMode === 'chat' ? 'Chat' : 
+    const contextName = contextMode === 'character' ? 'Character' :
+                       contextMode === 'chat' ? 'Chat' :
                        'Current Context';
-    
+
     return `
-        <div class="carrot-settings-grid">
-            <div class="carrot-setting-item">
-                <label class="carrot-label">
-                    <span class="carrot-label-text">Context Profile Actions</span>
-                    <span class="carrot-label-hint">Save, load, and manage ${contextName.toLowerCase()} settings</span>
-                </label>
-                <div class="carrot-profile-actions">
-                    <button id="carrot-context-save-btn" class="carrot-primary-btn">
-                        <i class="fa-solid fa-save"></i>
-                        Save ${contextName} Profile
+        <!-- Workflow 1: Quick Save/Load for THIS Context -->
+        <div class="carrot-profile-section">
+            <h4 style="margin: 0 0 12px 0; color: var(--SmartThemeEmColor); display: flex; align-items: center; gap: 8px;">
+                <i class="fa-solid fa-floppy-disk"></i> Save Current Settings to ${contextName}
+            </h4>
+            <p style="margin: 0 0 16px 0; font-size: 13px; opacity: 0.8;">
+                Save your current configuration to be automatically loaded when you use this ${contextName.toLowerCase()}
+            </p>
+            <div class="carrot-profile-actions" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <button id="save-current-context" class="carrot-primary-btn">
+                    <i class="fa-solid fa-save"></i> Save to ${contextName}
+                </button>
+                <button id="clear-context-settings" class="carrot-secondary-btn">
+                    <i class="fa-solid fa-eraser"></i> Clear ${contextName} Settings
+                </button>
+            </div>
+        </div>
+
+        <div style="border-top: 1px solid var(--SmartThemeBorderColor); margin: 20px 0;"></div>
+
+        <!-- Workflow 2: Reusable Loadouts -->
+        <div class="carrot-profile-section">
+            <h4 style="margin: 0 0 12px 0; color: var(--SmartThemeEmColor); display: flex; align-items: center; gap: 8px;">
+                <i class="fa-solid fa-layer-group"></i> Reusable Loadouts
+            </h4>
+            <p style="margin: 0 0 16px 0; font-size: 13px; opacity: 0.8;">
+                Create named loadouts to quickly switch between different configurations
+            </p>
+
+            <!-- Current Loadout Display -->
+            <div class="carrot-current-loadout-display" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <div style="font-size: 12px; opacity: 0.7; margin-bottom: 4px;">Active Loadout</div>
+                        <div id="carrot-current-loadout-name" style="font-size: 16px; font-weight: 600; color: var(--SmartThemeEmColor);">None Assigned</div>
+                        <div id="carrot-current-loadout-desc" style="font-size: 12px; opacity: 0.7; margin-top: 4px;">Click below to assign a loadout</div>
+                    </div>
+                    <button id="carrot-change-loadout" class="carrot-primary-btn">
+                        <i class="fa-solid fa-exchange-alt"></i> Assign
                     </button>
-                    <button id="carrot-context-clear-btn" class="carrot-secondary-btn">
-                        <i class="fa-solid fa-eraser"></i>
-                        Clear Settings
-                    </button>
                 </div>
             </div>
-            
-            <div class="carrot-setting-item">
-                <label class="carrot-label">
-                    <span class="carrot-label-text">Current Loadout</span>
-                    <span class="carrot-label-hint">Active loadout assigned to this ${contextName.toLowerCase()}</span>
-                </label>
-                <div class="carrot-current-loadout" id="carrot-current-loadout">
-                    <div class="carrot-loadout-status">
-                        <div class="carrot-status-indicator">
-                            <div class="carrot-pulse-dot carrot-blink"></div>
-                        </div>
-                        <div class="carrot-status-text">
-                            <div class="carrot-current-loadout-name" id="carrot-current-loadout-name">None Selected</div>
-                            <div class="carrot-current-loadout-desc" id="carrot-current-loadout-desc">No loadout assigned to this ${contextName.toLowerCase()}</div>
-                        </div>
-                        <button id="carrot-change-loadout" class="carrot-primary-btn">
-                            <i class="fa-solid fa-exchange-alt"></i>
-                            Assign Loadout
-                        </button>
-                    </div>
+
+            <!-- Loadout Library List -->
+            <div id="carrot-loadouts-list" style="margin-bottom: 16px; max-height: 200px; overflow-y: auto;">
+                <div class="carrot-empty-loadouts" style="text-align: center; padding: 40px 20px; opacity: 0.6;">
+                    <i class="fa-solid fa-bookmark" style="font-size: 32px; margin-bottom: 12px; display: block;"></i>
+                    <p style="margin: 0 0 4px 0;">No saved loadouts yet</p>
+                    <small style="font-size: 12px;">Click below to save your first loadout</small>
                 </div>
             </div>
-            
-            <div class="carrot-setting-item">
-                <label class="carrot-label">
-                    <span class="carrot-label-text">Loadout Library</span>
-                    <span class="carrot-label-hint">Create, manage, and assign your reusable loadouts</span>
-                </label>
-                <div class="carrot-loadouts-section">
-                    <div class="carrot-loadouts-list" id="carrot-loadouts-list">
-                        <div class="carrot-empty-loadouts">
-                            <i class="fa-solid fa-bookmark"></i>
-                            <p>No saved loadouts yet</p>
-                            <small>Save your current settings as a loadout to reuse later</small>
-                        </div>
-                    </div>
-                    <div class="carrot-loadout-actions">
-                        <button id="carrot-save-loadout" class="carrot-primary-btn">
-                            <i class="fa-solid fa-bookmark"></i>
-                            Save Current Settings
-                        </button>
-                        <button id="carrot-manage-loadouts" class="carrot-secondary-btn">
-                            <i class="fa-solid fa-cog"></i>
-                            Manage Loadouts
-                        </button>
-                    </div>
-                </div>
+
+            <!-- Loadout Actions -->
+            <div class="carrot-loadout-actions" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <button id="carrot-save-loadout" class="carrot-primary-btn">
+                    <i class="fa-solid fa-bookmark"></i> Save as Loadout
+                </button>
+                <button id="carrot-manage-loadouts" class="carrot-secondary-btn">
+                    <i class="fa-solid fa-cog"></i> Manage Library
+                </button>
             </div>
-            
-            <div class="carrot-setting-item">
-                <label class="carrot-label">
-                    <span class="carrot-label-text">Import/Export</span>
-                    <span class="carrot-label-hint">Share loadouts with other users</span>
-                </label>
-                <div class="carrot-profile-actions">
+        </div>
+
+        <div style="border-top: 1px solid var(--SmartThemeBorderColor); margin: 20px 0;"></div>
+
+        <!-- Workflow 3: Import/Export -->
+        <div class="carrot-profile-section">
+            <h4 style="margin: 0 0 12px 0; color: var(--SmartThemeEmColor); display: flex; align-items: center; gap: 8px;">
+                <i class="fa-solid fa-share-nodes"></i> Share & Backup
+            </h4>
+            <p style="margin: 0 0 16px 0; font-size: 13px; opacity: 0.8;">
+                Export your current settings or import from a file
+            </p>
+            <div class="carrot-profile-actions" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <button id="export-context-profile" class="carrot-secondary-btn">
+                    <i class="fa-solid fa-download"></i> Export Profile
+                </button>
+                <button id="import-context-profile" class="carrot-secondary-btn">
+                    <i class="fa-solid fa-upload"></i> Import Profile
+                </button>
+            </div>
+        </div>
+
+
+    </div>
+    <div class="carrot-setting-item" style="display:none;">
+        <label class="carrot-label">
+            <span class="carrot-label-text">Import/Export (OLD)</span>
+            <span class="carrot-label-hint">Share loadouts with other users</span>
+        </label>
+        <div class="carrot-profile-actions">
                     <button id="carrot-export-profile" class="carrot-secondary-btn">
                         <i class="fa-solid fa-download"></i>
                         Export Profile
@@ -12440,15 +12717,37 @@ async function applyLoadoutChanges() {
 
 // Get loadout settings from the UI (helper function for loadout manager)
 async function getLoadoutSettings() {
-    return {
-        enabledRepos: selectedLorebooks,
-        scanOnStartup: $('#loadout-scan-startup').prop('checked'),
-        autoScanEnabled: extension_settings[extensionName].sendToAI,
-        displaySettings: {
-            showCards: extension_settings[extensionName].displayMode !== 'disabled',
-            groupByCharacter: true,
-            compactMode: false
+    // Build settings from the ACTUAL UI state in the Loadout Manager
+    const enabledRepos = new Set();
+    const characterRepos = new Set();
+
+    // Get enabled lorebooks from checkboxes
+    $('.lorebook-enable-toggle:checked').each(function() {
+        const lorebookName = $(this).data('lorebook');
+        if (lorebookName) {
+            enabledRepos.add(lorebookName);
         }
+    });
+
+    // Get character repo designations
+    $('.carrot-repo-toggle.active').each(function() {
+        const lorebookName = $(this).data('lorebook');
+        if (lorebookName) {
+            characterRepos.add(lorebookName);
+        }
+    });
+
+    return {
+        selectedLorebooks: Array.from(enabledRepos),
+        characterRepoBooks: Array.from(characterRepos),
+        enabled: $('#context-enabled').prop('checked') ?? extension_settings[extensionName].enabled,
+        sendToAI: $('#context-send-ai').prop('checked') ?? extension_settings[extensionName].sendToAI,
+        displayMode: $('input[name="display-mode"]:checked').val() ?? extension_settings[extensionName].displayMode,
+        autoExpand: $('#context-auto-expand').prop('checked') ?? extension_settings[extensionName].autoExpand,
+        debugMode: $('#context-debug').prop('checked') ?? extension_settings[extensionName].debugMode,
+        babyBunnyMode: $('#context-baby-bunny').prop('checked') ?? extension_settings[extensionName].babyBunnyMode,
+        maxCharactersDisplay: parseInt($('#context-max-display').val()) || extension_settings[extensionName].maxCharactersDisplay,
+        maxCharactersInject: parseInt($('#context-max-inject').val()) || extension_settings[extensionName].maxCharactersInject
     };
 }
 
@@ -13615,8 +13914,7 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
 
     // Render list of all repositories
     renderRepositoryList() {
-        // Only show repos that are both marked as character repos AND exist in selected lorebooks
-        const repoBooks = Array.from(characterRepoBooks).filter(repo => selectedLorebooks.has(repo));
+        const repoBooks = Array.from(characterRepoBooks);
 
         if (repoBooks.length === 0) {
             return `
@@ -15405,18 +15703,72 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
     // Enhanced event binding for comprehensive loadout manager
     bindLoadoutManagerEvents() {
         const self = this;
-        
+        const context = CarrotContext.getCurrentContext();
+
         // Tab switching functionality
         $('.carrot-tab').off('click').on('click', function() {
             const tabName = $(this).data('tab');
             $(this).siblings('.carrot-tab').removeClass('active');
             $(this).addClass('active');
-            
+
             // Hide all tab contents, show the selected one
             $('.carrot-tab-content').removeClass('active');
             $(`#tab-${tabName}`).addClass('active');
         });
-        
+
+        // Profile Management button handlers
+        $('#carrot-change-loadout').off('click').on('click', async function() {
+            // Get current context
+            const currentContext = CarrotContext.getCurrentContext();
+
+            // Get current settings from the UI
+            const currentSettings = await getLoadoutSettings();
+
+            // Build context settings from UI state
+            const contextSettings = {
+                ...currentSettings,
+                selectedLorebooks: Array.from(selectedLorebooks),
+                characterRepoBooks: Array.from(characterRepoBooks)
+            };
+
+            // Save to the current context (character or chat), not global
+            await CarrotStorage.saveSettings(contextSettings, currentContext.level);
+
+            // Apply these settings to the current session
+            await loadAndApplyContextSettings();
+
+            // Update loadout card status and overlay
+            updateLoadoutCardStatus();
+            checkAndOverlayLoadoutWarning();
+
+            // Show success message
+            toastr.success(`Settings assigned to ${currentContext.name}`, 'Loadout Assigned');
+            CarrotDebug.ui(`Assigned loadout to ${currentContext.level} context`, contextSettings);
+        });
+
+        $('#carrot-save-loadout').off('click').on('click', async function() {
+            await saveCurrentAsLoadout();
+            // Refresh loadout list display
+            updateLoadoutLibraryList();
+        });
+
+        $('#carrot-manage-loadouts').off('click').on('click', function() {
+            openLoadoutManagement();
+        });
+
+        // Profile template button handlers
+        $('#carrot-template-general').off('click').on('click', function() {
+            applyProfileTemplate('general');
+        });
+
+        $('#carrot-template-roleplay').off('click').on('click', function() {
+            applyProfileTemplate('roleplay');
+        });
+
+        $('#carrot-template-minimal').off('click').on('click', function() {
+            applyProfileTemplate('minimal');
+        });
+
         // Lorebook enable/disable toggles
         $('.lorebook-enable-toggle').off('change').on('change', function() {
             const lorebook = $(this).data('lorebook');
@@ -15504,39 +15856,39 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
         $('.apply-assignment').off('click').on('click', async function() {
             const selectedLorebooks = [];
             const selectedContexts = [];
-            
+
             $('.assign-lorebook:checked').each(function() {
                 selectedLorebooks.push($(this).data('lorebook'));
             });
-            
+
             $('.assign-target:checked').each(function() {
                 selectedContexts.push($(this).data('target'));
             });
-            
+
             if (selectedLorebooks.length === 0 || selectedContexts.length === 0) {
-                alert('Please select both lorebooks and contexts to assign them to.');
+                toastr.warning('Please select both lorebooks and contexts to assign them to.', 'CarrotKernel');
                 return;
             }
-            
+
             // Apply assignments to each selected context
             for (const context of selectedContexts) {
                 const settings = {
-                    enabledRepos: new Set(selectedLorebooks),
-                    scanOnStartup: $('#context-scan-startup').prop('checked'),
-                    autoScanEnabled: true
+                    selectedLorebooks: selectedLorebooks,
+                    characterRepoBooks: []  // Will be determined later when user marks them
                 };
-                
+
                 await CarrotStorage.saveSettings(settings, context);
                 CarrotDebug.ui(`Applied assignment to ${context} context`);
             }
-            
+
             // Update button state
             $(this).html('<i class="fa-solid fa-check"></i> Assignment Applied!').prop('disabled', true);
             setTimeout(() => {
                 $(this).html('<i class="fa-solid fa-check"></i> Apply Assignment').prop('disabled', false);
             }, 3000);
-            
+
             updateLoadoutCardStatus();
+            toastr.success(`Assigned ${selectedLorebooks.length} lorebooks to ${selectedContexts.length} context(s)`, 'CarrotKernel');
         });
         
         // Core settings event binding
@@ -15559,20 +15911,50 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
         // Profile management buttons
         $('#save-current-context').off('click').on('click', async function() {
             const settings = await getLoadoutSettings();
-            
+
             // Determine the appropriate context level to save to
             let contextLevel = 'character';
             if (CarrotContext.getCurrentContext().isGroup) {
                 contextLevel = 'chat';
             }
-            
+
             const success = await CarrotStorage.saveSettings(settings, contextLevel);
             if (success) {
-                $(this).html('<i class="fa-solid fa-check"></i> Profile Saved!').prop('disabled', true);
+                // APPLY the saved settings to the current session
+                if (settings.selectedLorebooks) {
+                    selectedLorebooks.clear();
+                    settings.selectedLorebooks.forEach(book => selectedLorebooks.add(book));
+                }
+                if (settings.characterRepoBooks) {
+                    characterRepoBooks.clear();
+                    settings.characterRepoBooks.forEach(book => characterRepoBooks.add(book));
+                }
+
+                // Update global extension settings
+                extension_settings[extensionName].enabled = settings.enabled;
+                extension_settings[extensionName].sendToAI = settings.sendToAI;
+                extension_settings[extensionName].displayMode = settings.displayMode;
+                extension_settings[extensionName].autoExpand = settings.autoExpand;
+                extension_settings[extensionName].debugMode = settings.debugMode;
+                extension_settings[extensionName].babyBunnyMode = settings.babyBunnyMode;
+                extension_settings[extensionName].maxCharactersDisplay = settings.maxCharactersDisplay;
+                extension_settings[extensionName].maxCharactersInject = settings.maxCharactersInject;
+
+                // Save to ST's extension_settings
+                saveSettings();
+
+                // Rescan with new settings
+                if (settings.selectedLorebooks && settings.selectedLorebooks.length > 0) {
+                    await scanSelectedLorebooks(settings.selectedLorebooks);
+                }
+
+                $(this).html('<i class="fa-solid fa-check"></i> Profile Saved & Applied!').prop('disabled', true);
                 setTimeout(() => {
                     $(this).html('<i class="fa-solid fa-save"></i> Save Current Profile').prop('disabled', false);
                 }, 2000);
                 updateLoadoutCardStatus();
+
+                toastr.success(`Settings saved for ${contextLevel} context`, 'CarrotKernel');
             }
         });
         
@@ -17325,6 +17707,11 @@ This is a test message.`;
             console.log(tagsBlock);
             
             return tagsBlock;
+        },
+
+        // Apply a profile template (General, Roleplay, Minimal)
+        applyProfileTemplate(templateType) {
+            applyProfileTemplate(templateType);
         }
     }
 };
@@ -17455,7 +17842,7 @@ function scanLoadoutLorebooks() {
 };
 
 // Apply profile template to current context
-function applyProfileTemplate(templateType) {
+async function applyProfileTemplate(templateType) {
     const templates = {
         'general': {
             enabled: true,
@@ -17504,80 +17891,50 @@ function applyProfileTemplate(templateType) {
         return;
     }
 
-    // Apply template settings to the UI
-    const enabledCheckbox = document.getElementById('carrot_context_enabled');
-    if (enabledCheckbox) enabledCheckbox.checked = template.enabled;
+    // Get current context
+    const currentContext = CarrotContext.getCurrentContext();
 
-    const sendToAICheckbox = document.getElementById('carrot_context_ai_injection');
-    if (sendToAICheckbox) sendToAICheckbox.checked = template.sendToAI;
+    // Build context settings dynamically from template
+    const contextSettings = {
+        ...template,
+        selectedLorebooks: Array.from(selectedLorebooks),
+        characterRepoBooks: Array.from(characterRepoBooks),
+        _appliedTemplate: templateType
+    };
+    delete contextSettings.description;
 
-    const displayModeSelect = document.getElementById('carrot_context_display_mode');
-    if (displayModeSelect) displayModeSelect.value = template.displayMode;
+    // Save to context and apply
+    await CarrotStorage.saveSettings(contextSettings, currentContext.level);
+    await loadAndApplyContextSettings();
 
-    const autoExpandCheckbox = document.getElementById('carrot_context_auto_expand');
-    if (autoExpandCheckbox) autoExpandCheckbox.checked = template.autoExpand;
+    // Update UI
+    updateLoadoutCardStatus();
+    checkAndOverlayLoadoutWarning();
 
-    const babyBunnyCheckbox = document.getElementById('carrot_context_baby_bunny');
-    if (babyBunnyCheckbox) babyBunnyCheckbox.checked = template.babyBunnyMode;
-
-    const worldbookCheckbox = document.getElementById('carrot_context_worldbook_tracker');
-    if (worldbookCheckbox) worldbookCheckbox.checked = template.worldBookTrackerEnabled;
-
-    const autoRescanCheckbox = document.getElementById('carrot_context_auto_rescan');
-    if (autoRescanCheckbox) autoRescanCheckbox.checked = template.autoRescanOnChatLoad;
-
-    const maxDisplaySlider = document.getElementById('carrot_context_max_display');
-    const maxDisplayValue = document.getElementById('carrot_context_max_display_value');
-    if (maxDisplaySlider) {
-        maxDisplaySlider.value = template.maxCharactersDisplay;
-        if (maxDisplayValue) maxDisplayValue.textContent = template.maxCharactersDisplay;
-    }
-
-    const maxInjectSlider = document.getElementById('carrot_context_max_inject');
-    const maxInjectValue = document.getElementById('carrot_context_max_inject_value');
-    if (maxInjectSlider) {
-        maxInjectSlider.value = template.maxCharactersInject;
-        if (maxInjectValue) maxInjectValue.textContent = template.maxCharactersInject;
-    }
-
-    const debugCheckbox = document.getElementById('carrot_context_debug_mode');
-    if (debugCheckbox) debugCheckbox.checked = template.debugMode;
-
-    // Show success message
-    toastr.success(`Applied ${template.description}`, 'Profile Template');
-    if (extension_settings[extensionName]?.debugMode) {
-        console.log(`🥕 LOADOUT DEBUG: Applied ${templateType} template`, template);
-    }
+    // Show success
+    toastr.success(`${template.description.split(' - ')[0]} assigned to ${currentContext.name}`, 'Template Applied');
+    CarrotDebug.ui(`Applied ${templateType} template to ${currentContext.level} context`, template);
 };
 
 // Save current settings as a new loadout
-function saveCurrentAsLoadout() {
+async function saveCurrentAsLoadout() {
     const loadoutName = prompt('Enter a name for this loadout:', '');
     if (!loadoutName || loadoutName.trim() === '') {
         return;
     }
 
-    // Collect current settings and lorebook selections
+    // Use the getLoadoutSettings function to get current UI state
+    const currentSettings = await getLoadoutSettings();
+
+    // Create loadout object
     const loadout = {
         name: loadoutName.trim(),
-        settings: {
-            enabled: document.getElementById('carrot_context_enabled')?.checked || false,
-            sendToAI: document.getElementById('carrot_context_ai_injection')?.checked || false,
-            displayMode: document.getElementById('carrot_context_display_mode')?.value || 'thinking',
-            autoExpand: document.getElementById('carrot_context_auto_expand')?.checked || false,
-            filterContext: document.getElementById('carrot_context_filter')?.checked || false,
-            maxCharacters: parseInt(document.getElementById('carrot_context_max_characters')?.value || '6'),
-            injectionDepth: parseInt(document.getElementById('carrot_context_injection_depth')?.value || '4')
-        },
-        lorebooks: [],
+        settings: currentSettings,
+        lorebooks: currentSettings.selectedLorebooks || [],
+        characterRepos: currentSettings.characterRepoBooks || [],
         timestamp: Date.now(),
         description: `Created ${new Date().toLocaleDateString()}`
     };
-
-    // Get selected lorebooks
-    document.querySelectorAll('.lorebook-enable-toggle:checked').forEach(checkbox => {
-        loadout.lorebooks.push(checkbox.dataset.lorebook);
-    });
 
     // Save to loadout library
     const loadouts = getLoadoutLibrary();
@@ -17588,9 +17945,7 @@ function saveCurrentAsLoadout() {
     const context = CarrotContext.getCurrentContext();
     updateLoadoutsDisplay(context);
     toastr.success(`Saved loadout: ${loadoutName}`, 'Loadout Library');
-    if (extension_settings[extensionName]?.debugMode) {
-        console.log(`🥕 LOADOUT DEBUG: Saved loadout: ${loadoutName}`, loadout);
-    }
+    CarrotDebug.ui(`Saved loadout: ${loadoutName}`, loadout);
 }
 
 
@@ -17643,7 +17998,7 @@ function assignLoadoutToContext(loadoutName, context) {
     }
 }
 
-function applyLoadoutToInterface(loadoutName) {
+async function applyLoadoutToInterface(loadoutName) {
     const loadouts = getLoadoutLibrary();
     const loadout = loadouts[loadoutName];
     if (!loadout) {
@@ -17651,37 +18006,90 @@ function applyLoadoutToInterface(loadoutName) {
         return false;
     }
 
-    // Apply settings
+    // Apply settings to UI
     const settings = loadout.settings;
+
+    // Apply checkboxes and selects
     const enabledCheckbox = document.getElementById('carrot_context_enabled');
-    if (enabledCheckbox) enabledCheckbox.checked = settings.enabled;
+    if (enabledCheckbox) enabledCheckbox.checked = settings.enabled ?? true;
 
     const sendToAICheckbox = document.getElementById('carrot_context_ai_injection');
-    if (sendToAICheckbox) sendToAICheckbox.checked = settings.sendToAI;
+    if (sendToAICheckbox) sendToAICheckbox.checked = settings.sendToAI ?? true;
 
     const displayModeSelect = document.getElementById('carrot_context_display_mode');
-    if (displayModeSelect) displayModeSelect.value = settings.displayMode;
+    if (displayModeSelect) displayModeSelect.value = settings.displayMode || 'thinking';
 
     const autoExpandCheckbox = document.getElementById('carrot_context_auto_expand');
-    if (autoExpandCheckbox) autoExpandCheckbox.checked = settings.autoExpand;
+    if (autoExpandCheckbox) autoExpandCheckbox.checked = settings.autoExpand ?? false;
 
-    const filterCheckbox = document.getElementById('carrot_context_filter');
-    if (filterCheckbox) filterCheckbox.checked = settings.filterContext;
+    const maxDisplaySlider = document.getElementById('carrot_context_max_display');
+    if (maxDisplaySlider) {
+        maxDisplaySlider.value = settings.maxCharactersDisplay || 6;
+        const valueSpan = document.getElementById('carrot_context_max_display_value');
+        if (valueSpan) valueSpan.textContent = settings.maxCharactersDisplay || 6;
+    }
 
-    const maxCharInput = document.getElementById('carrot_context_max_characters');
-    if (maxCharInput) maxCharInput.value = settings.maxCharacters;
-
-    const injectionDepthInput = document.getElementById('carrot_context_injection_depth');
-    if (injectionDepthInput) injectionDepthInput.value = settings.injectionDepth;
+    const maxInjectSlider = document.getElementById('carrot_context_max_inject');
+    if (maxInjectSlider) {
+        maxInjectSlider.value = settings.maxCharactersInject || 6;
+        const valueSpan = document.getElementById('carrot_context_max_inject_value');
+        if (valueSpan) valueSpan.textContent = settings.maxCharactersInject || 6;
+    }
 
     // Apply lorebook selections
-    document.querySelectorAll('.lorebook-enable-toggle').forEach(checkbox => {
-        checkbox.checked = loadout.lorebooks.includes(checkbox.dataset.lorebook);
-    });
-
-    if (extension_settings[extensionName]?.debugMode) {
-        console.log(`🥕 LOADOUT DEBUG: Applied loadout "${loadoutName}" to interface`, loadout);
+    if (loadout.lorebooks) {
+        const lorebookCheckboxes = document.querySelectorAll('.lorebook-enable-toggle');
+        lorebookCheckboxes.forEach(checkbox => {
+            const lorebookName = checkbox.dataset.lorebook;
+            checkbox.checked = loadout.lorebooks.includes(lorebookName);
+        });
     }
+
+    // Apply character repo designations
+    if (loadout.characterRepos) {
+        const repoToggles = document.querySelectorAll('.carrot-repo-toggle');
+        repoToggles.forEach(toggle => {
+            const lorebookName = toggle.dataset.lorebook;
+            if (loadout.characterRepos.includes(lorebookName)) {
+                toggle.classList.add('active');
+                toggle.style.background = '#9c27b0';
+                toggle.style.color = 'white';
+                toggle.innerHTML = '👤 Character Repo';
+            } else {
+                toggle.classList.remove('active');
+                toggle.style.background = 'transparent';
+                toggle.style.color = 'var(--SmartThemeBodyColor)';
+                toggle.innerHTML = '📚 Tag Library';
+            }
+        });
+    }
+
+    // Apply settings to global state (so they take effect immediately)
+    if (settings.selectedLorebooks) {
+        selectedLorebooks.clear();
+        settings.selectedLorebooks.forEach(book => selectedLorebooks.add(book));
+    }
+    if (settings.characterRepoBooks) {
+        characterRepoBooks.clear();
+        settings.characterRepoBooks.forEach(book => characterRepoBooks.add(book));
+    }
+
+    // Update extension settings
+    extension_settings[extensionName].enabled = settings.enabled ?? true;
+    extension_settings[extensionName].sendToAI = settings.sendToAI ?? true;
+    extension_settings[extensionName].displayMode = settings.displayMode || 'thinking';
+    extension_settings[extensionName].autoExpand = settings.autoExpand ?? false;
+    extension_settings[extensionName].maxCharactersDisplay = settings.maxCharactersDisplay || 6;
+    extension_settings[extensionName].maxCharactersInject = settings.maxCharactersInject || 6;
+
+    saveSettings();
+
+    // Rescan repositories if lorebooks were selected
+    if (loadout.lorebooks && loadout.lorebooks.length > 0) {
+        await scanSelectedLorebooks(loadout.lorebooks);
+    }
+
+    CarrotDebug.ui(`Applied loadout: ${loadoutName}`);
     return true;
 }
 
@@ -17828,40 +18236,58 @@ function updateLoadoutLibraryList() {
     const loadoutsList = document.getElementById('carrot-loadouts-list');
     if (!loadoutsList) return;
 
+    // System templates (built-in, non-deletable)
+    const systemTemplates = [
+        { name: 'General Purpose', icon: 'fa-star', desc: 'Balanced settings for everyday use', template: 'general' },
+        { name: 'Roleplay Focus', icon: 'fa-theater-masks', desc: 'Enhanced for immersive storytelling', template: 'roleplay' },
+        { name: 'Minimal Setup', icon: 'fa-minimize', desc: 'Lightweight performance config', template: 'minimal' }
+    ];
+
+    const systemItems = systemTemplates.map(t => `
+        <div class="carrot-loadout-item" style="background: rgba(102, 126, 234, 0.1); border-left: 3px solid #667eea;">
+            <div class="carrot-loadout-info">
+                <div class="carrot-loadout-name">
+                    <i class="fa-solid ${t.icon}" style="margin-right: 6px; color: #667eea;"></i>
+                    ${t.name}
+                    <span style="font-size: 10px; opacity: 0.7; margin-left: 6px;">(System)</span>
+                </div>
+                <div class="carrot-loadout-desc">${t.desc}</div>
+            </div>
+            <button onclick="applyProfileTemplate('${t.template}')" class="carrot-primary-btn" style="padding: 4px 8px; font-size: 12px;">
+                <i class="fa-solid fa-bolt"></i> Apply
+            </button>
+        </div>
+    `).join('');
+
     const loadouts = getLoadoutLibrary();
     const loadoutNames = Object.keys(loadouts);
 
-    if (loadoutNames.length === 0) {
-        loadoutsList.innerHTML = `
-            <div class="carrot-empty-loadouts">
-                <i class="fa-solid fa-bookmark"></i>
-                <p>No saved loadouts yet</p>
-                <small>Save your current settings as a loadout to reuse later</small>
+    let userItems = '';
+    if (loadoutNames.length > 0) {
+        userItems = `
+            <div style="margin-top: 16px; margin-bottom: 8px; font-size: 12px; font-weight: 600; color: var(--SmartThemeEmColor); opacity: 0.8;">
+                <i class="fa-solid fa-bookmark"></i> Your Loadouts
             </div>
-        `;
-        return;
+        ` + loadoutNames.slice(0, 3).map(name => {
+            const loadout = loadouts[name];
+            return `
+                <div class="carrot-loadout-item">
+                    <div class="carrot-loadout-info">
+                        <div class="carrot-loadout-name">${name}</div>
+                        <div class="carrot-loadout-desc">${loadout.description}</div>
+                    </div>
+                    <button onclick="quickApplyLoadout('${name}')" class="carrot-primary-btn" style="padding: 4px 8px; font-size: 12px;">
+                        <i class="fa-solid fa-bolt"></i> Apply
+                    </button>
+                </div>
+            `;
+        }).join('');
     }
 
-    const loadoutItems = loadoutNames.slice(0, 4).map(name => {
-        const loadout = loadouts[name];
-        const date = new Date(loadout.timestamp).toLocaleDateString();
-        return `
-            <div class="carrot-loadout-item">
-                <div class="carrot-loadout-info">
-                    <div class="carrot-loadout-name">${name}</div>
-                    <div class="carrot-loadout-desc">${loadout.description}</div>
-                </div>
-                <button onclick="quickApplyLoadout('${name}')" class="carrot-primary-btn" style="padding: 4px 8px; font-size: 12px;">
-                    <i class="fa-solid fa-bolt"></i> Apply
-                </button>
-            </div>
-        `;
-    }).join('');
+    const moreText = loadoutNames.length > 3 ?
+        `<div style="text-align: center; margin-top: 8px; opacity: 0.7; font-size: 12px;">+${loadoutNames.length - 3} more in library</div>` : '';
 
-    const moreText = loadoutNames.length > 4 ? 
-        `<div style="text-align: center; margin-top: 8px; opacity: 0.7; font-size: 12px;">+${loadoutNames.length - 4} more in library</div>` : '';
-
-    loadoutsList.innerHTML = loadoutItems + moreText;
+    loadoutsList.innerHTML = systemItems + userItems + moreText;
 }
 
 // Quick apply loadout (just applies to interface, doesn't assign to context)
@@ -17869,6 +18295,11 @@ window.quickApplyLoadout = function(name) {
     if (applyLoadoutToInterface(name)) {
         toastr.success(`Applied loadout: ${name}`, 'Quick Apply');
     }
+};
+
+// Expose applyProfileTemplate globally for inline onclick handlers
+window.applyProfileTemplate = function(templateType) {
+    applyProfileTemplate(templateType);
 };
 
 // Open comprehensive loadout management
@@ -19492,24 +19923,39 @@ Most common categories:<br/>
             toastr.warning('Please select a template first');
             return;
         }
-        
-        const newName = prompt('Enter name for duplicated template:', `${templateKey}_copy`);
-        if (!newName || newName === templateKey) return;
-        
+
+        let newName = prompt('Enter name for duplicated template:', `${templateKey}_copy`);
+        if (!newName) return;
+
+        // Trim whitespace
+        newName = newName.trim();
+
+        // Check if same as original
+        if (newName === templateKey) {
+            toastr.warning('New name must be different from original');
+            return;
+        }
+
+        // Check if name already exists
+        if (this.templateManager.getTemplate(newName)) {
+            toastr.error(`Template "${newName}" already exists`);
+            return;
+        }
+
         const template = this.templateManager.getTemplate(templateKey);
         const duplicated = {
             ...template,
-            label: `${template.label || templateKey} (Copy)`,
+            label: newName,
             isDefault: false
         };
-        
+
         this.templateManager.setTemplate(newName, duplicated);
         this.init_templates();
         this.$selector.val(newName);
         this.selectedTemplate = newName;
         this.load_template_into_interface();
-        
-        toastr.success('Template duplicated successfully!');
+
+        toastr.success(`Template duplicated as "${newName}"!`);
     }
     
     delete_current_template() {

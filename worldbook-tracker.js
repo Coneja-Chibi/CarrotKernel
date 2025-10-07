@@ -144,6 +144,23 @@ carrotStyleSheet.textContent = `
             left: 10px;
             opacity: 0.4;
         }
+
+        .ck-config-panel {
+            width: calc(100vw - 32px);
+            max-width: 400px;
+            left: 16px;
+            right: 16px;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .ck-config-panel {
+            width: calc(100vw - 24px);
+            max-width: none;
+            left: 12px;
+            right: 12px;
+            top: 60px;
+        }
     }
 
     /* 🏷️ Badge System (WorldInfoInfo style) */
@@ -1729,6 +1746,11 @@ const init = () => {
     let startDragY = 0;
     const MOVEMENT_THRESHOLD = 10; // Minimum pixels to count as movement
 
+    // Long-press detection for mobile context menu
+    let longPressTimer = null;
+    let touchStartTime = 0;
+    const LONG_PRESS_DURATION = 500; // ms
+
     function updatePosition() {
         if (isDragging) {
             trigger.style.left = `${currentX}px`;
@@ -1747,6 +1769,41 @@ const init = () => {
 
     // Start drag (mouse or touch)
     function handleDragStart(e) {
+        // Clear any existing long-press timer
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+
+        // Start long-press detection for touch events
+        if (e.type === 'touchstart') {
+            touchStartTime = Date.now();
+            longPressTimer = setTimeout(() => {
+                // Trigger context menu after long press
+                if (!hasMoved && !isDragging) {
+                    e.preventDefault();
+                    const wasActive = configPanel.classList.contains('ck-config-panel--active');
+                    configPanel.classList.toggle('ck-config-panel--active');
+
+                    if (!wasActive && configPanel.classList.contains('ck-config-panel--active')) {
+                        setTimeout(() => {
+                            const closeConfig = (e) => {
+                                if (!configPanel.contains(e.target) && !trigger.contains(e.target)) {
+                                    configPanel.classList.remove('ck-config-panel--active');
+                                    document.removeEventListener('click', closeConfig);
+                                }
+                            };
+                            document.addEventListener('click', closeConfig);
+                        }, 100);
+                    }
+                    // Vibrate for haptic feedback on mobile (if supported)
+                    if (navigator.vibrate) {
+                        navigator.vibrate(50);
+                    }
+                }
+            }, LONG_PRESS_DURATION);
+        }
+
         if (!repositionMode) {
             // Still track initial position for movement threshold
             const coords = getClientCoords(e);
@@ -1787,6 +1844,11 @@ const init = () => {
 
         if (deltaX > MOVEMENT_THRESHOLD || deltaY > MOVEMENT_THRESHOLD) {
             hasMoved = true;
+            // Cancel long-press if user moves
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
         }
 
         if (isDragging) {
@@ -1797,6 +1859,12 @@ const init = () => {
 
     // End drag (mouse or touch)
     function handleDragEnd(e) {
+        // Clear long-press timer on touch end
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+
         if (isResizing) return; // Don't end drag while resizing
         if (isDragging) {
             isDragging = false;
@@ -2519,7 +2587,7 @@ const init = () => {
             const shouldGroup = extension_settings.CarrotKernel?.worldBookGroup ?? true;
 
             if (shouldGroup) {
-                const grouped = Object.groupBy(entryList, entry => entry.world || 'Unknown');
+                const grouped = entryList.reduce((acc, entry) => { const key = entry.world || 'Unknown'; if (!acc[key]) acc[key] = []; acc[key].push(entry); return acc; }, {});
 
                 for (const [worldName, entries] of Object.entries(grouped)) {
                     const worldHeader = document.createElement('div');
@@ -2678,7 +2746,7 @@ const init = () => {
         // Group entries by world (or not, based on setting)
         const shouldGroup = extension_settings.CarrotKernel?.worldBookGroup ?? true;
         const grouped = shouldGroup ?
-            Object.groupBy(entryList, entry => entry.world || 'Unknown') :
+            entryList.reduce((acc, entry) => { const key = entry.world || 'Unknown'; if (!acc[key]) acc[key] = []; acc[key].push(entry); return acc; }, {}) :
             { 'All Entries': entryList };
 
         for (const [worldName, entries] of Object.entries(grouped)) {

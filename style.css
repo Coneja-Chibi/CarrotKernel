@@ -1204,7 +1204,12 @@
 }
 
 /* RESPONSIVE DESIGN */
-* {
+/* Scope box-sizing to CarrotKernel elements only to avoid affecting global ST UI */
+#carrot-popup-container *,
+.carrot-modal *,
+.carrot-popup *,
+.carrot-repo-browser *,
+.bunnymo-character-card * {
     box-sizing: border-box;
 }
 
@@ -2325,7 +2330,10 @@
         font-size: 11px !important;
     }
 
-    .inline-drawer-header {
+    /* Scope to CarrotKernel/BunnyMo elements only to avoid affecting ST UI */
+    #bmt_template_prompt_interface .inline-drawer-header,
+    #carrot_template_prompt_interface .inline-drawer-header,
+    #carrot_settings .inline-drawer-header {
         padding: 6px !important;
         font-size: 11px !important;
     }
@@ -2334,12 +2342,14 @@
         font-size: 12px !important;
     }
 
-    .macro_name {
+    #bmt_template_prompt_interface .macro_name,
+    #carrot_template_prompt_interface .macro_name {
         font-size: 11px !important;
         padding: 4px !important;
     }
 
-    .menu_button {
+    #bmt_template_prompt_interface .menu_button,
+    #carrot_template_prompt_interface .menu_button {
         width: 28px !important;
         height: 28px !important;
         padding: 0 !important;
