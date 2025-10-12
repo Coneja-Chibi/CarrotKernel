@@ -5653,3 +5653,137 @@
     color: #3b82f6;
     font-size: 1.2em;
 }
+
+/* ============================================================================
+   RAG SYSTEM STYLES
+   ============================================================================ */
+
+/* Experimental badge */
+.carrot-experimental-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    margin-left: 10px;
+    background: linear-gradient(135deg, #ff6b35, #f7931e);
+    color: white;
+    font-size: 0.7em;
+    font-weight: bold;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 5px rgba(255, 107, 53, 0.5); }
+    50% { box-shadow: 0 0 15px rgba(255, 107, 53, 0.8); }
+}
+
+/* RAG tutorial section */
+.carrot-rag-tutorial {
+    margin-top: 20px;
+    padding: 20px;
+    background: color-mix(in srgb, #3b82f6 5%, transparent);
+    border: 1px solid color-mix(in srgb, #3b82f6 20%, transparent);
+    border-radius: 8px;
+}
+
+.carrot-rag-tutorial .carrot-tutorial-section h4 {
+    margin-top: 16px;
+    margin-bottom: 12px;
+    font-size: 1em;
+    font-weight: bold;
+    color: var(--SmartThemeBodyColor);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.carrot-rag-tutorial .carrot-tutorial-section h4:first-child {
+    margin-top: 0;
+}
+
+.carrot-rag-tutorial .carrot-tutorial-section p {
+    margin-bottom: 12px;
+    line-height: 1.6;
+    color: var(--SmartThemeBodyColor);
+}
+
+.carrot-rag-tutorial .carrot-tutorial-section ul {
+    margin: 8px 0 16px 20px;
+    list-style: disc;
+}
+
+.carrot-rag-tutorial .carrot-tutorial-section ul li {
+    margin-bottom: 8px;
+    line-height: 1.5;
+    color: var(--SmartThemeBodyColor);
+}
+
+.carrot-rag-tutorial .carrot-tutorial-section ul li strong {
+    color: var(--SmartThemeEmColor);
+}
+
+/* Warning text styling */
+.carrot-warning-text {
+    padding: 12px;
+    background: color-mix(in srgb, #ff6b35 10%, transparent);
+    border-left: 4px solid #ff6b35;
+    border-radius: 6px;
+    color: var(--SmartThemeBodyColor);
+    display: flex;
+    align-items: start;
+    gap: 10px;
+}
+
+.carrot-warning-text i {
+    color: #ff6b35;
+    font-size: 1.2em;
+    margin-top: 2px;
+}
+
+/* Danger button styling */
+.carrot-danger-btn {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.carrot-danger-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.carrot-danger-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.carrot-danger-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Disabled RAG section styling */
+#carrot-rag-settings.carrot-disabled {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+#carrot-rag-settings.carrot-disabled .carrot-toggle-label,
+#carrot-rag-settings.carrot-disabled .carrot-slider-title,
+#carrot-rag-settings.carrot-disabled .carrot-help-text {
+    color: var(--SmartThemeQuoteColor) !important;
+}
+
+/* Keep the Enable toggle clickable */
+#carrot-rag-settings.carrot-disabled #carrot_rag_enabled {
+    pointer-events: auto;
+}

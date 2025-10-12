@@ -4,6 +4,7 @@ import { loadWorldInfo, world_names, createNewWorldInfo, createWorldInfoEntry, s
 import { executeSlashCommandsWithOptions } from '../../../slash-commands.js';
 import { getMessageTimeStamp } from '../../../RossAscends-mods.js';
 import { CarrotWorldBookTracker } from './worldbook-tracker.js';
+import { initializeRAG, saveRAGSettings, addRAGButtonsToAllMessages, removeAllRAGButtons, detectFullsheetInMessage, vectorizeFullsheetFromMessage, getCurrentContextLevel, getContextualLibrary } from './fullsheet-rag.js';
 
 const extensionName = 'CarrotKernel';
 
@@ -2926,6 +2927,20 @@ const defaultSettings = {
     maxCharactersDisplay: 6,  // Max characters shown in chat
     maxCharactersInject: 6,   // Max characters sent to AI
     debugMode: false,
+    rag: {
+        enabled: false,
+        autoVectorize: true,
+        debugMode: false,
+        topK: 3,
+        scoreThreshold: 0.15,
+        queryContext: 3,
+        chunkSize: 1000,
+        chunkOverlap: 300,
+        injectionDepth: 4,
+        injectionRole: 'system',
+        smartCrossReference: true,
+        crosslinkThreshold: 0.25,
+    },
     babyBunnyMode: false,     // 🐰 Baby Bunny Mode - guided automation for sheet processing
     worldBookTrackerEnabled: true,  // WorldBook Tracker toggle
     autoRescanOnChatLoad: true  // Auto-rescan character repos on chat switch
@@ -10456,7 +10471,780 @@ function bindSettingsEvents() {
         saveSettingsDebounced();
     });
     $('#carrot_max_inject_value').text(settings.maxCharactersInject || 6);
-    
+
+    // ============================
+    // Smart Context (RAG) Settings
+    // ============================
+    const ragDefaults = defaultSettings.rag;
+    const ragState = Object.assign({}, ragDefaults, extension_settings[extensionName].rag || {});
+    extension_settings[extensionName].rag = ragState;
+
+    const persistRagSettings = () => {
+        saveRAGSettings({ ...ragState });
+    };
+
+    $('#carrot_rag_enabled').prop('checked', ragState.enabled).on('change', function() {
+        const isEnabled = Boolean($(this).prop('checked'));
+        ragState.enabled = isEnabled;
+        persistRagSettings();
+
+        if (isEnabled) {
+            toastr.info('Smart Context enabled - fullsheets will be saved and queried');
+            addRAGButtonsToAllMessages();
+        } else {
+            toastr.info('Smart Context disabled');
+            removeAllRAGButtons();
+        }
+    });
+
+    $('#carrot_rag_auto_vectorize').prop('checked', ragState.autoVectorize !== false).on('change', function() {
+        ragState.autoVectorize = Boolean($(this).prop('checked'));
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_debug_mode').prop('checked', ragState.debugMode || false).on('change', function() {
+        ragState.debugMode = Boolean($(this).prop('checked'));
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_context_level').val(ragState.contextLevel || 'global').on('change', function() {
+        ragState.contextLevel = String($(this).val());
+        persistRagSettings();
+        toastr.info(`Storage level changed to: ${ragState.contextLevel}`);
+    });
+
+    // Simple chunking toggle
+    $('#carrot_rag_simple_chunking').prop('checked', ragState.simpleChunking ?? false).on('change', function() {
+        ragState.simpleChunking = $(this).prop('checked');
+        persistRagSettings();
+
+        // Show/hide complex settings
+        if (ragState.simpleChunking) {
+            $('.carrot-complex-setting').fadeOut(200);
+            toastr.info('Simple section-based chunking enabled. Complex settings hidden.');
+        } else {
+            $('.carrot-complex-setting').fadeIn(200);
+            toastr.info('Advanced chunking enabled. Complex settings visible.');
+        }
+    });
+
+    // Initialize complex settings visibility
+    if (ragState.simpleChunking) {
+        $('.carrot-complex-setting').hide();
+    }
+
+    $('#carrot_rag_topk').val(ragState.topK || 3).on('input', function() {
+        const value = parseInt($(this).val());
+        $('#carrot_rag_topk_value').text(value);
+        ragState.topK = value;
+        persistRagSettings();
+    });
+    $('#carrot_rag_topk_value').text(ragState.topK || 3);
+
+    $('#carrot_rag_threshold').val(Math.round((ragState.scoreThreshold ?? 0.15) * 100)).on('input', function() {
+        const value = parseInt($(this).val()) / 100;
+        $('#carrot_rag_threshold_value').text(value.toFixed(2));
+        ragState.scoreThreshold = value;
+        persistRagSettings();
+    });
+    $('#carrot_rag_threshold_value').text((ragState.scoreThreshold ?? 0.15).toFixed(2));
+
+    $('#carrot_rag_context').val(ragState.queryContext || 3).on('input', function() {
+        const value = parseInt($(this).val());
+        $('#carrot_rag_context_value').text(value);
+        ragState.queryContext = value;
+        persistRagSettings();
+    });
+    $('#carrot_rag_context_value').text(ragState.queryContext || 3);
+
+    $('#carrot_rag_chunksize').val(ragState.chunkSize || 1000).on('input', function() {
+        const value = parseInt($(this).val());
+        $('#carrot_rag_chunksize_value').text(value);
+        ragState.chunkSize = value;
+        persistRagSettings();
+    });
+    $('#carrot_rag_chunksize_value').text(ragState.chunkSize || 1000);
+
+    $('#carrot_rag_overlap').val(ragState.chunkOverlap || 300).on('input', function() {
+        const value = parseInt($(this).val());
+        $('#carrot_rag_overlap_value').text(value);
+        ragState.chunkOverlap = value;
+        persistRagSettings();
+    });
+    $('#carrot_rag_overlap_value').text(ragState.chunkOverlap || 300);
+
+    $('#carrot_rag_depth').val(ragState.injectionDepth || 4).on('input', function() {
+        const value = parseInt($(this).val());
+        $('#carrot_rag_depth_value').text(value);
+        ragState.injectionDepth = value;
+        persistRagSettings();
+    });
+    $('#carrot_rag_depth_value').text(ragState.injectionDepth || 4);
+
+    $('#carrot_rag_crosslink').val(Math.round((ragState.crosslinkThreshold ?? 0.25) * 100)).on('input', function() {
+        const value = parseInt($(this).val()) / 100;
+        $('#carrot_rag_crosslink_value').text(value.toFixed(2));
+        ragState.crosslinkThreshold = value;
+        persistRagSettings();
+    });
+    $('#carrot_rag_crosslink_value').text((ragState.crosslinkThreshold ?? 0.25).toFixed(2));
+
+    const $ragRole = $('#carrot_rag_role');
+    if ($ragRole.length) {
+        $ragRole.val(ragState.injectionRole || 'system').on('change', function() {
+            ragState.injectionRole = String($(this).val());
+            persistRagSettings();
+        });
+    }
+
+    if (!window.__CarrotKernelRagInitialized) {
+        initializeRAG();
+        window.__CarrotKernelRagInitialized = true;
+    }
+    if (ragState.enabled) {
+        addRAGButtonsToAllMessages();
+    }
+    persistRagSettings();
+
+    // Show context selection popup for vectorization
+    async function showContextSelectionPopup() {
+        return new Promise((resolve) => {
+            const currentContextLevel = getCurrentContextLevel();
+
+            const popup = $(`
+                <div class="carrot-popup-container rag-context-selection-popup" style="padding: 0; max-width: 600px; width: 90%;">
+                    <div class="carrot-card" style="margin: 0; height: auto;">
+                        <!-- Header -->
+                        <div class="carrot-card-header" style="padding: 24px 32px 16px;">
+                            <h3 style="margin: 0 0 8px; font-size: 22px;">🔬 Choose Storage Level</h3>
+                            <p class="carrot-card-subtitle" style="margin: 0; color: var(--grey70, #94a3b8);">Where should these fullsheets be saved?</p>
+                        </div>
+
+                        <div class="carrot-card-body" style="padding: 0 32px 24px; display: flex; flex-direction: column; gap: 20px;">
+                            <!-- Context Level Options -->
+                            <div class="carrot-setup-step">
+                                <div style="display: flex; flex-direction: column; gap: 12px;">
+                                    <label style="
+                                        display: flex;
+                                        align-items: flex-start;
+                                        gap: 12px;
+                                        padding: 16px;
+                                        background: var(--black30a, rgba(0,0,0,0.2));
+                                        border: 2px solid ${currentContextLevel === 'global' ? 'var(--SmartThemeQuoteColor, #10b981)' : 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))'};
+                                        border-radius: 8px;
+                                        cursor: pointer;
+                                        transition: all 0.2s;
+                                    " class="context-option" data-level="global">
+                                        <input type="radio" name="rag-context-level" value="global" ${currentContextLevel === 'global' ? 'checked' : ''} style="
+                                            accent-color: var(--SmartThemeQuoteColor, #10b981);
+                                            margin-top: 2px;
+                                            width: 18px;
+                                            height: 18px;
+                                        ">
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600; font-size: 16px; margin-bottom: 4px; color: var(--SmartThemeEmColor, white);">
+                                                🌍 Global Storage
+                                            </div>
+                                            <div style="color: var(--grey70, #94a3b8); font-size: 14px; line-height: 1.5;">
+                                                Accessible across all characters and chats. Best for shared world information.
+                                            </div>
+                                        </div>
+                                    </label>
+
+                                    <label style="
+                                        display: flex;
+                                        align-items: flex-start;
+                                        gap: 12px;
+                                        padding: 16px;
+                                        background: var(--black30a, rgba(0,0,0,0.2));
+                                        border: 2px solid ${currentContextLevel === 'character' ? 'var(--SmartThemeQuoteColor, #10b981)' : 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))'};
+                                        border-radius: 8px;
+                                        cursor: pointer;
+                                        transition: all 0.2s;
+                                    " class="context-option" data-level="character">
+                                        <input type="radio" name="rag-context-level" value="character" ${currentContextLevel === 'character' ? 'checked' : ''} style="
+                                            accent-color: var(--SmartThemeQuoteColor, #10b981);
+                                            margin-top: 2px;
+                                            width: 18px;
+                                            height: 18px;
+                                        ">
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600; font-size: 16px; margin-bottom: 4px; color: var(--SmartThemeEmColor, white);">
+                                                👤 Character Storage
+                                            </div>
+                                            <div style="color: var(--grey70, #94a3b8); font-size: 14px; line-height: 1.5;">
+                                                Available for this character only, across all chats with them.
+                                            </div>
+                                        </div>
+                                    </label>
+
+                                    <label style="
+                                        display: flex;
+                                        align-items: flex-start;
+                                        gap: 12px;
+                                        padding: 16px;
+                                        background: var(--black30a, rgba(0,0,0,0.2));
+                                        border: 2px solid ${currentContextLevel === 'chat' ? 'var(--SmartThemeQuoteColor, #10b981)' : 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))'};
+                                        border-radius: 8px;
+                                        cursor: pointer;
+                                        transition: all 0.2s;
+                                    " class="context-option" data-level="chat">
+                                        <input type="radio" name="rag-context-level" value="chat" ${currentContextLevel === 'chat' ? 'checked' : ''} style="
+                                            accent-color: var(--SmartThemeQuoteColor, #10b981);
+                                            margin-top: 2px;
+                                            width: 18px;
+                                            height: 18px;
+                                        ">
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600; font-size: 16px; margin-bottom: 4px; color: var(--SmartThemeEmColor, white);">
+                                                💬 Chat Storage
+                                            </div>
+                                            <div style="color: var(--grey70, #94a3b8); font-size: 14px; line-height: 1.5;">
+                                                Only available in this specific chat conversation.
+                                            </div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div style="display: flex; gap: 12px; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">
+                                <button class="carrot-secondary-btn" id="rag-context-cancel" style="padding: 10px 24px;">
+                                    Cancel
+                                </button>
+                                <button class="carrot-primary-btn" id="rag-context-confirm" style="padding: 10px 24px;">
+                                    <i class="fa-solid fa-check"></i> Continue
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `);
+
+            // Show popup overlay
+            $('#carrot-popup-overlay').html(popup).css('display', 'flex').addClass('active');
+
+            // Handle option hover effects
+            popup.find('.context-option').on('mouseenter', function() {
+                const isSelected = $(this).find('input[type="radio"]').is(':checked');
+                if (!isSelected) {
+                    $(this).css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
+                    $(this).css('opacity', '0.8');
+                }
+            }).on('mouseleave', function() {
+                const isSelected = $(this).find('input[type="radio"]').is(':checked');
+                if (!isSelected) {
+                    $(this).css('border-color', 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))');
+                    $(this).css('opacity', '1');
+                }
+            });
+
+            // Handle option click - highlight selected
+            popup.find('.context-option').on('click', function() {
+                popup.find('.context-option').css('border-color', 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))');
+                $(this).css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
+                $(this).find('input[type="radio"]').prop('checked', true);
+            });
+
+            // Handle radio button change
+            popup.find('input[name="rag-context-level"]').on('change', function() {
+                popup.find('.context-option').css('border-color', 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))');
+                $(this).closest('.context-option').css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
+            });
+
+            // Cancel button
+            popup.find('#rag-context-cancel').on('click', () => {
+                $('#carrot-popup-overlay').removeClass('active');
+                setTimeout(() => $('#carrot-popup-overlay').hide(), 300);
+                resolve(null); // Return null to indicate cancellation
+            });
+
+            // Confirm button
+            popup.find('#rag-context-confirm').on('click', () => {
+                const selectedLevel = popup.find('input[name="rag-context-level"]:checked').val();
+                $('#carrot-popup-overlay').removeClass('active');
+                setTimeout(() => $('#carrot-popup-overlay').hide(), 300);
+                resolve(selectedLevel);
+            });
+
+            // ESC key to cancel
+            $(document).one('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    popup.find('#rag-context-cancel').click();
+                }
+            });
+        });
+    }
+
+    // "Save All Fullsheets in Chat" button handler
+    $('#carrot-rag-vectorize-btn').on('click', async function() {
+        if (!ragState.enabled) {
+            toastr.warning('Smart Context is disabled. Please enable it first.');
+            return;
+        }
+
+        // Show context selection popup
+        const selectedContextLevel = await showContextSelectionPopup();
+
+        // User cancelled
+        if (!selectedContextLevel) {
+            return;
+        }
+
+        // Temporarily override context level for this operation
+        const originalContextLevel = ragState.contextLevel;
+        ragState.contextLevel = selectedContextLevel;
+
+        // Show current settings
+        const chunkingMode = ragState.simpleChunking ? 'Simple (section-based)' : 'Advanced (with size/overlap)';
+        toastr.info(`Saving to <strong>${selectedContextLevel.toUpperCase()}</strong> storage using <strong>${chunkingMode}</strong> chunking`, 'Vectorization Settings', { timeOut: 4000, extendedTimeOut: 2000, escapeHtml: false });
+
+        const $btn = $(this);
+        const originalText = $btn.html();
+        $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> Scanning...').prop('disabled', true);
+
+        try {
+            let fullsheetsFound = 0;
+            let vectorized = 0;
+            let errors = 0;
+
+            // Scan all messages in chat for fullsheets
+            for (let i = 0; i < chat.length; i++) {
+                const message = chat[i];
+                if (message.is_user || !message.mes) {
+                    continue;
+                }
+
+                // Detect if message contains a fullsheet
+                const fullsheetInfo = detectFullsheetInMessage(message.mes);
+                if (fullsheetInfo) {
+                    fullsheetsFound++;
+                    console.log(`🥕 Found fullsheet for ${fullsheetInfo.characterName} in message ${i}`);
+
+                    // Vectorize the fullsheet
+                    try {
+                        const success = await vectorizeFullsheetFromMessage(
+                            fullsheetInfo.characterName,
+                            fullsheetInfo.content
+                        );
+                        if (success) {
+                            vectorized++;
+                        } else {
+                            errors++;
+                        }
+                    } catch (error) {
+                        console.error(`Failed to vectorize fullsheet for ${fullsheetInfo.characterName}:`, error);
+                        errors++;
+                    }
+                }
+            }
+
+            // Show results
+            if (fullsheetsFound === 0) {
+                toastr.info('No fullsheets found in chat');
+            } else if (vectorized === fullsheetsFound) {
+                toastr.success(`✅ Successfully vectorized ${vectorized} fullsheet${vectorized > 1 ? 's' : ''} to ${selectedContextLevel.toUpperCase()} storage!`);
+            } else if (vectorized > 0) {
+                toastr.warning(`Vectorized ${vectorized} of ${fullsheetsFound} fullsheet${fullsheetsFound > 1 ? 's' : ''} to ${selectedContextLevel.toUpperCase()} storage (${errors} failed)`);
+            } else {
+                toastr.error(`Failed to vectorize ${fullsheetsFound} fullsheet${fullsheetsFound > 1 ? 's' : ''}`);
+            }
+
+        } catch (error) {
+            console.error('Error scanning for fullsheets:', error);
+            toastr.error(`Error scanning for fullsheets: ${error.message}`);
+        } finally {
+            // Restore original context level
+            ragState.contextLevel = originalContextLevel;
+            $btn.html(originalText).prop('disabled', false);
+        }
+    });
+
+    // ============================
+    // RAG Debugging Utilities
+    // ============================
+
+    // Make RAG debugging functions globally accessible
+    window.CarrotRAGDebug = {
+        // View all stored collections
+        viewCollections: function() {
+            const contextLevel = getCurrentContextLevel();
+            const library = getContextualLibrary();
+            const collections = Object.keys(library);
+            console.log(`🥕 RAG Collections (${contextLevel.toUpperCase()} storage):`, collections);
+            console.log('Total collections:', collections.length);
+            return collections;
+        },
+
+        // View chunks for a specific collection
+        viewChunks: function(collectionId) {
+            const contextLevel = getCurrentContextLevel();
+            const library = getContextualLibrary();
+            const chunks = library[collectionId];
+            if (!chunks) {
+                console.warn(`Collection "${collectionId}" not found in ${contextLevel} storage`);
+                console.log('Available collections:', Object.keys(library));
+                return null;
+            }
+            console.log(`🥕 Chunks for "${collectionId}" (${contextLevel} storage):`, chunks);
+            console.log(`Total chunks: ${Object.keys(chunks).length}`);
+            return chunks;
+        },
+
+        // View a specific chunk by hash
+        viewChunk: function(collectionId, hash) {
+            const chunks = this.viewChunks(collectionId);
+            if (!chunks) return null;
+            const chunk = chunks[hash];
+            if (!chunk) {
+                console.warn(`Chunk ${hash} not found in collection "${collectionId}"`);
+                return null;
+            }
+            console.log('🥕 Chunk:', chunk);
+            return chunk;
+        },
+
+        // Get collection stats
+        getStats: function(collectionId) {
+            const chunks = this.viewChunks(collectionId);
+            if (!chunks) return null;
+
+            const chunkArray = Object.values(chunks);
+            const totalChunks = chunkArray.length;
+            const totalSize = chunkArray.reduce((sum, c) => sum + (c.text?.length || 0), 0);
+            const avgSize = totalSize / totalChunks;
+
+            const sections = [...new Set(chunkArray.map(c => c.section))];
+            const tags = [...new Set(chunkArray.flatMap(c => c.tags || []))];
+
+            const stats = {
+                totalChunks,
+                totalSize,
+                avgSize: Math.round(avgSize),
+                sections,
+                uniqueTags: tags.length,
+                sampleTags: tags.slice(0, 10)
+            };
+
+            console.log('🥕 Collection Stats:', stats);
+            return stats;
+        },
+
+        // View all data (WARNING: can be large)
+        viewAll: function() {
+            const contextLevel = getCurrentContextLevel();
+            const library = getContextualLibrary();
+            console.log(`🥕 Full RAG Library (${contextLevel.toUpperCase()} storage):`, library);
+            return library;
+        },
+
+        // Test RAG query
+        testQuery: async function(characterName, queryText) {
+            console.log('🥕 Testing RAG query for:', characterName);
+            console.log('Query text:', queryText);
+
+            const { queryRAG } = await import('./fullsheet-rag.js');
+            const results = await queryRAG(characterName, queryText);
+
+            console.log('🥕 Query Results:', results);
+            console.log('Total results:', results.length);
+
+            return results;
+        }
+    };
+
+    console.log('🥕 RAG Debug utilities loaded. Try:');
+    console.log('  CarrotRAGDebug.viewCollections() - List all collections');
+    console.log('  CarrotRAGDebug.viewChunks("collection_id") - View chunks');
+    console.log('  CarrotRAGDebug.getStats("collection_id") - Get stats');
+    console.log('  CarrotRAGDebug.testQuery("CharName", "query") - Test query');
+
+    // Initialize viewer context selector
+    const viewerContextLevel = ragState.contextLevel || 'global';
+    $('#carrot_rag_viewer_context').val(viewerContextLevel);
+
+    // RAG Data Viewer UI
+    $('#carrot-rag-refresh-viewer').on('click', function() {
+        // Get the selected context from the viewer dropdown
+        const viewerContext = $('#carrot_rag_viewer_context').val() || 'global';
+
+        // Temporarily override the context level for the viewer
+        const originalContext = ragState.contextLevel;
+        ragState.contextLevel = viewerContext;
+
+        const contextLevel = getCurrentContextLevel();
+        const library = getContextualLibrary();
+        const collections = Object.keys(library);
+        const $list = $('#carrot-rag-collections-list');
+
+        // Restore original context
+        ragState.contextLevel = originalContext;
+
+        if (collections.length === 0) {
+            $list.html(`<div style="color: #ef4444; padding: 10px; background: rgba(239,68,68,0.1); border-radius: 4px;">No collections saved yet for <strong>${contextLevel}</strong> context. Generate and save a fullsheet first!</div>`).show();
+            return;
+        }
+
+        let html = `<div style="color: #10b981; margin-bottom: 15px; font-weight: 600;">Found ${collections.length} collection${collections.length > 1 ? 's' : ''} in <span style="text-transform: uppercase; color: #8b5cf6;">${contextLevel}</span> storage</div>`;
+
+        collections.forEach(collectionId => {
+            const chunks = library[collectionId];
+            const chunkArray = Object.values(chunks);
+            const totalChunks = chunkArray.length;
+            const totalSize = chunkArray.reduce((sum, c) => sum + (c.text?.length || 0), 0);
+            const avgSize = Math.round(totalSize / totalChunks);
+            const sections = [...new Set(chunkArray.map(c => c.section))];
+
+            const characterName = collectionId.replace(/^carrotkernel_char_/, '').replace(/_/g, ' ');
+
+            html += `
+                <div style="background: rgba(16,185,129,0.1); padding: 15px; border-radius: 6px; margin-bottom: 10px; border-left: 3px solid #10b981;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div>
+                            <div style="font-weight: 600; font-size: 1.1em; color: #10b981; margin-bottom: 4px;">
+                                ${characterName}
+                            </div>
+                            <div style="font-size: 0.85em; color: #94a3b8; font-family: monospace;">
+                                ${collectionId}
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="carrot-secondary-btn carrot-view-chunks-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em;">
+                                <i class="fa-solid fa-eye"></i> View Chunks
+                            </button>
+                            <button class="carrot-primary-btn carrot-copy-context-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em;">
+                                <i class="fa-solid fa-copy"></i> Copy to...
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; font-size: 0.9em; color: #cbd5e1;">
+                        <div><strong>Chunks:</strong> ${totalChunks}</div>
+                        <div><strong>Total Size:</strong> ${totalSize.toLocaleString()} chars</div>
+                        <div><strong>Avg Size:</strong> ${avgSize} chars</div>
+                        <div><strong>Sections:</strong> ${sections.length}</div>
+                    </div>
+                </div>
+            `;
+        });
+
+        $list.html(html).show();
+
+        // Add click handlers for "View Chunks" buttons
+        $('.carrot-view-chunks-btn').on('click', function() {
+            const collectionId = $(this).data('collection');
+            openChunkVisualizer(collectionId);
+        });
+    });
+
+    // Chunk Visualizer Modal Functions
+    let currentEditingCollection = null;
+    let modifiedChunks = {};
+
+    function openChunkVisualizer(collectionId) {
+        const contextLevel = getCurrentContextLevel();
+        const library = getContextualLibrary();
+        const chunks = library[collectionId];
+        const characterName = collectionId.replace(/^carrotkernel_char_/, '').replace(/_/g, ' ');
+
+        currentEditingCollection = collectionId;
+        modifiedChunks = JSON.parse(JSON.stringify(chunks)); // Deep clone
+
+        // Update modal title
+        $('#carrot-rag-modal-title').html(`<i class="fa-solid fa-cube"></i> ${characterName} <span style="font-size: 0.7em; color: #8b5cf6; text-transform: uppercase;">[${contextLevel}]</span>`);
+        $('#carrot-rag-modal-subtitle').text(`${collectionId} - ${Object.keys(chunks).length} chunks`);
+
+        // Render chunks
+        renderChunks(modifiedChunks);
+
+        // Show modal
+        $('#carrot-rag-visualizer-modal').fadeIn(200);
+        $('body').css('overflow', 'hidden'); // Prevent background scrolling
+    }
+
+    function renderChunks(chunks, searchTerm = '') {
+        const chunkArray = Object.entries(chunks).map(([hash, data]) => ({ hash, ...data }));
+
+        // Filter by search term
+        const filtered = searchTerm
+            ? chunkArray.filter(chunk =>
+                chunk.text.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                chunk.section.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (chunk.topic && chunk.topic.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                (chunk.tags && chunk.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase())))
+            )
+            : chunkArray;
+
+        // Update stats
+        const totalSize = filtered.reduce((sum, c) => sum + (c.text?.length || 0), 0);
+        const avgSize = filtered.length ? Math.round(totalSize / filtered.length) : 0;
+        const sections = [...new Set(filtered.map(c => c.section))];
+
+        $('#carrot-rag-chunk-stats').html(`
+            <div><strong>Showing:</strong> ${filtered.length} / ${chunkArray.length}</div>
+            <div><strong>Total Size:</strong> ${totalSize.toLocaleString()} chars</div>
+            <div><strong>Avg Size:</strong> ${avgSize} chars</div>
+            <div><strong>Sections:</strong> ${sections.length}</div>
+        `);
+
+        // Render chunk cards
+        const container = $('#carrot-rag-chunks-container');
+        if (filtered.length === 0) {
+            container.html('<div style="text-align: center; color: var(--grey70, #94a3b8); padding: 40px; font-size: 1.1em;">No chunks found</div>');
+            return;
+        }
+
+        let html = '';
+        filtered.forEach((chunk, index) => {
+            const isEditing = chunk._editing;
+            html += `
+                <div class="carrot-rag-chunk-card" data-hash="${chunk.hash}" style="background: var(--black10a, rgba(0,0,0,0.1)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 8px; padding: 20px; margin-bottom: 15px; transition: all 0.2s;">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+                        <div style="flex: 1;">
+                            <div style="color: var(--SmartThemeQuoteColor, #10b981); font-weight: 600; font-size: 1.05em; margin-bottom: 4px;">
+                                ${chunk.section}${chunk.topic ? ` • ${chunk.topic}` : ''}
+                            </div>
+                            ${chunk.tags && chunk.tags.length ? `
+                                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;">
+                                    ${chunk.tags.map(tag => `<span style="background: var(--black30a, rgba(0,0,0,0.3)); color: var(--SmartThemeQuoteColor, #34d399); padding: 3px 8px; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">${tag}</span>`).join('')}
+                                </div>
+                            ` : ''}
+                            <div style="color: var(--grey70, #64748b); font-size: 0.85em; font-family: monospace;">
+                                Hash: ${chunk.hash} | Size: ${chunk.text.length} chars | Index: ${chunk.index}
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="carrot-chunk-edit-btn" data-hash="${chunk.hash}" style="background: var(--black30a, rgba(0,0,0,0.3)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.2)); color: var(--SmartThemeEmColor, #60a5fa); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.9em; transition: all 0.2s;">
+                                <i class="fa-solid fa-${isEditing ? 'check' : 'edit'}"></i> ${isEditing ? 'Done' : 'Edit'}
+                            </button>
+                            <button class="carrot-chunk-delete-btn" data-hash="${chunk.hash}" style="background: var(--black30a, rgba(0,0,0,0.3)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.2)); color: var(--crimson70, #f87171); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.9em; transition: all 0.2s;">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                    ${isEditing ? `
+                        <textarea class="carrot-chunk-text-edit" data-hash="${chunk.hash}" style="width: 100%; min-height: 150px; background: var(--black30a, rgba(0,0,0,0.3)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.2)); border-radius: 6px; padding: 12px; color: var(--SmartThemeEmColor, white); font-family: monospace; font-size: 0.9em; resize: vertical;">${chunk.text}</textarea>
+                    ` : `
+                        <div style="color: var(--SmartThemeEmColor, #cbd5e1); line-height: 1.6; white-space: pre-wrap; font-family: 'Segoe UI', sans-serif; font-size: 0.95em; max-height: 200px; overflow-y: auto; padding: 12px; background: var(--black20a, rgba(0,0,0,0.2)); border-radius: 6px; border-left: 3px solid var(--SmartThemeQuoteColor, #10b981);">${chunk.text}</div>
+                    `}
+                </div>
+            `;
+        });
+
+        container.html(html);
+
+        // Bind edit buttons
+        $('.carrot-chunk-edit-btn').on('click', function() {
+            const hash = $(this).data('hash');
+            const chunk = modifiedChunks[hash];
+
+            if (chunk._editing) {
+                // Save edit
+                const newText = $(`.carrot-chunk-text-edit[data-hash="${hash}"]`).val();
+                chunk.text = newText;
+                chunk._editing = false;
+            } else {
+                // Start editing
+                chunk._editing = true;
+            }
+
+            renderChunks(modifiedChunks, $('#carrot-rag-chunk-search').val());
+        });
+
+        // Bind delete buttons
+        $('.carrot-chunk-delete-btn').on('click', function() {
+            const hash = $(this).data('hash');
+            if (confirm('Delete this chunk? This cannot be undone.')) {
+                delete modifiedChunks[hash];
+                renderChunks(modifiedChunks, $('#carrot-rag-chunk-search').val());
+                toastr.info('Chunk deleted (not saved yet)');
+            }
+        });
+    }
+
+    // Modal close handlers
+    $('#carrot-rag-modal-close, #carrot-rag-modal-cancel').on('click', function() {
+        $('#carrot-rag-visualizer-modal').fadeOut(200);
+        $('body').css('overflow', '');
+        currentEditingCollection = null;
+        modifiedChunks = {};
+    });
+
+    // Save changes
+    $('#carrot-rag-modal-save').on('click', function() {
+        if (!currentEditingCollection) return;
+
+        // Clean up editing flags
+        Object.values(modifiedChunks).forEach(chunk => delete chunk._editing);
+
+        // Save to contextual library
+        const library = getContextualLibrary();
+        library[currentEditingCollection] = modifiedChunks;
+        saveSettingsDebounced();
+
+        toastr.success('Chunks saved!');
+        $('#carrot-rag-visualizer-modal').fadeOut(200);
+        $('body').css('overflow', '');
+        currentEditingCollection = null;
+        modifiedChunks = {};
+
+        // Refresh the viewer list
+        $('#carrot-rag-refresh-viewer').click();
+    });
+
+    // Search functionality
+    $('#carrot-rag-chunk-search').on('input', function() {
+        const searchTerm = $(this).val();
+        renderChunks(modifiedChunks, searchTerm);
+    });
+
+    // Delete All Collections button
+    $('#carrot-rag-clear-collections-btn').on('click', function() {
+        const contextLevel = getCurrentContextLevel();
+        const library = getContextualLibrary();
+        const collectionCount = Object.keys(library).length;
+
+        if (collectionCount === 0) {
+            toastr.info(`No collections to delete in ${contextLevel} storage`);
+            return;
+        }
+
+        const confirmed = confirm(`Delete ALL ${collectionCount} saved collection${collectionCount > 1 ? 's' : ''} from ${contextLevel.toUpperCase()} storage? This cannot be undone!`);
+        if (!confirmed) return;
+
+        // Clear the contextual library
+        const ragState = extension_settings[extensionName].rag;
+        const context = getContext();
+
+        switch (contextLevel) {
+            case 'character':
+                const charId = context?.characterId;
+                if (charId !== null && charId !== undefined && ragState.libraries?.character) {
+                    ragState.libraries.character[charId] = {};
+                }
+                break;
+            case 'chat':
+                const chatId = context?.chatId;
+                if (chatId && ragState.libraries?.chat) {
+                    ragState.libraries.chat[chatId] = {};
+                }
+                break;
+            case 'global':
+            default:
+                if (ragState.libraries?.global) {
+                    ragState.libraries.global = {};
+                }
+                break;
+        }
+
+        saveSettingsDebounced();
+
+        toastr.success(`Deleted ${collectionCount} collection${collectionCount > 1 ? 's' : ''} from ${contextLevel} storage`);
+
+        // Refresh viewer
+        $('#carrot-rag-collections-list').hide();
+        $('#carrot-rag-collections-viewer').find('div').first().text(`All ${contextLevel} collections deleted. Click "Refresh" to see any new ones.`);
+    });
+
     // Lorebook selection toggle
     $(document).on('change', '.carrot-lorebook-toggle', function() {
         const lorebookName = $(this).data('lorebook');
