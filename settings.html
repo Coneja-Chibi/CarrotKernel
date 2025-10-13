@@ -116,6 +116,174 @@
                 </div>
                 <div class="inline-drawer-content carrot-card-body">
                     <div class="carrot-settings-grid">
+                        <!-- Vectorization Settings - Horizontal Layout at VERY TOP -->
+                        <div style="grid-column: 1 / -1; background: var(--black30a, rgba(0,0,0,0.2)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 8px; padding: 16px; margin-bottom: 8px;">
+                            <h4 style="margin: 0 0 12px 0; color: var(--SmartThemeQuoteColor, #10b981); font-size: 0.95em; font-weight: 600;">
+                                <i class="fa-solid fa-microchip"></i> Embedding Configuration
+                            </h4>
+
+                            <!-- Source and Model in horizontal layout -->
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 12px;">
+                                <div>
+                                    <label class="carrot-label">
+                                        <span class="carrot-label-text">Vectorization Source</span>
+                                        <span class="carrot-label-hint">Which AI service generates the embeddings</span>
+                                    </label>
+                                    <select id="carrot_rag_vector_source" class="carrot-select">
+                                        <option value="transformers">Local (Transformers)</option>
+                                        <option value="openai">OpenAI</option>
+                                        <option value="cohere">Cohere</option>
+                                        <option value="palm">Google AI Studio</option>
+                                        <option value="vertexai">Google Vertex AI</option>
+                                        <option value="togetherai">TogetherAI</option>
+                                        <option value="ollama">Ollama</option>
+                                        <option value="llamacpp">llama.cpp</option>
+                                        <option value="koboldcpp">KoboldCpp</option>
+                                        <option value="vllm">vLLM</option>
+                                        <option value="mistral">MistralAI</option>
+                                        <option value="nomicai">NomicAI</option>
+                                        <option value="webllm">WebLLM Extension</option>
+                                        <option value="extras">Extras (deprecated)</option>
+                                    </select>
+                                </div>
+
+                                <!-- Model Selection Container - Changes based on source -->
+                                <div id="carrot_rag_model_selection_container">
+                                    <!-- OpenAI -->
+                                    <div id="carrot_rag_openai_model_container" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Vectorization Model</span>
+                                        </label>
+                                        <select id="carrot_rag_openai_model" class="carrot-select">
+                                            <option value="text-embedding-ada-002">text-embedding-ada-002</option>
+                                            <option value="text-embedding-3-small">text-embedding-3-small</option>
+                                            <option value="text-embedding-3-large">text-embedding-3-large</option>
+                                        </select>
+                                    </div>
+
+                                    <!-- Cohere -->
+                                    <div id="carrot_rag_cohere_model_container" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Vectorization Model</span>
+                                        </label>
+                                        <select id="carrot_rag_cohere_model" class="carrot-select">
+                                            <option value="embed-english-v4.0">embed-english-v4.0</option>
+                                            <option value="embed-multilingual-v4.0">embed-multilingual-v4.0</option>
+                                            <option value="embed-english-v3.0">embed-english-v3.0</option>
+                                            <option value="embed-multilingual-v3.0">embed-multilingual-v3.0</option>
+                                            <option value="embed-english-light-v3.0">embed-english-light-v3.0</option>
+                                            <option value="embed-multilingual-light-v3.0">embed-multilingual-light-v3.0</option>
+                                            <option value="embed-english-v2.0">embed-english-v2.0</option>
+                                            <option value="embed-multilingual-v2.0">embed-multilingual-v2.0</option>
+                                        </select>
+                                    </div>
+
+                                    <!-- Google -->
+                                    <div id="carrot_rag_google_model_container" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Vectorization Model</span>
+                                        </label>
+                                        <select id="carrot_rag_google_model" class="carrot-select">
+                                            <option value="text-embedding-005">text-embedding-005</option>
+                                            <option value="text-embedding-004">text-embedding-004</option>
+                                            <option value="gemini-embedding-001">gemini-embedding-001</option>
+                                            <option value="gemini-embedding-exp-03-07">gemini-embedding-exp-03-07</option>
+                                            <option value="embedding-001">embedding-001</option>
+                                        </select>
+                                    </div>
+
+                                    <!-- TogetherAI -->
+                                    <div id="carrot_rag_togetherai_model_container" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Vectorization Model</span>
+                                        </label>
+                                        <select id="carrot_rag_togetherai_model" class="carrot-select">
+                                            <option value="togethercomputer/m2-bert-80M-32k-retrieval">m2-bert-80M-32k-retrieval</option>
+                                            <option value="togethercomputer/m2-bert-80M-8k-retrieval">m2-bert-80M-8k-retrieval</option>
+                                            <option value="togethercomputer/m2-bert-80M-2k-retrieval">m2-bert-80M-2k-retrieval</option>
+                                            <option value="WhereIsAI/UAE-Large-V1">UAE-Large-V1</option>
+                                            <option value="BAAI/bge-large-en-v1.5">bge-large-en-v1.5</option>
+                                            <option value="BAAI/bge-base-en-v1.5">bge-base-en-v1.5</option>
+                                            <option value="sentence-transformers/msmarco-bert-base-dot-v5">msmarco-bert-base-dot-v5</option>
+                                            <option value="bert-base-uncased">bert-base-uncased</option>
+                                        </select>
+                                    </div>
+
+                                    <!-- Ollama -->
+                                    <div id="carrot_rag_ollama_model_container" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Vectorization Model</span>
+                                        </label>
+                                        <input type="text" id="carrot_rag_ollama_model" class="carrot-select" placeholder="mxbai-embed-large" style="padding: 8px 12px;">
+                                    </div>
+
+                                    <!-- vLLM -->
+                                    <div id="carrot_rag_vllm_model_container" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Vectorization Model</span>
+                                        </label>
+                                        <input type="text" id="carrot_rag_vllm_model" class="carrot-select" placeholder="Enter model name" style="padding: 8px 12px;">
+                                    </div>
+
+                                    <!-- WebLLM -->
+                                    <div id="carrot_rag_webllm_model_container" style="display: none;">
+                                        <label class="carrot-label">
+                                            <span class="carrot-label-text">Vectorization Model</span>
+                                        </label>
+                                        <input type="text" id="carrot_rag_webllm_model" class="carrot-select" placeholder="Enter model name" style="padding: 8px 12px;">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Secondary URL Settings (for Ollama, llama.cpp, KoboldCpp, vLLM) -->
+                            <div id="carrot_rag_url_settings" style="display: none;">
+                                <label class="carrot-toggle" style="margin-bottom: 8px;">
+                                    <input type="checkbox" id="carrot_rag_use_alt_url">
+                                    <span class="carrot-toggle-slider"></span>
+                                    <span class="carrot-toggle-label">Use secondary URL</span>
+                                </label>
+                                <div id="carrot_rag_alt_url_container" style="display: none;">
+                                    <label class="carrot-label">
+                                        <span class="carrot-label-text">Secondary Embedding endpoint URL</span>
+                                        <span class="carrot-label-hint">e.g. http://localhost:5001</span>
+                                    </label>
+                                    <input type="text" id="carrot_rag_alt_url" class="carrot-select" placeholder="e.g. http://localhost:5001" style="padding: 8px 12px;">
+                                    <div class="carrot-help-text" style="margin-top: 4px; font-size: 0.85em;">
+                                        <span id="carrot_rag_url_hint_text">Set the KoboldCpp URL in the Text Completion API connection settings.</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Ollama Keep in Memory -->
+                            <div id="carrot_rag_ollama_keep_container" style="display: none; margin-top: 8px;">
+                                <label class="carrot-toggle">
+                                    <input type="checkbox" id="carrot_rag_ollama_keep">
+                                    <span class="carrot-toggle-slider"></span>
+                                    <span class="carrot-toggle-label">Keep model in memory</span>
+                                </label>
+                            </div>
+
+                            <!-- Info messages for sources that don't need model selection -->
+                            <div id="carrot_rag_llamacpp_info" style="display: none; margin-top: 8px;">
+                                <div class="carrot-help-text" style="background: var(--black30a, rgba(0,0,0,0.3)); padding: 10px; border-radius: 6px; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); font-size: 0.9em;">
+                                    <i class="fa-solid fa-info-circle"></i> llama.cpp embedding endpoint will be used automatically.
+                                </div>
+                            </div>
+
+                            <!-- NomicAI API Key Button (exact copy from ST vectors) -->
+                            <div id="carrot_rag_nomicai_container" style="display: none; margin-top: 8px;">
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <label for="carrot_api_key_nomicai" style="flex: 1; margin: 0;">
+                                        <span>NomicAI API Key</span>
+                                    </label>
+                                    <div id="carrot_api_key_nomicai" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_nomicai" style="cursor: pointer;">
+                                        <i class="fa-solid fa-key"></i>
+                                        <span>Click to set</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="carrot-setting-item">
                             <label class="carrot-toggle">
                                 <input type="checkbox" id="carrot_rag_enabled">
@@ -231,6 +399,33 @@
                             </div>
                             <div class="carrot-slider-hint">Pull related sections when themes overlap (higher = more aggressive linking)</div>
                             <input type="range" id="carrot_rag_crosslink" class="carrot-slider" min="0" max="100" value="25" step="5">
+                        </div>
+
+                        <div class="carrot-setting-item">
+                            <label class="carrot-toggle">
+                                <input type="checkbox" id="carrot_rag_keyword_fallback" checked>
+                                <span class="carrot-toggle-slider"></span>
+                                <span class="carrot-toggle-label">Keyword fallback</span>
+                            </label>
+                            <div class="carrot-help-text">If semantic search misses, add sections whose keywords appear in your latest messages.</div>
+                        </div>
+
+                        <div class="carrot-setting-item">
+                            <label class="carrot-toggle">
+                                <input type="checkbox" id="carrot_rag_keyword_priority">
+                                <span class="carrot-toggle-slider"></span>
+                                <span class="carrot-toggle-label">Prioritize keyword matches</span>
+                            </label>
+                            <div class="carrot-help-text">When enabled, keyword matches are injected before semantic results so critical topics never get buried.</div>
+                        </div>
+
+                        <div class="carrot-setting-item carrot-slider-container">
+                            <div class="carrot-slider-header">
+                                <span class="carrot-slider-icon">dY"&</span>
+                                <span class="carrot-slider-title">Fallback sections: <span id="carrot_rag_keyword_limit_value">2</span></span>
+                            </div>
+                            <div class="carrot-slider-hint">Maximum sections added based on keyword overlap (0 = disable fallback additions)</div>
+                            <input type="range" id="carrot_rag_keyword_limit" class="carrot-slider" min="0" max="5" value="2">
                         </div>
                     </div>
 
@@ -664,6 +859,4 @@
         </div>
     </div>
 </div>
-
-
 

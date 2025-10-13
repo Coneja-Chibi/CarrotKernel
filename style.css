@@ -1723,7 +1723,7 @@
     /* Optimized backdrop filter for performance */
     backdrop-filter: blur(2px);
     contain: layout style paint;
-    z-index: 999997;
+    z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: center;

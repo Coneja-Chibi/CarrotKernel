@@ -133,8 +133,9 @@ function getContextualLibrary() {
 // ============================================================================
 
 /**
- * Retrieve the currently configured vector settings from the native Vectors extension.
- * Falls back to sensible defaults so we can still operate if the user never opened the Vectors UI.
+ * Retrieve vector settings, preferring the core SillyTavern vectors extension configuration
+ * so CarrotKernel stays perfectly in sync with the built-in RAG pipeline.
+ * Falls back to local overrides only if the core extension isn't available yet.
  */
 function getVectorSettings() {
     const defaults = {
@@ -149,10 +150,39 @@ function getVectorSettings() {
         vllm_model: '',
         webllm_model: '',
         google_model: 'text-embedding-005',
-        score_threshold: 0.2,
     };
 
-    return Object.assign(defaults, extension_settings?.vectors || {});
+    const coreVectorSettings = extension_settings?.vectors;
+    if (coreVectorSettings) {
+        return {
+            source: coreVectorSettings.source ?? defaults.source,
+            use_alt_endpoint: coreVectorSettings.use_alt_endpoint ?? defaults.use_alt_endpoint,
+            alt_endpoint_url: coreVectorSettings.alt_endpoint_url ?? defaults.alt_endpoint_url,
+            togetherai_model: coreVectorSettings.togetherai_model ?? defaults.togetherai_model,
+            openai_model: coreVectorSettings.openai_model ?? defaults.openai_model,
+            cohere_model: coreVectorSettings.cohere_model ?? defaults.cohere_model,
+            ollama_model: coreVectorSettings.ollama_model ?? defaults.ollama_model,
+            ollama_keep: coreVectorSettings.ollama_keep ?? defaults.ollama_keep,
+            vllm_model: coreVectorSettings.vllm_model ?? defaults.vllm_model,
+            webllm_model: coreVectorSettings.webllm_model ?? defaults.webllm_model,
+            google_model: coreVectorSettings.google_model ?? defaults.google_model,
+        };
+    }
+
+    const ragSettings = extension_settings[extensionName]?.rag || {};
+    return {
+        source: ragSettings.vectorSource || defaults.source,
+        use_alt_endpoint: ragSettings.useAltUrl ?? defaults.use_alt_endpoint,
+        alt_endpoint_url: ragSettings.altUrl || defaults.alt_endpoint_url,
+        togetherai_model: ragSettings.togetheraiModel || defaults.togetherai_model,
+        openai_model: ragSettings.openaiModel || defaults.openai_model,
+        cohere_model: ragSettings.cohereModel || defaults.cohere_model,
+        ollama_model: ragSettings.ollamaModel || defaults.ollama_model,
+        ollama_keep: ragSettings.ollamaKeep ?? defaults.ollama_keep,
+        vllm_model: ragSettings.vllmModel || defaults.vllm_model,
+        webllm_model: ragSettings.webllmModel || defaults.webllm_model,
+        google_model: ragSettings.googleModel || defaults.google_model,
+    };
 }
 
 /**
@@ -284,6 +314,7 @@ async function apiGetSavedHashes(collectionId) {
     const response = await fetch('/api/vector/list', {
         method: 'POST',
         headers: getRequestHeaders(),
+        credentials: 'same-origin',
         body: JSON.stringify({
             ...getVectorsRequestBody(await getAdditionalVectorArgs([])),
             collectionId: collectionId,
@@ -309,6 +340,7 @@ async function apiInsertVectorItems(collectionId, items) {
     const response = await fetch('/api/vector/insert', {
         method: 'POST',
         headers: getRequestHeaders(),
+        credentials: 'same-origin',
         body: JSON.stringify({
             ...getVectorsRequestBody(args),
             collectionId: collectionId,
@@ -337,6 +369,7 @@ async function apiQueryCollection(collectionId, searchText, topK, threshold = 0.
     const response = await fetch('/api/vector/query', {
         method: 'POST',
         headers: getRequestHeaders(),
+        credentials: 'same-origin',
         body: JSON.stringify({
             ...getVectorsRequestBody(args),
             collectionId: collectionId,
@@ -378,6 +411,8 @@ function getRAGSettings() {
         debugMode: ragState.debugMode ?? false,
         smartCrossReference: ragState.smartCrossReference ?? true,
         crosslinkThreshold: ragState.crosslinkThreshold ?? 0.25,
+        keywordFallback: ragState.keywordFallback ?? true,
+        keywordFallbackLimit: ragState.keywordFallbackLimit ?? 2,
     };
 }
 
@@ -430,6 +465,46 @@ const STOP_WORDS = new Set([
     'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'it', 'its',
     'his', 'her', 'their', 'he', 'she', 'they', 'them', 'we', 'you', 'i'
 ]);
+
+/**
+ * Very lightweight stemming to help keyword overlap (handles plural/past variations).
+ * @param {string} word
+ * @returns {string}
+ */
+function normalizeKeyword(word) {
+    let normalized = word.toLowerCase();
+    const replacements = [
+        /(?:ing|ingly)$/,
+        /(?:edly|edly)$/,
+        /(?:edly)$/,
+        /(?:tion|tions)$/,
+        /(?:ment|ments)$/,
+        /(?:ness|nesses)$/,
+        /(?:ally|ally)$/,
+        /(?:ies)$/,
+        /(?:ers|er)$/,
+        /(?:less)$/,
+        /(?:ful)$/,
+        /(?:ous)$/,
+        /(?:ly)$/,
+        /(?:ed)$/,
+        /(?:es)$/,
+        /(?:s)$/,
+    ];
+
+    for (const regex of replacements) {
+        if (regex.test(normalized)) {
+            normalized = normalized.replace(regex, '');
+            break;
+        }
+    }
+
+    if (normalized.length < 4) {
+        normalized = word.toLowerCase();
+    }
+
+    return normalized;
+}
 
 /**
  * Extract a unique keyword list from text. Used for cross-link scoring.
@@ -967,6 +1042,72 @@ function deriveCrosslinks(library, primaryChunks, settings) {
     return Array.from(extras.values());
 }
 
+/**
+ * Adds keyword-based fallback chunks when semantic search misses.
+ * @param {string[]} queryKeywords Keywords extracted from the query text
+ * @param {Record<string, any>} library Stored chunk library
+ * @param {Set<number>} selectedHashes Already selected chunk hashes
+ * @param {number} limit Maximum fallback chunks to include
+ * @returns {ReturnType<typeof libraryEntryToChunk>[]} Fallback chunks
+ */
+function deriveKeywordFallback(queryKeywords, library, selectedHashes, limit) {
+    if (!queryKeywords?.length || !library) {
+        return [];
+    }
+
+    /** @type {Map<string, Set<string>>} */
+    const normalizedQuery = new Map();
+    for (const keyword of queryKeywords) {
+        const normalized = normalizeKeyword(keyword);
+        if (!normalizedQuery.has(normalized)) {
+            normalizedQuery.set(normalized, new Set());
+        }
+        normalizedQuery.get(normalized).add(keyword);
+    }
+
+    /** @type {{hash: number, score: number, chunk: ReturnType<typeof libraryEntryToChunk>}[]} */
+    const candidates = [];
+
+    for (const [hashKey, data] of Object.entries(library)) {
+        const hash = Number(hashKey);
+        if (selectedHashes.has(hash)) {
+            continue;
+        }
+        const chunkKeywords = Array.isArray(data?.keywords) ? data.keywords : [];
+        if (!chunkKeywords.length) {
+            continue;
+        }
+
+        const overlap = [];
+        for (const keyword of chunkKeywords) {
+            const normalized = normalizeKeyword(keyword);
+            if (normalizedQuery.has(normalized)) {
+                overlap.push(keyword);
+            }
+        }
+        if (!overlap.length) {
+            continue;
+        }
+
+        const chunk = libraryEntryToChunk(hash, data, {
+            inferred: true,
+            reason: {
+                source: 'keyword-fallback',
+                sharedKeywords: overlap,
+            },
+        });
+
+        candidates.push({
+            hash,
+            score: overlap.length,
+            chunk,
+        });
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates.slice(0, Math.max(0, limit)).map(entry => entry.chunk);
+}
+
 // ============================================================================
 // VECTOR OPERATIONS
 // ============================================================================
@@ -1016,6 +1157,8 @@ async function queryRAG(characterName, queryText) {
         topK: settings.topK,
     });
 
+    const queryKeywords = extractKeywords(queryText);
+
     try {
         const exists = await collectionExists(collectionId);
         if (!exists) {
@@ -1046,6 +1189,8 @@ async function queryRAG(characterName, queryText) {
         }
 
         const crosslinked = deriveCrosslinks(library, primaryChunks, settings);
+        const selectedHashes = new Set(primaryChunks.map(chunk => chunk.hash));
+        crosslinked.forEach(chunk => selectedHashes.add(chunk.hash));
 
         const combined = [];
         const seen = new Set();
@@ -1063,10 +1208,42 @@ async function queryRAG(characterName, queryText) {
         primaryChunks.forEach(pushUnique);
         crosslinked.forEach(pushUnique);
 
+        let fallbackCount = 0;
+        let fallbackChunks = [];
+        if ((settings.keywordFallback ?? true) && (settings.keywordFallbackLimit ?? 0) > 0) {
+            fallbackChunks = deriveKeywordFallback(
+                queryKeywords,
+                library,
+                selectedHashes,
+                settings.keywordFallbackLimit ?? 2,
+            );
+            const before = combined.length;
+            fallbackChunks.forEach(chunk => {
+                pushUnique(chunk);
+                if (chunk?.hash !== undefined) {
+                    selectedHashes.add(Number(chunk.hash));
+                }
+            });
+            fallbackCount = combined.length - before;
+        }
+
+        if ((settings.keywordFallbackPriority ?? false) && fallbackChunks.length) {
+            const fallbackHashes = new Set(fallbackChunks.filter(Boolean).map(chunk => Number(chunk.hash)));
+            combined.sort((a, b) => {
+                const aIsFallback = fallbackHashes.has(Number(a.hash));
+                const bIsFallback = fallbackHashes.has(Number(b.hash));
+                if (aIsFallback === bIsFallback) {
+                    return 0;
+                }
+                return aIsFallback ? -1 : 1;
+            });
+        }
+
         debugLog(`Query results for ${characterName}`, {
             primary: primaryChunks.length,
             crosslinked: crosslinked.length,
             delivered: combined.length,
+            fallback: fallbackCount,
         });
 
         return combined;
@@ -1645,12 +1822,3 @@ export {
     getCurrentContextLevel,
     getContextualLibrary
 };
-
-
-
-
-
-
-
-
-

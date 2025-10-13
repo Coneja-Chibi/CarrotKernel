@@ -2931,6 +2931,7 @@ const defaultSettings = {
         enabled: false,
         autoVectorize: true,
         debugMode: false,
+        contextLevel: 'global',
         topK: 3,
         scoreThreshold: 0.15,
         queryContext: 3,
@@ -2940,6 +2941,22 @@ const defaultSettings = {
         injectionRole: 'system',
         smartCrossReference: true,
         crosslinkThreshold: 0.25,
+        keywordFallback: true,
+        keywordFallbackPriority: false,
+        keywordFallbackLimit: 2,
+        simpleChunking: false,
+        // Vectorization settings (matching ST's vectors extension)
+        vectorSource: 'transformers',
+        openaiModel: 'text-embedding-ada-002',
+        cohereModel: 'embed-english-v3.0',
+        googleModel: 'text-embedding-005',
+        togetheraiModel: 'togethercomputer/m2-bert-80M-32k-retrieval',
+        ollamaModel: 'mxbai-embed-large',
+        ollamaKeep: false,
+        vllmModel: '',
+        webllmModel: '',
+        useAltUrl: false,
+        altUrl: '',
     },
     babyBunnyMode: false,     // 🐰 Baby Bunny Mode - guided automation for sheet processing
     worldBookTrackerEnabled: true,  // WorldBook Tracker toggle
@@ -10479,7 +10496,52 @@ function bindSettingsEvents() {
     const ragState = Object.assign({}, ragDefaults, extension_settings[extensionName].rag || {});
     extension_settings[extensionName].rag = ragState;
 
+    if (!extension_settings.vectors) {
+        extension_settings.vectors = {};
+    }
+
+    const syncRagVectorsFromBase = () => {
+        const baseVectors = extension_settings.vectors;
+        if (!baseVectors) {
+            return;
+        }
+
+        ragState.vectorSource = baseVectors.source ?? ragState.vectorSource ?? 'transformers';
+        ragState.useAltUrl = baseVectors.use_alt_endpoint ?? ragState.useAltUrl ?? false;
+        ragState.altUrl = baseVectors.alt_endpoint_url ?? ragState.altUrl ?? '';
+        ragState.openaiModel = baseVectors.openai_model ?? ragState.openaiModel ?? 'text-embedding-ada-002';
+        ragState.cohereModel = baseVectors.cohere_model ?? ragState.cohereModel ?? 'embed-english-v3.0';
+        ragState.googleModel = baseVectors.google_model ?? ragState.googleModel ?? 'text-embedding-005';
+        ragState.togetheraiModel = baseVectors.togetherai_model ?? ragState.togetheraiModel ?? 'togethercomputer/m2-bert-80M-32k-retrieval';
+        ragState.ollamaModel = baseVectors.ollama_model ?? ragState.ollamaModel ?? 'mxbai-embed-large';
+        ragState.ollamaKeep = baseVectors.ollama_keep ?? ragState.ollamaKeep ?? false;
+        ragState.vllmModel = baseVectors.vllm_model ?? ragState.vllmModel ?? '';
+        ragState.webllmModel = baseVectors.webllm_model ?? ragState.webllmModel ?? '';
+    };
+
+    const syncBaseVectorsFromRag = () => {
+        const baseVectors = extension_settings.vectors;
+        if (!baseVectors) {
+            return;
+        }
+
+        baseVectors.source = ragState.vectorSource ?? baseVectors.source ?? 'transformers';
+        baseVectors.use_alt_endpoint = ragState.useAltUrl ?? baseVectors.use_alt_endpoint ?? false;
+        if (ragState.altUrl !== undefined) baseVectors.alt_endpoint_url = ragState.altUrl;
+        if (ragState.openaiModel !== undefined) baseVectors.openai_model = ragState.openaiModel;
+        if (ragState.cohereModel !== undefined) baseVectors.cohere_model = ragState.cohereModel;
+        if (ragState.googleModel !== undefined) baseVectors.google_model = ragState.googleModel;
+        if (ragState.togetheraiModel !== undefined) baseVectors.togetherai_model = ragState.togetheraiModel;
+        if (ragState.ollamaModel !== undefined) baseVectors.ollama_model = ragState.ollamaModel;
+        if (typeof ragState.ollamaKeep === 'boolean') baseVectors.ollama_keep = ragState.ollamaKeep;
+        if (ragState.vllmModel !== undefined) baseVectors.vllm_model = ragState.vllmModel;
+        if (ragState.webllmModel !== undefined) baseVectors.webllm_model = ragState.webllmModel;
+    };
+
+    syncRagVectorsFromBase();
+
     const persistRagSettings = () => {
+        syncBaseVectorsFromRag();
         saveRAGSettings({ ...ragState });
     };
 
@@ -10589,6 +10651,24 @@ function bindSettingsEvents() {
     });
     $('#carrot_rag_crosslink_value').text((ragState.crosslinkThreshold ?? 0.25).toFixed(2));
 
+    $('#carrot_rag_keyword_fallback').prop('checked', ragState.keywordFallback ?? true).on('change', function() {
+        ragState.keywordFallback = Boolean($(this).prop('checked'));
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_keyword_priority').prop('checked', ragState.keywordFallbackPriority ?? false).on('change', function() {
+        ragState.keywordFallbackPriority = Boolean($(this).prop('checked'));
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_keyword_limit').val(ragState.keywordFallbackLimit ?? 2).on('input', function() {
+        const value = Math.max(0, parseInt($(this).val()) || 0);
+        ragState.keywordFallbackLimit = value;
+        $('#carrot_rag_keyword_limit_value').text(value);
+        persistRagSettings();
+    });
+    $('#carrot_rag_keyword_limit_value').text(ragState.keywordFallbackLimit ?? 2);
+
     const $ragRole = $('#carrot_rag_role');
     if ($ragRole.length) {
         $ragRole.val(ragState.injectionRole || 'system').on('change', function() {
@@ -10596,6 +10676,142 @@ function bindSettingsEvents() {
             persistRagSettings();
         });
     }
+
+    // Vectorization source and model settings
+    $('#carrot_rag_vector_source').val(ragState.vectorSource || 'transformers').on('change', function() {
+        ragState.vectorSource = String($(this).val());
+        persistRagSettings();
+        toggleRAGVectorSettings();
+        toastr.info(`Vectorization source changed to: ${ragState.vectorSource}`);
+    });
+
+    $('#carrot_rag_openai_model').val(ragState.openaiModel || 'text-embedding-ada-002').on('change', function() {
+        ragState.openaiModel = String($(this).val());
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_cohere_model').val(ragState.cohereModel || 'embed-english-v3.0').on('change', function() {
+        ragState.cohereModel = String($(this).val());
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_google_model').val(ragState.googleModel || 'text-embedding-005').on('change', function() {
+        ragState.googleModel = String($(this).val());
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_togetherai_model').val(ragState.togetheraiModel || 'togethercomputer/m2-bert-80M-32k-retrieval').on('change', function() {
+        ragState.togetheraiModel = String($(this).val());
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_ollama_model').val(ragState.ollamaModel || 'mxbai-embed-large').on('input', function() {
+        ragState.ollamaModel = String($(this).val());
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_ollama_keep').prop('checked', ragState.ollamaKeep || false).on('change', function() {
+        ragState.ollamaKeep = Boolean($(this).prop('checked'));
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_vllm_model').val(ragState.vllmModel || '').on('input', function() {
+        ragState.vllmModel = String($(this).val());
+        persistRagSettings();
+    });
+
+    $('#carrot_rag_webllm_model').val(ragState.webllmModel || '').on('input', function() {
+        ragState.webllmModel = String($(this).val());
+        persistRagSettings();
+    });
+
+    // URL settings for sources that need them
+    $('#carrot_rag_use_alt_url').prop('checked', ragState.useAltUrl || false).on('change', function() {
+        ragState.useAltUrl = Boolean($(this).prop('checked'));
+        persistRagSettings();
+        $('#carrot_rag_alt_url_container').toggle(ragState.useAltUrl);
+    });
+
+    $('#carrot_rag_alt_url').val(ragState.altUrl || '').on('input', function() {
+        ragState.altUrl = String($(this).val());
+        persistRagSettings();
+    });
+
+    // Initialize URL container visibility
+    $('#carrot_rag_alt_url_container').toggle(ragState.useAltUrl || false);
+
+    // Toggle function for vectorization model settings
+    function toggleRAGVectorSettings() {
+        const source = ragState.vectorSource || 'transformers';
+
+        // Hide all model containers
+        $('#carrot_rag_openai_model_container').hide();
+        $('#carrot_rag_cohere_model_container').hide();
+        $('#carrot_rag_google_model_container').hide();
+        $('#carrot_rag_togetherai_model_container').hide();
+        $('#carrot_rag_ollama_model_container').hide();
+        $('#carrot_rag_ollama_keep_container').hide();
+        $('#carrot_rag_vllm_model_container').hide();
+        $('#carrot_rag_webllm_model_container').hide();
+        $('#carrot_rag_llamacpp_info').hide();
+        $('#carrot_rag_nomicai_container').hide();
+        $('#carrot_rag_url_settings').hide();
+
+        // Sources that require URL settings
+        const urlRequiredSources = ['ollama', 'llamacpp', 'koboldcpp', 'vllm'];
+        const showUrlSettings = urlRequiredSources.includes(source);
+
+        // Update URL hint text based on source
+        const urlHints = {
+            'ollama': 'Set the Ollama URL in the Text Completion API connection settings.',
+            'llamacpp': 'Set the llama.cpp URL in the Text Completion API connection settings.',
+            'koboldcpp': 'Set the KoboldCpp URL in the Text Completion API connection settings.',
+            'vllm': 'Set the vLLM URL in the Text Completion API connection settings.'
+        };
+
+        if (showUrlSettings) {
+            $('#carrot_rag_url_settings').show();
+            $('#carrot_rag_url_hint_text').text(urlHints[source] || '');
+        }
+
+        // Show relevant model container based on source
+        switch (source) {
+            case 'openai':
+            case 'mistral':
+                $('#carrot_rag_openai_model_container').show();
+                break;
+            case 'cohere':
+                $('#carrot_rag_cohere_model_container').show();
+                break;
+            case 'palm':
+            case 'vertexai':
+                $('#carrot_rag_google_model_container').show();
+                break;
+            case 'togetherai':
+                $('#carrot_rag_togetherai_model_container').show();
+                break;
+            case 'ollama':
+                $('#carrot_rag_ollama_model_container').show();
+                $('#carrot_rag_ollama_keep_container').show();
+                break;
+            case 'vllm':
+                $('#carrot_rag_vllm_model_container').show();
+                break;
+            case 'webllm':
+                $('#carrot_rag_webllm_model_container').show();
+                break;
+            case 'llamacpp':
+                $('#carrot_rag_llamacpp_info').show();
+                break;
+            case 'nomicai':
+                $('#carrot_rag_nomicai_container').show();
+                break;
+            // transformers, koboldcpp, extras don't need model selection
+        }
+    }
+
+    // Initialize vectorization settings visibility
+    toggleRAGVectorSettings();
 
     if (!window.__CarrotKernelRagInitialized) {
         initializeRAG();
@@ -10605,6 +10821,190 @@ function bindSettingsEvents() {
         addRAGButtonsToAllMessages();
     }
     persistRagSettings();
+
+    // Show context selection popup for moving collections
+    async function showCopyContextPopup(collectionId, sourceContext) {
+        return new Promise((resolve) => {
+            const characterName = collectionId.replace(/^carrotkernel_char_/, '').replace(/_/g, ' ');
+
+            const popup = $(`
+                <div class="carrot-popup-container rag-copy-context-popup" style="padding: 0; max-width: 600px; width: 90%;">
+                    <div class="carrot-card" style="margin: 0; height: auto;">
+                        <!-- Header -->
+                        <div class="carrot-card-header" style="padding: 24px 32px 16px;">
+                            <h3 style="margin: 0 0 8px; font-size: 22px;">📦 Move Collection</h3>
+                            <p class="carrot-card-subtitle" style="margin: 0; color: var(--grey70, #94a3b8);">
+                                Move <strong style="color: var(--SmartThemeQuoteColor, #10b981);">${characterName}</strong> from <strong>${sourceContext.toUpperCase()}</strong> storage to:
+                            </p>
+                        </div>
+
+                        <div class="carrot-card-body" style="padding: 0 32px 24px; display: flex; flex-direction: column; gap: 20px;">
+                            <!-- Context Level Options -->
+                            <div class="carrot-setup-step">
+                                <div style="display: flex; flex-direction: column; gap: 12px;">
+                                    <label style="
+                                        display: flex;
+                                        align-items: flex-start;
+                                        gap: 12px;
+                                        padding: 16px;
+                                        background: var(--black30a, rgba(0,0,0,0.2));
+                                        border: 2px solid ${sourceContext === 'global' ? 'rgba(255,255,255,0.05)' : 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))'};
+                                        border-radius: 8px;
+                                        cursor: pointer;
+                                        transition: all 0.2s;
+                                        ${sourceContext === 'global' ? 'opacity: 0.5; cursor: not-allowed;' : ''}
+                                    " class="copy-context-option" data-level="global" ${sourceContext === 'global' ? 'style="pointer-events: none;"' : ''}>
+                                        <input type="radio" name="copy-context-level" value="global" ${sourceContext === 'global' ? 'disabled' : ''} style="
+                                            accent-color: var(--SmartThemeQuoteColor, #10b981);
+                                            margin-top: 2px;
+                                            width: 18px;
+                                            height: 18px;
+                                        ">
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600; font-size: 16px; margin-bottom: 4px; color: var(--SmartThemeEmColor, white);">
+                                                🌍 Global Storage
+                                            </div>
+                                            <div style="color: var(--grey70, #94a3b8); font-size: 14px; line-height: 1.5;">
+                                                ${sourceContext === 'global' ? 'Cannot move - already here' : 'Accessible across all characters and chats'}
+                                            </div>
+                                        </div>
+                                    </label>
+
+                                    <label style="
+                                        display: flex;
+                                        align-items: flex-start;
+                                        gap: 12px;
+                                        padding: 16px;
+                                        background: var(--black30a, rgba(0,0,0,0.2));
+                                        border: 2px solid ${sourceContext === 'character' ? 'rgba(255,255,255,0.05)' : 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))'};
+                                        border-radius: 8px;
+                                        cursor: pointer;
+                                        transition: all 0.2s;
+                                        ${sourceContext === 'character' ? 'opacity: 0.5; cursor: not-allowed;' : ''}
+                                    " class="copy-context-option" data-level="character" ${sourceContext === 'character' ? 'style="pointer-events: none;"' : ''}>
+                                        <input type="radio" name="copy-context-level" value="character" ${sourceContext === 'character' ? 'disabled' : ''} ${sourceContext !== 'character' && sourceContext !== 'global' ? 'checked' : ''} style="
+                                            accent-color: var(--SmartThemeQuoteColor, #10b981);
+                                            margin-top: 2px;
+                                            width: 18px;
+                                            height: 18px;
+                                        ">
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600; font-size: 16px; margin-bottom: 4px; color: var(--SmartThemeEmColor, white);">
+                                                👤 Character Storage
+                                            </div>
+                                            <div style="color: var(--grey70, #94a3b8); font-size: 14px; line-height: 1.5;">
+                                                ${sourceContext === 'character' ? 'Cannot move - already here' : 'Available for this character only, across all chats'}
+                                            </div>
+                                        </div>
+                                    </label>
+
+                                    <label style="
+                                        display: flex;
+                                        align-items: flex-start;
+                                        gap: 12px;
+                                        padding: 16px;
+                                        background: var(--black30a, rgba(0,0,0,0.2));
+                                        border: 2px solid ${sourceContext === 'chat' ? 'rgba(255,255,255,0.05)' : 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))'};
+                                        border-radius: 8px;
+                                        cursor: pointer;
+                                        transition: all 0.2s;
+                                        ${sourceContext === 'chat' ? 'opacity: 0.5; cursor: not-allowed;' : ''}
+                                    " class="copy-context-option" data-level="chat" ${sourceContext === 'chat' ? 'style="pointer-events: none;"' : ''}>
+                                        <input type="radio" name="copy-context-level" value="chat" ${sourceContext === 'chat' ? 'disabled' : ''} style="
+                                            accent-color: var(--SmartThemeQuoteColor, #10b981);
+                                            margin-top: 2px;
+                                            width: 18px;
+                                            height: 18px;
+                                        ">
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600; font-size: 16px; margin-bottom: 4px; color: var(--SmartThemeEmColor, white);">
+                                                💬 Chat Storage
+                                            </div>
+                                            <div style="color: var(--grey70, #94a3b8); font-size: 14px; line-height: 1.5;">
+                                                ${sourceContext === 'chat' ? 'Cannot move - already here' : 'Only available in this specific chat conversation'}
+                                            </div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div style="display: flex; gap: 12px; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">
+                                <button class="carrot-secondary-btn" id="copy-context-cancel" style="padding: 10px 24px;">
+                                    Cancel
+                                </button>
+                                <button class="carrot-primary-btn" id="copy-context-confirm" style="padding: 10px 24px;">
+                                    <i class="fa-solid fa-right-left"></i> Move Collection
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `);
+
+            // Show popup overlay
+            const $overlay = $('#carrot-popup-overlay');
+            $overlay.html(popup).css('display', 'flex').addClass('active');
+
+            // Handle option hover effects (only for enabled options)
+            popup.find('.copy-context-option:not([style*="pointer-events: none"])').on('mouseenter', function() {
+                const isSelected = $(this).find('input[type="radio"]').is(':checked');
+                if (!isSelected) {
+                    $(this).css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
+                    $(this).css('opacity', '0.8');
+                }
+            }).on('mouseleave', function() {
+                const isSelected = $(this).find('input[type="radio"]').is(':checked');
+                if (!isSelected) {
+                    $(this).css('border-color', 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))');
+                    $(this).css('opacity', '1');
+                }
+            });
+
+            // Handle option click - highlight selected (only for enabled options)
+            popup.find('.copy-context-option:not([style*="pointer-events: none"])').on('click', function() {
+                popup.find('.copy-context-option').css('border-color', 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))');
+                $(this).css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
+                $(this).find('input[type="radio"]').prop('checked', true);
+            });
+
+            // Handle radio button change
+            popup.find('input[name="copy-context-level"]').on('change', function() {
+                popup.find('.copy-context-option').css('border-color', 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))');
+                $(this).closest('.copy-context-option').css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
+            });
+
+            // Cancel button
+            popup.find('#copy-context-cancel').on('click', () => {
+                $overlay.removeClass('active');
+                setTimeout(() => {
+                    $overlay.hide().empty();
+                }, 300);
+                resolve(null); // Return null to indicate cancellation
+            });
+
+            // Confirm button
+            popup.find('#copy-context-confirm').on('click', () => {
+                const selectedLevel = popup.find('input[name="copy-context-level"]:checked').val();
+                if (!selectedLevel) {
+                    toastr.warning('Please select a destination storage level');
+                    return;
+                }
+                $overlay.removeClass('active');
+                setTimeout(() => {
+                    $overlay.hide().empty();
+                }, 300);
+                resolve(selectedLevel);
+            });
+
+            // ESC key to cancel
+            $(document).one('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    popup.find('#copy-context-cancel').click();
+                }
+            });
+        });
+    }
 
     // Show context selection popup for vectorization
     async function showContextSelectionPopup() {
@@ -10722,7 +11122,8 @@ function bindSettingsEvents() {
             `);
 
             // Show popup overlay
-            $('#carrot-popup-overlay').html(popup).css('display', 'flex').addClass('active');
+            const $overlay = $('#carrot-popup-overlay');
+            $overlay.html(popup).css('display', 'flex').addClass('active');
 
             // Handle option hover effects
             popup.find('.context-option').on('mouseenter', function() {
@@ -10754,16 +11155,20 @@ function bindSettingsEvents() {
 
             // Cancel button
             popup.find('#rag-context-cancel').on('click', () => {
-                $('#carrot-popup-overlay').removeClass('active');
-                setTimeout(() => $('#carrot-popup-overlay').hide(), 300);
+                $overlay.removeClass('active');
+                setTimeout(() => {
+                    $overlay.hide().empty();
+                }, 300);
                 resolve(null); // Return null to indicate cancellation
             });
 
             // Confirm button
             popup.find('#rag-context-confirm').on('click', () => {
                 const selectedLevel = popup.find('input[name="rag-context-level"]:checked').val();
-                $('#carrot-popup-overlay').removeClass('active');
-                setTimeout(() => $('#carrot-popup-overlay').hide(), 300);
+                $overlay.removeClass('active');
+                setTimeout(() => {
+                    $overlay.hide().empty();
+                }, 300);
                 resolve(selectedLevel);
             });
 
@@ -11013,7 +11418,7 @@ function bindSettingsEvents() {
                                 <i class="fa-solid fa-eye"></i> View Chunks
                             </button>
                             <button class="carrot-primary-btn carrot-copy-context-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em;">
-                                <i class="fa-solid fa-copy"></i> Copy to...
+                                <i class="fa-solid fa-right-left"></i> Move to...
                             </button>
                         </div>
                     </div>
@@ -11033,6 +11438,53 @@ function bindSettingsEvents() {
         $('.carrot-view-chunks-btn').on('click', function() {
             const collectionId = $(this).data('collection');
             openChunkVisualizer(collectionId);
+        });
+
+        // Add click handlers for "Move to..." buttons
+        $('.carrot-copy-context-btn').on('click', async function() {
+            const collectionId = $(this).data('collection');
+            const currentViewerContext = viewerContext;
+
+            // Show context selection popup
+            const selectedContextLevel = await showCopyContextPopup(collectionId, currentViewerContext);
+
+            if (!selectedContextLevel) {
+                return; // User cancelled
+            }
+
+            // Get the source library
+            const originalContext = ragState.contextLevel;
+            ragState.contextLevel = currentViewerContext;
+            const sourceLibrary = getContextualLibrary();
+            const chunks = sourceLibrary[collectionId];
+
+            if (!chunks) {
+                toastr.error('Collection not found');
+                ragState.contextLevel = originalContext;
+                return;
+            }
+
+            // Get the target library
+            ragState.contextLevel = selectedContextLevel;
+            const targetLibrary = getContextualLibrary();
+
+            // Move the collection (copy to target, delete from source)
+            targetLibrary[collectionId] = JSON.parse(JSON.stringify(chunks)); // Deep clone to target
+
+            // Delete from source
+            ragState.contextLevel = currentViewerContext;
+            const sourceLibraryAgain = getContextualLibrary();
+            delete sourceLibraryAgain[collectionId];
+
+            // Restore original context and save
+            ragState.contextLevel = originalContext;
+            saveSettingsDebounced();
+
+            const characterName = collectionId.replace(/^carrotkernel_char_/, '').replace(/_/g, ' ');
+            toastr.success(`Moved ${characterName} from ${currentViewerContext.toUpperCase()} to ${selectedContextLevel.toUpperCase()} storage`);
+
+            // Refresh the viewer to show updated list
+            $('#carrot-rag-refresh-viewer').click();
         });
     });
 
