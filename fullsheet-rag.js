@@ -310,23 +310,29 @@ function ensureVectorConfig() {
  */
 async function apiGetSavedHashes(collectionId) {
     ensureVectorConfig();
+    const body = {
+        ...getVectorsRequestBody(await getAdditionalVectorArgs([])),
+        collectionId: collectionId,
+        source: getVectorSettings().source,
+    };
+    debugLog('[API] apiGetSavedHashes request body:', body); // ADDED
 
     const response = await fetch('/api/vector/list', {
         method: 'POST',
         headers: getRequestHeaders(),
         credentials: 'same-origin',
-        body: JSON.stringify({
-            ...getVectorsRequestBody(await getAdditionalVectorArgs([])),
-            collectionId: collectionId,
-            source: getVectorSettings().source,
-        }),
+        body: JSON.stringify(body), // MODIFIED to use body var
     });
 
     if (!response.ok) {
-        throw new Error(`Failed to get saved hashes for collection ${collectionId}`);
+        const errorText = await response.text(); // ADDED
+        debugLog('[API] apiGetSavedHashes ERROR:', { status: response.status, text: errorText }); // ADDED
+        throw new Error(`Failed to get saved hashes for collection ${collectionId}. Status: ${response.status}. Message: ${errorText}`); // MODIFIED
     }
 
-    return await response.json();
+    const jsonResponse = await response.json(); // ADDED
+    debugLog('[API] apiGetSavedHashes SUCCESS response:', jsonResponse); // ADDED
+    return jsonResponse; // MODIFIED
 }
 
 /**
@@ -336,26 +342,31 @@ async function apiInsertVectorItems(collectionId, items) {
     ensureVectorConfig();
 
     const args = await getAdditionalVectorArgs(items.map(item => item.text));
+    const body = {
+        ...getVectorsRequestBody(args),
+        collectionId: collectionId,
+        items: items.map(item => ({
+            hash: item.hash,
+            text: item.text,
+            index: item.index,
+        })),
+        source: getVectorSettings().source,
+    };
+    debugLog('[API] apiInsertVectorItems request body:', body); // ADDED
 
     const response = await fetch('/api/vector/insert', {
         method: 'POST',
         headers: getRequestHeaders(),
         credentials: 'same-origin',
-        body: JSON.stringify({
-            ...getVectorsRequestBody(args),
-            collectionId: collectionId,
-            items: items.map(item => ({
-                hash: item.hash,
-                text: item.text,
-                index: item.index,
-            })),
-            source: getVectorSettings().source,
-        }),
+        body: JSON.stringify(body), // MODIFIED
     });
 
     if (!response.ok) {
-        throw new Error(`Failed to insert vector items for collection ${collectionId}`);
+        const errorText = await response.text(); // ADDED
+        debugLog('[API] apiInsertVectorItems ERROR:', { status: response.status, text: errorText }); // ADDED
+        throw new Error(`Failed to insert vector items for collection ${collectionId}. Status: ${response.status}. Message: ${errorText}`); // MODIFIED
     }
+    debugLog('[API] apiInsertVectorItems SUCCESS'); // ADDED
 }
 
 /**
@@ -412,6 +423,7 @@ function getRAGSettings() {
         smartCrossReference: ragState.smartCrossReference ?? true,
         crosslinkThreshold: ragState.crosslinkThreshold ?? 0.25,
         keywordFallback: ragState.keywordFallback ?? true,
+        keywordFallbackPriority: ragState.keywordFallbackPriority ?? false,
         keywordFallbackLimit: ragState.keywordFallbackLimit ?? 2,
     };
 }
@@ -506,6 +518,197 @@ function normalizeKeyword(word) {
     return normalized;
 }
 
+const KEYWORD_GROUPS = {
+    identity: {
+        priority: 35,
+        keywords: ['identity', 'introduction', 'name', 'titles', 'title', 'role', 'occupation', 'species', 'gender', 'pronouns', 'age', 'core context', 'summary', 'overview', 'genre', 'archetype'],
+    },
+    physical: {
+        priority: 45,
+        keywords: ['physical', 'appearance', 'body', 'physique', 'build', 'height', 'weight', 'hair', 'eyes', 'skin', 'hands', 'aura', 'presence', 'intimate details', 'style', 'fashion'],
+        tagHints: ['PHYS', 'BUILD', 'SKIN', 'HAIR', 'STYLE'],
+        regexes: [
+            { pattern: '\\bphysic(?:al|s)?\\b', flags: 'i' },
+            { pattern: '\\bappearance\\b', flags: 'i' },
+            { pattern: '\\baura\\b', flags: 'i' },
+        ],
+    },
+    psyche: {
+        priority: 55,
+        keywords: ['psyche', 'behavior', 'psychology', 'motivation', 'moral', 'value system', 'personality', 'desire', 'fear', 'habit', 'vulnerability', 'growth'],
+    },
+    relational: {
+        priority: 60,
+        keywords: ['relationship', 'dynamic', 'bond', 'social', 'loyalty', 'alliances', 'power dynamic', 'manipulation', 'possessive', 'protective', 'interaction'],
+        tagHints: ['CHEMISTRY', 'RELATIONSHIP', 'CONFLICT'],
+        regexes: [
+            { pattern: '\\bpower dynamic', flags: 'i' },
+            { pattern: '\\brelationship\\b', flags: 'i' },
+        ],
+    },
+    linguistic: {
+        priority: 40,
+        keywords: ['linguistic', 'voice', 'tone', 'speech', 'language', 'dialect', 'accent', 'phrases', 'expressions', 'kaomoji', 'verbal', 'communication', 'words', 'word choice'],
+    },
+    origin: {
+        priority: 35,
+        keywords: ['origin', 'history', 'backstory', 'timeline', 'legacy', 'heritage', 'ancestry', 'milestones', 'past', 'foundation'],
+    },
+    aesthetic: {
+        priority: 30,
+        keywords: ['aesthetic', 'style', 'presentation', 'fashion', 'silhouette', 'design', 'color palette', 'visual identity'],
+    },
+    chemistry: {
+        priority: 90,
+        keywords: ['chemistry', 'spark', 'connection', 'compatibility', 'resonance', 'magnetism', 'charge'],
+        regexes: [
+            { pattern: '\\bchemistry\\b', flags: 'i' },
+            { pattern: '\\bmagn(?:etism|etic)\\b', flags: 'i' },
+        ],
+    },
+    dere: {
+        priority: 85,
+        keywords: ['dere', 'sadodere', 'tsundere', 'yandere', 'oujidere', 'kuudere', 'dandere', 'archetype'],
+        tagHints: ['Dere'],
+        regexes: [{ pattern: '\\bdere\\b', flags: 'i' }],
+    },
+    attachment: {
+        priority: 95,
+        keywords: ['attachment', 'bonding', 'fearful-avoidant', 'anxious', 'security', 'validation', 'trust', 'connection approach', 'conflict integration'],
+        tagHints: ['ATTACHMENT'],
+        regexes: [
+            { pattern: '\\battachment\\b', flags: 'i' },
+            { pattern: '\\bavoidant\\b', flags: 'i' },
+        ],
+    },
+    trauma: {
+        priority: 120,
+        keywords: ['trauma', 'wound', 'wounds', 'scar', 'scarred', 'trigger', 'triggered', 'ptsd', 'flashback', 'fight response', 'freeze response', 'flight response', 'healing', 'coping', 'psychological wound', 'resilience'],
+        tagHints: ['TRAUMA', 'WOUND'],
+        regexes: [
+            { pattern: '\\btrauma\\b', flags: 'i' },
+            { pattern: '\\btrigger(?:ed|s)?\\b', flags: 'i' },
+            { pattern: '\\bflashback\\b', flags: 'i' },
+            { pattern: '\\bptsd\\b', flags: 'i' },
+        ],
+    },
+    boundaries: {
+        priority: 130,
+        keywords: ['boundary', 'boundaries', 'limit', 'limits', 'consent', 'personal space', 'crossing the line', 'violation', 'respect', 'perimeter', 'barrier', 'invasion', 'permission'],
+        tagHints: ['BOUNDARIES', 'CONSENT'],
+        regexes: [
+            { pattern: '\\bboundar(?:y|ies)\\b', flags: 'i' },
+            { pattern: '\\bhard\\s+limit(s)?\\b', flags: 'i' },
+            { pattern: '\\bsoft\\s+limit(s)?\\b', flags: 'i' },
+            { pattern: '\\bcross(?:ed)?\\s+the\\s+line\\b', flags: 'i' },
+            { pattern: '\\bconsent\\b', flags: 'i' },
+            { pattern: '\\bpersonal\\s+space\\b', flags: 'i' },
+        ],
+    },
+    flirting: {
+        priority: 100,
+        keywords: ['flirt', 'flirting', 'seduce', 'seduction', 'tease', 'teasing', 'coax', 'coquette', 'playful touch', 'cruel flirting', 'charm'],
+        tagHints: ['FLIRTING'],
+        regexes: [
+            { pattern: '\\bflirt(?:ing|s)?\\b', flags: 'i' },
+            { pattern: '\\bseduce(?:s|d|r)?\\b', flags: 'i' },
+            { pattern: '\\bteas(?:e|ing)\\b', flags: 'i' },
+        ],
+    },
+    jealousy: {
+        priority: 110,
+        keywords: ['jealous', 'jealousy', 'envious', 'possessive', 'territorial', 'threatened', 'insecure', 'clingy'],
+        tagHints: ['JEALOUSY'],
+        regexes: [
+            { pattern: '\\bjealous(?:y)?\\b', flags: 'i' },
+            { pattern: '\\bpossessive\\b', flags: 'i' },
+            { pattern: '\\bterritorial\\b', flags: 'i' },
+        ],
+    },
+    arousal: {
+        priority: 105,
+        keywords: ['arousal', 'aroused', 'turned on', 'excited', 'lust', 'desire', 'yearning', 'heated', 'breathless', 'horny'],
+        tagHints: ['AROUSAL', 'NSFW'],
+        regexes: [
+            { pattern: '\\barous(?:al|ed)\\b', flags: 'i' },
+            { pattern: '\\blust(?:ful)?\\b', flags: 'i' },
+            { pattern: '\\bturned\\s+on\\b', flags: 'i' },
+        ],
+    },
+    conflict: {
+        priority: 90,
+        keywords: ['conflict', 'resolution', 'de-escalation', 'deescalation', 'mediation', 'negotiation', 'intervention', 'hostility', 'argument', 'dispute', 'reconciliation'],
+        tagHints: ['CONFLICT', 'RESOLUTION'],
+        regexes: [
+            { pattern: '\bconflicts?\b', flags: 'i' },
+            { pattern: '\bresolution\b', flags: 'i' },
+            { pattern: '\bde-?escalat', flags: 'i' },
+        ],
+    },
+    hiddenDepths: {
+        priority: 45,
+        keywords: ['hidden', 'secret', 'depths', 'private', 'shame', 'fear', 'mask', 'reality', 'vulnerable', 'concealed'],
+    },
+    tagSynthesis: {
+        priority: 25,
+        keywords: ['tag', 'synthesis', 'metadata', 'bunnymotags', 'summary', 'consolidated'],
+    },
+};
+
+const KEYWORD_PRESETS = [
+    { match: /Character Title|Core Identity|Context/i, groups: ['identity'] },
+    { match: /Physical Manifestation/i, groups: ['physical'] },
+    { match: /Psyche|Behavioral Matrix|Psychological Analysis/i, groups: ['psyche'] },
+    { match: /Relational Dynamics|Social Architecture|Relationship/i, groups: ['relational', 'jealousy', 'boundaries'] },
+    { match: /Linguistic Signature|Communication DNA/i, groups: ['linguistic'] },
+    { match: /Origin Story|Historical Tapestry/i, groups: ['origin'] },
+    { match: /Aesthetic Expression|Style Philosophy/i, groups: ['aesthetic'] },
+    { match: /Trauma|Resilience/i, groups: ['trauma'] },
+    { match: /Boundar/i, groups: ['boundaries'] },
+    { match: /Flirt|Flirtation|Flirtation Signature/i, groups: ['flirting', 'arousal'] },
+    { match: /Attachment/i, groups: ['attachment'] },
+    { match: /Chemistry/i, groups: ['chemistry', 'arousal', 'flirting'] },
+    { match: /Dere/i, groups: ['dere', 'flirting'] },
+    { match: /Jealousy Dynamics/i, groups: ['jealousy'] },
+    { match: /Arousal Architecture/i, groups: ['arousal'] },
+    { match: /Conflict Resolution/i, groups: ['conflict', 'boundaries'] },
+    { match: /Boundary Architecture/i, groups: ['boundaries'] },
+    { match: /Hidden Depths|Secret Architecture/i, groups: ['hiddenDepths'] },
+    { match: /Tag Synthesis/i, groups: ['tagSynthesis'] },
+];
+
+const KEYWORD_GROUP_REGEX_RULES = KEYWORD_PRESETS
+    .filter(preset => preset.regexes)
+    .flatMap(preset => preset.regexes || []);
+
+const KEYWORD_PRIORITY_CACHE = new Map();
+const KEYWORD_REGEX_LOOKUP = [];
+
+for (const [groupKey, data] of Object.entries(KEYWORD_GROUPS)) {
+    const priority = data.priority ?? 20;
+    if (Array.isArray(data.keywords)) {
+        for (const keyword of data.keywords) {
+            KEYWORD_PRIORITY_CACHE.set(normalizeKeyword(keyword), priority);
+        }
+    }
+    if (Array.isArray(data.regexes)) {
+        for (const regexEntry of data.regexes) {
+            KEYWORD_REGEX_LOOKUP.push({
+                group: groupKey,
+                pattern: regexEntry.pattern,
+                flags: regexEntry.flags || 'i',
+                priority,
+            });
+        }
+    }
+}
+
+const CUSTOM_KEYWORD_PRIORITY = 140;
+
+function getKeywordPriority(keyword) {
+    return KEYWORD_PRIORITY_CACHE.get(normalizeKeyword(keyword)) ?? 20;
+}
+
 /**
  * Extract a unique keyword list from text. Used for cross-link scoring.
  * @param {string} text
@@ -557,6 +760,144 @@ function collectTags(text) {
         }
     }
     return Array.from(tags);
+}
+
+function sanitizeDescriptor(value) {
+    return (value || '').replace(/[*_`~<>[\]#]|SECTION\s+\d+\/\d+:/gi, '').trim();
+}
+
+function buildKeywordSetsFromGroups(groups, keywordsSet, regexSet) {
+    for (const groupKey of groups) {
+        const group = KEYWORD_GROUPS[groupKey];
+        if (!group) continue;
+        if (Array.isArray(group.keywords)) {
+            for (const keyword of group.keywords) {
+                keywordsSet.add(keyword);
+            }
+        }
+        if (Array.isArray(group.regexes)) {
+            for (const regexEntry of group.regexes) {
+                regexSet.add(JSON.stringify({
+                    pattern: regexEntry.pattern,
+                    flags: regexEntry.flags || 'i',
+                    group: groupKey,
+                    priority: group.priority ?? 20,
+                    source: 'preset',
+                }));
+            }
+        }
+    }
+}
+
+function buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags) {
+    const keywordsSet = new Set();
+    const regexSet = new Set();
+    const detectedGroups = new Set();
+
+    const sanitizedSection = sanitizeDescriptor(sectionTitle);
+    const sanitizedTopic = sanitizeDescriptor(topic);
+
+    for (const preset of KEYWORD_PRESETS) {
+        if (preset.match && (preset.match.test(sanitizedSection) || preset.match.test(sanitizedTopic))) {
+            if (preset.groups) {
+                preset.groups.forEach(group => detectedGroups.add(group));
+            }
+            if (preset.keywords) {
+                preset.keywords.forEach(keyword => keywordsSet.add(keyword));
+            }
+            if (preset.regexes) {
+                preset.regexes.forEach(pattern => regexSet.add(JSON.stringify({
+                    pattern,
+                    flags: 'i',
+                    priority: 60,
+                    source: 'preset',
+                })));
+            }
+        }
+    }
+
+    if (Array.isArray(tags)) {
+        for (const tag of tags) {
+            const parts = tag.split(':').map(part => sanitizeDescriptor(part));
+            parts.forEach(part => {
+                if (!part) return;
+                const keywordCandidate = part.replace(/_/g, ' ');
+                keywordsSet.add(keywordCandidate);
+
+                for (const [groupKey, data] of Object.entries(KEYWORD_GROUPS)) {
+                    if (data.tagHints && data.tagHints.some(hint => new RegExp(hint, 'i').test(keywordCandidate))) {
+                        detectedGroups.add(groupKey);
+                    }
+                }
+            });
+
+            if (/boundar/i.test(tag)) detectedGroups.add('boundaries');
+            if (/trauma/i.test(tag)) detectedGroups.add('trauma');
+            if (/flirt/i.test(tag)) detectedGroups.add('flirting');
+            if (/arous/i.test(tag)) detectedGroups.add('arousal');
+            if (/jealous/i.test(tag)) detectedGroups.add('jealousy');
+            if (/attachment/i.test(tag)) detectedGroups.add('attachment');
+        }
+    }
+
+    const lowerChunk = chunkText.toLowerCase();
+    for (const rule of KEYWORD_REGEX_LOOKUP) {
+        try {
+            const regex = new RegExp(rule.pattern, rule.flags || 'i');
+            if (regex.test(lowerChunk)) {
+                detectedGroups.add(rule.group);
+                regexSet.add(JSON.stringify({
+                    pattern: rule.pattern,
+                    flags: rule.flags || 'i',
+                    priority: rule.priority ?? 20,
+                    source: 'preset',
+                }));
+            }
+        } catch {
+            // ignore malformed regex
+        }
+    }
+
+    // Manual heuristics for important phrases
+    if (/\bboundar(?:y|ies)\b/i.test(chunkText)) detectedGroups.add('boundaries');
+    if (/\bconsent\b/i.test(chunkText)) detectedGroups.add('boundaries');
+    if (/\btrauma\b/i.test(chunkText) || /\btrigger(?:ed|s)?\b/i.test(chunkText)) detectedGroups.add('trauma');
+    if (/\bflirt/i.test(chunkText) || /\bseduce/i.test(chunkText)) detectedGroups.add('flirting');
+    if (/\barous/i.test(chunkText) || /\blust/i.test(chunkText)) detectedGroups.add('arousal');
+    if (/\bjealous/i.test(chunkText) || /\bpossessive/i.test(chunkText)) detectedGroups.add('jealousy');
+    if (/\battachment\b/i.test(chunkText) || /\bavoidant\b/i.test(chunkText)) detectedGroups.add('attachment');
+
+    buildKeywordSetsFromGroups(detectedGroups, keywordsSet, regexSet);
+
+    return {
+        keywords: Array.from(keywordsSet),
+        regex: Array.from(regexSet).map(entry => JSON.parse(entry)),
+        groups: Array.from(detectedGroups),
+    };
+}
+
+function buildChunkMetadata(sectionTitle, topic, chunkText, tags) {
+    const autoKeywords = extractKeywords(chunkText);
+    const keywordMeta = buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags);
+    const systemKeywordsSet = new Set([...autoKeywords, ...keywordMeta.keywords]);
+    const systemKeywords = Array.from(systemKeywordsSet);
+    const keywordRegex = keywordMeta.regex.map(entry => ({ ...entry }));
+
+    return {
+        section: sectionTitle,
+        topic: topic ?? null,
+        tags,
+        keywords: [...systemKeywords],
+        systemKeywords,
+        defaultSystemKeywords: [...systemKeywords],
+        keywordGroups: keywordMeta.groups,
+        defaultKeywordGroups: [...keywordMeta.groups],
+        keywordRegex,
+        defaultKeywordRegex: keywordRegex.map(entry => ({ ...entry })),
+        customKeywords: [],
+        customRegex: [],
+        disabledKeywords: [],
+    };
 }
 
 function looksLikeBulletBlock(block) {
@@ -755,18 +1096,13 @@ function chunkFullsheetSimple(content, characterName) {
         const tags = collectTags(section.content);
         const chunkText = `[${section.title}]\n${section.content}`;
         const hash = getStringHash(`${characterName}|${section.title}|${chunkIndex}|${chunkText}`);
-        const keywords = extractKeywords(chunkText);
+        const metadata = buildChunkMetadata(section.title, null, chunkText, tags);
 
         chunks.push({
             text: chunkText,
             hash,
             index: chunkIndex++,
-            metadata: {
-                section: section.title,
-                topic: null,
-                tags,
-                keywords,
-            },
+            metadata,
         });
     });
 
@@ -890,36 +1226,27 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
                 subsections.forEach(subsection => {
                     const chunkText = `[${section.fullTitle} > ${subsection.title}]\n${subsection.content}`;
                     const hash = getStringHash(`${characterName}|${section.fullTitle}|${subsection.title}|${chunkIndex}|${chunkText}`);
-                    const keywords = extractKeywords(chunkText);
+                    const tags = collectTags(subsection.content);
+                    const metadata = buildChunkMetadata(section.fullTitle, subsection.title, chunkText, tags);
 
                     chunks.push({
                         text: chunkText,
                         hash,
                         index: chunkIndex++,
-                        metadata: {
-                            section: section.fullTitle,
-                            topic: subsection.title,
-                            tags: collectTags(subsection.content),
-                            keywords,
-                        },
+                        metadata,
                     });
                 });
             } else {
                 // No subsections found, treat as single chunk
                 const chunkText = `[${section.fullTitle}]\n${section.content}`;
                 const hash = getStringHash(`${characterName}|${section.fullTitle}|${chunkIndex}|${chunkText}`);
-                const keywords = extractKeywords(chunkText);
+                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags);
 
                 chunks.push({
                     text: chunkText,
                     hash,
                     index: chunkIndex++,
-                    metadata: {
-                        section: section.fullTitle,
-                        topic: null,
-                        tags,
-                        keywords,
-                    },
+                    metadata,
                 });
             }
         } else {
@@ -928,38 +1255,29 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
                 // Small enough to keep as single chunk
                 const chunkText = `[${section.fullTitle}]\n${section.content}`;
                 const hash = getStringHash(`${characterName}|${section.fullTitle}|${chunkIndex}|${chunkText}`);
-                const keywords = extractKeywords(chunkText);
+                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags);
 
                 chunks.push({
                     text: chunkText,
                     hash,
                     index: chunkIndex++,
-                    metadata: {
-                        section: section.fullTitle,
-                        topic: null,
-                        tags,
-                        keywords,
-                    },
+                    metadata,
                 });
             } else {
                 // Too large, split into smaller chunks with overlap
                 const fragments = splitTextToSizedChunks(section.content, targetChunkSize, overlapSize);
                 fragments.forEach((fragment, fragIdx) => {
-                    const chunkText = `[${section.fullTitle}${fragments.length > 1 ? ` (Part ${fragIdx + 1}/${fragments.length})` : ''}]\n${fragment}`;
-                    const hash = getStringHash(`${characterName}|${section.fullTitle}|${fragIdx}|${chunkIndex}|${chunkText}`);
-                    const keywords = extractKeywords(chunkText);
+                const chunkText = `[${section.fullTitle}${fragments.length > 1 ? ` (Part ${fragIdx + 1}/${fragments.length})` : ''}]\n${fragment}`;
+                const hash = getStringHash(`${characterName}|${section.fullTitle}|${fragIdx}|${chunkIndex}|${chunkText}`);
+                const tags = collectTags(fragment);
+                const metadata = buildChunkMetadata(section.fullTitle, fragments.length > 1 ? `Part ${fragIdx + 1}/${fragments.length}` : null, chunkText, tags);
 
-                    chunks.push({
-                        text: chunkText,
-                        hash,
-                        index: chunkIndex++,
-                        metadata: {
-                            section: section.fullTitle,
-                            topic: fragments.length > 1 ? `Part ${fragIdx + 1}/${fragments.length}` : null,
-                            tags: collectTags(fragment),
-                            keywords,
-                        },
-                    });
+                chunks.push({
+                    text: chunkText,
+                    hash,
+                    index: chunkIndex++,
+                    metadata,
+                });
                 });
             }
         }
@@ -979,18 +1297,74 @@ function getChunkLibrary(collectionId) {
     return library?.[collectionId] || null;
 }
 
+function ensureArray(value) {
+    return Array.isArray(value) ? value : [];
+}
+
 function libraryEntryToChunk(hash, data, additional = {}) {
     if (!data) {
         return null;
     }
+
+    const sectionTitle = data.section || DEFAULT_SECTION_TITLE;
+    const topic = data.topic ?? null;
+    const tags = ensureArray(data.tags);
+    const baseMetadata = buildChunkMetadata(sectionTitle, topic, data.text || '', tags);
+
+    const systemKeywords = Array.from(new Set([
+        ...ensureArray(data.systemKeywords),
+        ...ensureArray(data.defaultSystemKeywords),
+        ...ensureArray(data.keywords),
+        ...baseMetadata.systemKeywords,
+    ]));
+
+    const defaultSystemKeywords = Array.from(new Set([
+        ...baseMetadata.defaultSystemKeywords,
+        ...ensureArray(data.defaultSystemKeywords),
+    ]));
+
+    const customKeywords = ensureArray(data.customKeywords);
+    const disabledKeywords = ensureArray(data.disabledKeywords).map(normalizeKeyword);
+
+    const keywordGroups = Array.from(new Set([
+        ...ensureArray(data.keywordGroups),
+        ...baseMetadata.keywordGroups,
+    ]));
+    const defaultKeywordGroups = Array.from(new Set([
+        ...baseMetadata.defaultKeywordGroups,
+        ...ensureArray(data.defaultKeywordGroups),
+    ]));
+
+    const keywordRegex = Array.from(new Set([
+        ...ensureArray(data.keywordRegex).map(entry => JSON.stringify(entry)),
+        ...baseMetadata.keywordRegex.map(entry => JSON.stringify(entry)),
+    ])).map(entry => JSON.parse(entry));
+    const defaultKeywordRegex = Array.from(new Set([
+        ...baseMetadata.defaultKeywordRegex.map(entry => JSON.stringify(entry)),
+        ...ensureArray(data.defaultKeywordRegex).map(entry => JSON.stringify(entry)),
+    ])).map(entry => JSON.parse(entry));
+
+    const customRegex = ensureArray(data.customRegex);
+
+    const finalKeywords = Array.from(new Set([...systemKeywords, ...customKeywords])).filter(keyword => !disabledKeywords.includes(normalizeKeyword(keyword)));
+
     return Object.assign({
         hash: Number(hash),
         text: data.text,
-        section: data.section || DEFAULT_SECTION_TITLE,
-        topic: data.topic || null,
-        tags: data.tags || [],
-        keywords: data.keywords || [],
-        index: data.index ?? 0,
+        section: sectionTitle,
+        topic,
+        tags,
+        keywords: finalKeywords,
+        systemKeywords,
+        defaultSystemKeywords,
+        keywordGroups,
+        defaultKeywordGroups,
+        keywordRegex,
+        defaultKeywordRegex,
+        customKeywords,
+        customRegex,
+        disabledKeywords,
+        index: data.index ?? additional.index ?? 0,
     }, additional);
 }
 
@@ -1050,20 +1424,24 @@ function deriveCrosslinks(library, primaryChunks, settings) {
  * @param {number} limit Maximum fallback chunks to include
  * @returns {ReturnType<typeof libraryEntryToChunk>[]} Fallback chunks
  */
-function deriveKeywordFallback(queryKeywords, library, selectedHashes, limit) {
-    if (!queryKeywords?.length || !library) {
+function deriveKeywordFallback(queryKeywords, queryText, library, selectedHashes, limit, settings) {
+    if ((!queryKeywords || queryKeywords.length === 0) && !queryText) {
         return [];
     }
 
-    /** @type {Map<string, Set<string>>} */
-    const normalizedQuery = new Map();
-    for (const keyword of queryKeywords) {
+    /** @type {Map<string, {priority: number, originals: Set<string>}>} */
+    const keywordPriorityMap = new Map();
+    for (const keyword of queryKeywords || []) {
         const normalized = normalizeKeyword(keyword);
-        if (!normalizedQuery.has(normalized)) {
-            normalizedQuery.set(normalized, new Set());
+        const priority = Math.max(getKeywordPriority(keyword), 20);
+        if (!keywordPriorityMap.has(normalized)) {
+            keywordPriorityMap.set(normalized, { priority, originals: new Set([keyword]) });
+        } else {
+            keywordPriorityMap.get(normalized).originals.add(keyword);
         }
-        normalizedQuery.get(normalized).add(keyword);
     }
+
+    const loweredQueryText = (queryText || '').toLowerCase();
 
     /** @type {{hash: number, score: number, chunk: ReturnType<typeof libraryEntryToChunk>}[]} */
     const candidates = [];
@@ -1073,19 +1451,80 @@ function deriveKeywordFallback(queryKeywords, library, selectedHashes, limit) {
         if (selectedHashes.has(hash)) {
             continue;
         }
-        const chunkKeywords = Array.isArray(data?.keywords) ? data.keywords : [];
-        if (!chunkKeywords.length) {
+        const effectiveData = libraryEntryToChunk(hash, data);
+        if (!effectiveData) {
             continue;
         }
 
-        const overlap = [];
-        for (const keyword of chunkKeywords) {
+        const disabledSet = new Set((data.disabledKeywords || []).map(normalizeKeyword));
+        const customKeywords = Array.isArray(data.customKeywords) ? data.customKeywords : [];
+        const systemKeywords = Array.isArray(data.systemKeywords) ? data.systemKeywords : Array.isArray(data.keywords) ? data.keywords : [];
+        const combinedKeywords = [...systemKeywords, ...customKeywords];
+
+        let score = 0;
+        const matchedKeywords = [];
+        const matchedFromQuery = [];
+
+        combinedKeywords.forEach(keyword => {
             const normalized = normalizeKeyword(keyword);
-            if (normalizedQuery.has(normalized)) {
-                overlap.push(keyword);
+            if (disabledSet.has(normalized)) {
+                return;
+            }
+
+            const mapEntry = keywordPriorityMap.get(normalized);
+            if (mapEntry) {
+                const isCustom = customKeywords.some(custom => normalizeKeyword(custom) === normalized);
+
+                // Check for custom weight override first
+                let effectivePriority;
+                if (data.customWeights && data.customWeights[normalized] !== undefined) {
+                    effectivePriority = data.customWeights[normalized];
+                } else if (isCustom) {
+                    effectivePriority = Math.max(CUSTOM_KEYWORD_PRIORITY, mapEntry.priority);
+                } else {
+                    effectivePriority = Math.max(mapEntry.priority, getKeywordPriority(keyword));
+                }
+
+                score += effectivePriority;
+                matchedKeywords.push(keyword);
+                matchedFromQuery.push(...mapEntry.originals);
+            }
+        });
+
+        const regexEntries = [];
+        if (Array.isArray(data.keywordRegex)) {
+            for (const entry of data.keywordRegex) {
+                if (entry && entry.pattern) {
+                    regexEntries.push({ ...entry, source: entry.source || 'preset' });
+                }
             }
         }
-        if (!overlap.length) {
+        if (Array.isArray(data.customRegex)) {
+            for (const pattern of data.customRegex) {
+                if (!pattern) continue;
+                if (typeof pattern === 'string') {
+                    regexEntries.push({ pattern, flags: 'i', priority: CUSTOM_KEYWORD_PRIORITY, source: 'custom' });
+                } else if (pattern.pattern) {
+                    regexEntries.push({ ...pattern, source: 'custom', priority: pattern.priority ?? CUSTOM_KEYWORD_PRIORITY });
+                }
+            }
+        }
+
+        const regexMatches = [];
+        for (const entry of regexEntries) {
+            try {
+                const regex = new RegExp(entry.pattern, entry.flags || 'i');
+                if (regex.test(loweredQueryText)) {
+                    const regexPriority = entry.priority ?? (entry.source === 'custom' ? CUSTOM_KEYWORD_PRIORITY : 80);
+                    score += regexPriority;
+                    regexMatches.push(entry.pattern);
+                }
+            } catch {
+                // ignore malformed regex
+            }
+        }
+
+        if (score <= 0) {
             continue;
         }
 
@@ -1093,19 +1532,19 @@ function deriveKeywordFallback(queryKeywords, library, selectedHashes, limit) {
             inferred: true,
             reason: {
                 source: 'keyword-fallback',
-                sharedKeywords: overlap,
+                sharedKeywords: matchedKeywords,
+                queryKeywords: Array.from(new Set(matchedFromQuery)),
+                regexMatches,
+                weight: score,
             },
         });
 
-        candidates.push({
-            hash,
-            score: overlap.length,
-            chunk,
-        });
+        candidates.push({ hash, score, chunk });
     }
 
-    candidates.sort((a, b) => b.score - a.score);
-    return candidates.slice(0, Math.max(0, limit)).map(entry => entry.chunk);
+    candidates.sort((a, b) => b.score - a.score || a.hash - b.hash);
+    const limited = candidates.slice(0, Math.max(0, limit));
+    return limited.map(entry => entry.chunk);
 }
 
 // ============================================================================
@@ -1145,11 +1584,11 @@ async function queryRAG(characterName, queryText) {
 
     const collectionId = generateCollectionId(characterName);
     const library = getChunkLibrary(collectionId);
-
     if (!library) {
         debugLog(`No local chunk library for ${collectionId}; vectorize the fullsheet first.`);
         return [];
     }
+
 
     debugLog(`Querying RAG for ${characterName}`, {
         collectionId,
@@ -1213,9 +1652,11 @@ async function queryRAG(characterName, queryText) {
         if ((settings.keywordFallback ?? true) && (settings.keywordFallbackLimit ?? 0) > 0) {
             fallbackChunks = deriveKeywordFallback(
                 queryKeywords,
+                queryText,
                 library,
                 selectedHashes,
                 settings.keywordFallbackLimit ?? 2,
+                settings,
             );
             const before = combined.length;
             fallbackChunks.forEach(chunk => {
@@ -1390,40 +1831,64 @@ async function injectRAGResults(characterName, results) {
 }
 
 function detectFullsheetInMessage(messageText) {
+    console.log('🔍 [detectFullsheetInMessage] Starting detection...');
+    console.log(`   Message length: ${messageText?.length || 0} chars`);
+    console.log(`   Min size required: ${FULLSHEET_MIN_SIZE}`);
+
     if (!messageText || messageText.length < FULLSHEET_MIN_SIZE) {
+        console.log('❌ [detectFullsheetInMessage] Message too short or empty');
         return null;
     }
 
     // Check for section headers (## SECTION X/8:)
+    console.log('🔍 [detectFullsheetInMessage] Looking for SECTION headers...');
+    console.log(`   Regex: /##\\s+SECTION\\s+(\\d+)\\/(\\d+):/gi`);
+    console.log(`   Message sample:`, messageText.substring(0, 500));
+
     const sectionMatches = messageText.match(/##\s+SECTION\s+(\d+)\/(\d+):/gi);
+    console.log(`   Found ${sectionMatches?.length || 0} SECTION headers`);
+    if (sectionMatches) {
+        console.log(`   Matches:`, sectionMatches);
+    }
+
     if (!sectionMatches || sectionMatches.length < 3) {
-        return null; // Need at least 3 sections to be a fullsheet
+        console.log('❌ [detectFullsheetInMessage] Not enough SECTION headers (need at least 3)');
+        return null;
     }
 
     // Check for BunnymoTags
-    const hasBunnymoTags = BUNNYMOTAGS_INDICATORS.some(indicator =>
-        messageText.includes(indicator)
-    );
+    console.log('🔍 [detectFullsheetInMessage] Looking for BunnymoTags...');
+    console.log(`   Required indicators:`, BUNNYMOTAGS_INDICATORS);
+
+    const hasBunnymoTags = BUNNYMOTAGS_INDICATORS.some(indicator => {
+        const found = messageText.includes(indicator);
+        console.log(`   Checking "${indicator}": ${found}`);
+        return found;
+    });
 
     if (!hasBunnymoTags) {
+        console.log('❌ [detectFullsheetInMessage] No BunnymoTags found');
         return null;
     }
 
     // Try to extract character name from BunnymoTags
+    console.log('🔍 [detectFullsheetInMessage] Extracting character name...');
     const nameMatch = messageText.match(/<Name:([^>]+)>/i);
+    console.log(`   Name regex match:`, nameMatch);
+
     const characterName = nameMatch ? nameMatch[1].trim().replace(/_/g, ' ') : 'Unknown';
+    console.log(`   Extracted name: "${characterName}"`);
 
-    debugLog('Fullsheet detected in message', {
-        characterName,
-        sectionCount: sectionMatches.length,
-        messageLength: messageText.length
-    });
-
-    return {
+    const result = {
         characterName,
         content: messageText,
         sectionCount: sectionMatches.length
     };
+
+    console.log('✅ [detectFullsheetInMessage] Fullsheet detected!', result);
+    debugLog('Fullsheet detected in message', result);
+
+    return result;
 }
 
 /**
@@ -1574,66 +2039,109 @@ async function handleRAGButtonClick(messageId, fullsheetInfo) {
  * @returns {Promise<boolean>} Success status
  */
 async function vectorizeFullsheetFromMessage(characterName, content) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🔬 VECTORIZATION STARTED');
+    console.log(`   Character: ${characterName}`);
+    console.log(`   Content length: ${content.length} chars`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
     const settings = getRAGSettings();
     const collectionId = generateCollectionId(characterName);
 
-    debugLog(`Vectorizing fullsheet from message for ${characterName}`, {
-        collectionId,
-        contentSize: content.length
+    console.log(`📋 Settings:`, {
+        enabled: settings.enabled,
+        simpleChunking: settings.simpleChunking,
+        chunkSize: settings.chunkSize,
+        chunkOverlap: settings.chunkOverlap,
+        contextLevel: getCurrentContextLevel()
     });
+    console.log(`🗂️  Collection ID: ${collectionId}`);
 
     try {
-        // Check if already vectorized
-        const exists = await collectionExists(collectionId);
-        if (exists) {
-            debugLog(`Collection ${collectionId} already exists, re-vectorizing`);
+        // Step 1: Chunk the fullsheet
+        console.log('\n📦 STEP 1: Chunking fullsheet...');
+        const chunks = chunkFullsheet(content, characterName, settings.chunkSize, settings.chunkOverlap);
+
+        if (!chunks || chunks.length === 0) {
+            console.error('❌ STEP 1 FAILED: Chunking resulted in 0 chunks');
+            throw new Error('Fullsheet chunking resulted in 0 chunks');
         }
 
-        // Chunk the fullsheet
-        const chunks = chunkFullsheet(
-            content,
-            characterName,
-            settings.chunkSize,
-            settings.chunkOverlap
-        );
+        console.log(`✅ STEP 1 COMPLETE: Created ${chunks.length} chunks`);
+        console.log(`   First chunk preview:`, chunks[0].text.substring(0, 100) + '...');
+        console.log(`   Chunk hashes:`, chunks.map(c => c.hash));
 
-        if (chunks.length === 0) {
-            throw new Error('No chunks created from fullsheet');
+        // Step 2: Get existing hashes
+        console.log('\n🔍 STEP 2: Checking for existing chunks in vector DB...');
+        const savedHashes = await apiGetSavedHashes(collectionId);
+        const savedHashSet = new Set(savedHashes.map(h => h.hash));
+        console.log(`✅ STEP 2 COMPLETE: Found ${savedHashes.length} existing hashes`);
+        if (savedHashes.length > 0) {
+            console.log(`   Existing hashes:`, Array.from(savedHashSet));
         }
 
-        // Persist chunk metadata locally for fast lookup and cross-linking
+        // Step 3: Filter new chunks
+        console.log('\n🔢 STEP 3: Filtering for new chunks...');
+        const newChunks = chunks.filter(chunk => !savedHashSet.has(chunk.hash));
+        console.log(`✅ STEP 3 COMPLETE:`);
+        console.log(`   Total chunks: ${chunks.length}`);
+        console.log(`   Already saved: ${chunks.length - newChunks.length}`);
+        console.log(`   New chunks to insert: ${newChunks.length}`);
+
+        // Step 4: Insert new chunks
+        if (newChunks.length > 0) {
+            console.log(`\n💾 STEP 4: Inserting ${newChunks.length} new chunks into vector DB...`);
+            console.log(`   New chunk hashes:`, newChunks.map(c => c.hash));
+
+            await apiInsertVectorItems(collectionId, newChunks);
+
+            console.log(`✅ STEP 4 COMPLETE: Vector insertion successful`);
+        } else {
+            console.log('\n⏭️  STEP 4 SKIPPED: No new chunks to insert');
+        }
+
+        // Step 5: Update local library
+        console.log('\n📚 STEP 5: Updating local library...');
         const library = getContextualLibrary();
-        library[collectionId] = {};
-        for (const chunk of chunks) {
+        console.log(`   Current library keys:`, Object.keys(library));
+
+        if (!library[collectionId]) {
+            console.log(`   Creating new collection entry: ${collectionId}`);
+            library[collectionId] = {};
+        } else {
+            console.log(`   Collection already exists, updating...`);
+        }
+
+        chunks.forEach(chunk => {
             library[collectionId][chunk.hash] = {
                 text: chunk.text,
-                section: chunk.metadata.section,
-                topic: chunk.metadata.topic,
-                tags: chunk.metadata.tags,
-                keywords: chunk.metadata.keywords,
-                index: chunk.index,
+                ...chunk.metadata
             };
-        }
-        saveSettingsDebounced();
-
-        // Insert chunks into vector collection
-        const vectorItems = chunks.map(chunk => ({
-            hash: chunk.hash,
-            text: chunk.text,
-            index: chunk.index,
-        }));
-        await apiInsertVectorItems(collectionId, vectorItems);
-
-        debugLog(`✅ Vectorized ${characterName} from message`, {
-            collectionId,
-            chunks: chunks.length,
-            totalSize: content.length
         });
+
+        console.log(`   Updated library with ${chunks.length} chunks`);
+        console.log(`   Library now has ${Object.keys(library[collectionId]).length} total entries for this collection`);
+
+        saveSettingsDebounced();
+        console.log(`✅ STEP 5 COMPLETE: Local library updated and saved`);
+
+        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`✅ VECTORIZATION SUCCESSFUL: ${characterName}`);
+        console.log(`   Total chunks: ${chunks.length}`);
+        console.log(`   Collection ID: ${collectionId}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
         return true;
 
     } catch (error) {
-        console.error(`❌ Failed to vectorize fullsheet from message for ${characterName}:`, error);
+        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.error('❌ VECTORIZATION FAILED:', characterName);
+        console.error('   Error message:', error.message);
+        console.error('   Error stack:', error.stack);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+        const errorMessage = `RAG vectorization error for ${characterName}. Reason: ${error.message}. Check the browser console (F12) for the full error stack.`;
+        toastr.error(errorMessage, "Vectorization Failed", {timeOut: 15000});
         return false;
     }
 }
@@ -1671,7 +2179,7 @@ function removeAllRAGButtons() {
 /**
  * Initialize the RAG system
  */
-export function initializeRAG() {
+function initializeRAG() {
     debugLog('Initializing CarrotKernel RAG system');
 
     // Hook into message events for button detection
@@ -1807,7 +2315,7 @@ window.carrotKernelRagInterceptor = carrotKernelRagInterceptor;
 // PUBLIC API
 // ============================================================================
 
-export {
+globalThis.CarrotKernelFullsheetRag = {
     getRAGSettings,
     saveRAGSettings,
     generateCollectionId,
@@ -1820,5 +2328,28 @@ export {
     detectFullsheetInMessage,
     vectorizeFullsheetFromMessage,
     getCurrentContextLevel,
-    getContextualLibrary
+    getContextualLibrary,
 };
+
+// ES6 Module Exports (for dynamic import)
+export {
+    initializeRAG,
+    saveRAGSettings,
+    addRAGButtonsToAllMessages,
+    removeAllRAGButtons,
+    detectFullsheetInMessage,
+    vectorizeFullsheetFromMessage,
+    getCurrentContextLevel,
+    getContextualLibrary,
+    getKeywordPriority,
+    normalizeKeyword,
+};
+
+
+
+
+
+
+
+
+

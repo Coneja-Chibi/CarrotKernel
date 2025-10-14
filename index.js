@@ -4,7 +4,87 @@ import { loadWorldInfo, world_names, createNewWorldInfo, createWorldInfoEntry, s
 import { executeSlashCommandsWithOptions } from '../../../slash-commands.js';
 import { getMessageTimeStamp } from '../../../RossAscends-mods.js';
 import { CarrotWorldBookTracker } from './worldbook-tracker.js';
-import { initializeRAG, saveRAGSettings, addRAGButtonsToAllMessages, removeAllRAGButtons, detectFullsheetInMessage, vectorizeFullsheetFromMessage, getCurrentContextLevel, getContextualLibrary } from './fullsheet-rag.js';
+
+// Import fullsheet-rag.js dynamically
+let fullsheetAPI = {};
+let fullsheetRAGLoaded = false;
+
+async function loadFullsheetRAG() {
+    if (fullsheetRAGLoaded) {
+        return fullsheetAPI;
+    }
+
+    try {
+        const module = await import('./fullsheet-rag.js');
+        fullsheetRAGLoaded = true;
+        fullsheetAPI = {
+            initializeRAG: module.initializeRAG || (() => {}),
+            saveRAGSettings: module.saveRAGSettings || (() => {}),
+            addRAGButtonsToAllMessages: module.addRAGButtonsToAllMessages || (() => {}),
+            removeAllRAGButtons: module.removeAllRAGButtons || (() => {}),
+            detectFullsheetInMessage: module.detectFullsheetInMessage || (() => {}),
+            vectorizeFullsheetFromMessage: module.vectorizeFullsheetFromMessage || (() => Promise.resolve(false)),
+            getCurrentContextLevel: module.getCurrentContextLevel || (() => 'global'),
+            getContextualLibrary: module.getContextualLibrary || (() => ({})),
+            getKeywordPriority: module.getKeywordPriority || ((keyword) => 20),
+            normalizeKeyword: module.normalizeKeyword || ((word) => (word || '').toLowerCase().trim()),
+        };
+        return fullsheetAPI;
+    } catch (error) {
+        console.error('CarrotKernel: Error loading fullsheet-rag.js', error);
+        return {};
+    }
+}
+
+// Start loading immediately
+const fullsheetRAGPromise = loadFullsheetRAG();
+
+// Create async wrapper functions that wait for the module to load
+async function initializeRAG() {
+    await fullsheetRAGPromise;
+    return fullsheetAPI.initializeRAG?.() || Promise.resolve();
+}
+
+async function saveRAGSettings(settings) {
+    await fullsheetRAGPromise;
+    return fullsheetAPI.saveRAGSettings?.(settings);
+}
+
+async function addRAGButtonsToAllMessages() {
+    await fullsheetRAGPromise;
+    return fullsheetAPI.addRAGButtonsToAllMessages?.();
+}
+
+async function removeAllRAGButtons() {
+    await fullsheetRAGPromise;
+    return fullsheetAPI.removeAllRAGButtons?.();
+}
+
+async function detectFullsheetInMessage(message) {
+    await fullsheetRAGPromise;
+    return fullsheetAPI.detectFullsheetInMessage?.(message);
+}
+
+async function vectorizeFullsheetFromMessage(characterName, content) {
+    await fullsheetRAGPromise;
+    return fullsheetAPI.vectorizeFullsheetFromMessage?.(characterName, content) || Promise.resolve(false);
+}
+
+function getCurrentContextLevel() {
+    // Synchronous function - must return immediately
+    if (fullsheetRAGLoaded && fullsheetAPI.getCurrentContextLevel) {
+        return fullsheetAPI.getCurrentContextLevel();
+    }
+    return 'global'; // Default fallback
+}
+
+function getContextualLibrary() {
+    // Synchronous function - must return immediately
+    if (fullsheetRAGLoaded && fullsheetAPI.getContextualLibrary) {
+        return fullsheetAPI.getContextualLibrary();
+    }
+    return {}; // Default fallback
+}
 
 const extensionName = 'CarrotKernel';
 
@@ -8679,7 +8759,7 @@ jQuery(async () => {
                 });
 
                 // Grouping mode switching
-                popup.find('input[name="batch-grouping-mode"]').on('change', function() {
+                popup.find('input[name="batch-grouping-mode"]').on('change', async function() {
                     const mode = $(this).val();
                     popup.find('#batch-single-new-section').toggle(mode === 'single-new');
                     popup.find('#batch-single-existing-section').toggle(mode === 'single-existing');
@@ -9342,7 +9422,7 @@ jQuery(async () => {
                 // Add interactive functionality for the new popup elements
 
                 // 1. Lorebook type radio button switching
-                popup.find('input[name="lorebook-type"]').on('change', function() {
+                popup.find('input[name="lorebook-type"]').on('change', async function() {
                     const isNew = $(this).val() === 'new';
                     popup.find('#new-lorebook-section').toggle(isNew);
                     popup.find('#existing-lorebook-section').toggle(!isNew);
@@ -10341,7 +10421,7 @@ function bindSettingsEvents() {
         console.log('🎯 DOM DEBUG: Starting actual event binding...');
     
     // Master enable toggle
-    $('#carrot_enabled').prop('checked', settings.enabled).on('change', function() {
+    $('#carrot_enabled').prop('checked', settings.enabled).on('change', async function() {
         const isEnabled = Boolean($(this).prop('checked'));
         console.log('🎯 MASTER TOGGLE DEBUG: State changed:', {
             previousState: settings.enabled,
@@ -10368,7 +10448,7 @@ function bindSettingsEvents() {
     });
     
     // Display mode
-    $('#carrot_display_mode').val(settings.displayMode).on('change', function() {
+    $('#carrot_display_mode').val(settings.displayMode).on('change', async function() {
         const newMode = String($(this).val());
         const oldMode = extension_settings[extensionName].displayMode;
         extension_settings[extensionName].displayMode = newMode;
@@ -10384,20 +10464,20 @@ function bindSettingsEvents() {
     });
     
     // Send to AI
-    $('#carrot_send_to_ai').prop('checked', settings.sendToAI).on('change', function() {
+    $('#carrot_send_to_ai').prop('checked', settings.sendToAI).on('change', async function() {
         extension_settings[extensionName].sendToAI = Boolean($(this).prop('checked'));
         updateStatusPanels();
         saveSettingsDebounced();
     });
     
     // Auto-expand
-    $('#carrot_auto_expand').prop('checked', settings.autoExpand).on('change', function() {
+    $('#carrot_auto_expand').prop('checked', settings.autoExpand).on('change', async function() {
         extension_settings[extensionName].autoExpand = Boolean($(this).prop('checked'));
         saveSettingsDebounced();
     });
     
     // Debug mode
-    $('#carrot_debug_mode').prop('checked', settings.debugMode).on('change', function() {
+    $('#carrot_debug_mode').prop('checked', settings.debugMode).on('change', async function() {
         const newValue = Boolean($(this).prop('checked'));
         CarrotDebug.setting('debugMode', settings.debugMode, newValue);
         extension_settings[extensionName].debugMode = newValue;
@@ -10406,7 +10486,7 @@ function bindSettingsEvents() {
     });
     
     // Baby Bunny Mode
-    $('#carrot_baby_bunny_mode').prop('checked', settings.babyBunnyMode).on('change', function() {
+    $('#carrot_baby_bunny_mode').prop('checked', settings.babyBunnyMode).on('change', async function() {
         const newValue = Boolean($(this).prop('checked'));
         CarrotDebug.setting('babyBunnyMode', settings.babyBunnyMode, newValue);
         extension_settings[extensionName].babyBunnyMode = newValue;
@@ -10431,7 +10511,7 @@ function bindSettingsEvents() {
     });
 
     // WorldBook Tracker toggle
-    $('#carrot_worldbook_tracker').prop('checked', settings.worldBookTrackerEnabled).on('change', function() {
+    $('#carrot_worldbook_tracker').prop('checked', settings.worldBookTrackerEnabled).on('change', async function() {
         const newValue = Boolean($(this).prop('checked'));
         CarrotDebug.setting('worldBookTrackerEnabled', settings.worldBookTrackerEnabled, newValue);
         extension_settings[extensionName].worldBookTrackerEnabled = newValue;
@@ -10472,7 +10552,7 @@ function bindSettingsEvents() {
     });
 
     // Max characters displayed (slider)
-    $('#carrot_max_characters_display').val(settings.maxCharactersDisplay || 6).on('input', function() {
+    $('#carrot_max_characters_display').val(settings.maxCharactersDisplay || 6).on('input', async function() {
         const value = parseInt($(this).val());
         $('#carrot_max_display_value').text(value);
         extension_settings[extensionName].maxCharactersDisplay = value;
@@ -10481,7 +10561,7 @@ function bindSettingsEvents() {
     $('#carrot_max_display_value').text(settings.maxCharactersDisplay || 6);
 
     // Max characters injected (slider)
-    $('#carrot_max_characters_inject').val(settings.maxCharactersInject || 6).on('input', function() {
+    $('#carrot_max_characters_inject').val(settings.maxCharactersInject || 6).on('input', async function() {
         const value = parseInt($(this).val());
         $('#carrot_max_inject_value').text(value);
         extension_settings[extensionName].maxCharactersInject = value;
@@ -10540,45 +10620,45 @@ function bindSettingsEvents() {
 
     syncRagVectorsFromBase();
 
-    const persistRagSettings = () => {
+    const persistRagSettings = async () => {
         syncBaseVectorsFromRag();
-        saveRAGSettings({ ...ragState });
+        await saveRAGSettings({ ...ragState });
     };
 
-    $('#carrot_rag_enabled').prop('checked', ragState.enabled).on('change', function() {
+    $('#carrot_rag_enabled').prop('checked', ragState.enabled).on('change', async function() {
         const isEnabled = Boolean($(this).prop('checked'));
         ragState.enabled = isEnabled;
-        persistRagSettings();
+        await await persistRagSettings();
 
         if (isEnabled) {
             toastr.info('Smart Context enabled - fullsheets will be saved and queried');
-            addRAGButtonsToAllMessages();
+            await addRAGButtonsToAllMessages();
         } else {
             toastr.info('Smart Context disabled');
-            removeAllRAGButtons();
+            await removeAllRAGButtons();
         }
     });
 
-    $('#carrot_rag_auto_vectorize').prop('checked', ragState.autoVectorize !== false).on('change', function() {
+    $('#carrot_rag_auto_vectorize').prop('checked', ragState.autoVectorize !== false).on('change', async function() {
         ragState.autoVectorize = Boolean($(this).prop('checked'));
-        persistRagSettings();
+        await await persistRagSettings();
     });
 
-    $('#carrot_rag_debug_mode').prop('checked', ragState.debugMode || false).on('change', function() {
+    $('#carrot_rag_debug_mode').prop('checked', ragState.debugMode || false).on('change', async function() {
         ragState.debugMode = Boolean($(this).prop('checked'));
-        persistRagSettings();
+        await await persistRagSettings();
     });
 
-    $('#carrot_rag_context_level').val(ragState.contextLevel || 'global').on('change', function() {
+    $('#carrot_rag_context_level').val(ragState.contextLevel || 'global').on('change', async function() {
         ragState.contextLevel = String($(this).val());
-        persistRagSettings();
+        await await persistRagSettings();
         toastr.info(`Storage level changed to: ${ragState.contextLevel}`);
     });
 
     // Simple chunking toggle
-    $('#carrot_rag_simple_chunking').prop('checked', ragState.simpleChunking ?? false).on('change', function() {
+    $('#carrot_rag_simple_chunking').prop('checked', ragState.simpleChunking ?? false).on('change', async function() {
         ragState.simpleChunking = $(this).prop('checked');
-        persistRagSettings();
+        await await persistRagSettings();
 
         // Show/hide complex settings
         if (ragState.simpleChunking) {
@@ -10595,146 +10675,146 @@ function bindSettingsEvents() {
         $('.carrot-complex-setting').hide();
     }
 
-    $('#carrot_rag_topk').val(ragState.topK || 3).on('input', function() {
+    $('#carrot_rag_topk').val(ragState.topK || 3).on('input', async function() {
         const value = parseInt($(this).val());
         $('#carrot_rag_topk_value').text(value);
         ragState.topK = value;
-        persistRagSettings();
+        await persistRagSettings();
     });
     $('#carrot_rag_topk_value').text(ragState.topK || 3);
 
-    $('#carrot_rag_threshold').val(Math.round((ragState.scoreThreshold ?? 0.15) * 100)).on('input', function() {
+    $('#carrot_rag_threshold').val(Math.round((ragState.scoreThreshold ?? 0.15) * 100)).on('input', async function() {
         const value = parseInt($(this).val()) / 100;
         $('#carrot_rag_threshold_value').text(value.toFixed(2));
         ragState.scoreThreshold = value;
-        persistRagSettings();
+        await persistRagSettings();
     });
     $('#carrot_rag_threshold_value').text((ragState.scoreThreshold ?? 0.15).toFixed(2));
 
-    $('#carrot_rag_context').val(ragState.queryContext || 3).on('input', function() {
+    $('#carrot_rag_context').val(ragState.queryContext || 3).on('input', async function() {
         const value = parseInt($(this).val());
         $('#carrot_rag_context_value').text(value);
         ragState.queryContext = value;
-        persistRagSettings();
+        await persistRagSettings();
     });
     $('#carrot_rag_context_value').text(ragState.queryContext || 3);
 
-    $('#carrot_rag_chunksize').val(ragState.chunkSize || 1000).on('input', function() {
+    $('#carrot_rag_chunksize').val(ragState.chunkSize || 1000).on('input', async function() {
         const value = parseInt($(this).val());
         $('#carrot_rag_chunksize_value').text(value);
         ragState.chunkSize = value;
-        persistRagSettings();
+        await persistRagSettings();
     });
     $('#carrot_rag_chunksize_value').text(ragState.chunkSize || 1000);
 
-    $('#carrot_rag_overlap').val(ragState.chunkOverlap || 300).on('input', function() {
+    $('#carrot_rag_overlap').val(ragState.chunkOverlap || 300).on('input', async function() {
         const value = parseInt($(this).val());
         $('#carrot_rag_overlap_value').text(value);
         ragState.chunkOverlap = value;
-        persistRagSettings();
+        await persistRagSettings();
     });
     $('#carrot_rag_overlap_value').text(ragState.chunkOverlap || 300);
 
-    $('#carrot_rag_depth').val(ragState.injectionDepth || 4).on('input', function() {
+    $('#carrot_rag_depth').val(ragState.injectionDepth || 4).on('input', async function() {
         const value = parseInt($(this).val());
         $('#carrot_rag_depth_value').text(value);
         ragState.injectionDepth = value;
-        persistRagSettings();
+        await persistRagSettings();
     });
     $('#carrot_rag_depth_value').text(ragState.injectionDepth || 4);
 
-    $('#carrot_rag_crosslink').val(Math.round((ragState.crosslinkThreshold ?? 0.25) * 100)).on('input', function() {
+    $('#carrot_rag_crosslink').val(Math.round((ragState.crosslinkThreshold ?? 0.25) * 100)).on('input', async function() {
         const value = parseInt($(this).val()) / 100;
         $('#carrot_rag_crosslink_value').text(value.toFixed(2));
         ragState.crosslinkThreshold = value;
-        persistRagSettings();
+        await persistRagSettings();
     });
     $('#carrot_rag_crosslink_value').text((ragState.crosslinkThreshold ?? 0.25).toFixed(2));
 
-    $('#carrot_rag_keyword_fallback').prop('checked', ragState.keywordFallback ?? true).on('change', function() {
+    $('#carrot_rag_keyword_fallback').prop('checked', ragState.keywordFallback ?? true).on('change', async function() {
         ragState.keywordFallback = Boolean($(this).prop('checked'));
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_keyword_priority').prop('checked', ragState.keywordFallbackPriority ?? false).on('change', function() {
+    $('#carrot_rag_keyword_priority').prop('checked', ragState.keywordFallbackPriority ?? false).on('change', async function() {
         ragState.keywordFallbackPriority = Boolean($(this).prop('checked'));
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_keyword_limit').val(ragState.keywordFallbackLimit ?? 2).on('input', function() {
+    $('#carrot_rag_keyword_limit').val(ragState.keywordFallbackLimit ?? 2).on('input', async function() {
         const value = Math.max(0, parseInt($(this).val()) || 0);
         ragState.keywordFallbackLimit = value;
         $('#carrot_rag_keyword_limit_value').text(value);
-        persistRagSettings();
+        await persistRagSettings();
     });
     $('#carrot_rag_keyword_limit_value').text(ragState.keywordFallbackLimit ?? 2);
 
     const $ragRole = $('#carrot_rag_role');
     if ($ragRole.length) {
-        $ragRole.val(ragState.injectionRole || 'system').on('change', function() {
+        $ragRole.val(ragState.injectionRole || 'system').on('change', async function() {
             ragState.injectionRole = String($(this).val());
-            persistRagSettings();
+            await persistRagSettings();
         });
     }
 
     // Vectorization source and model settings
-    $('#carrot_rag_vector_source').val(ragState.vectorSource || 'transformers').on('change', function() {
+    $('#carrot_rag_vector_source').val(ragState.vectorSource || 'transformers').on('change', async function() {
         ragState.vectorSource = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
         toggleRAGVectorSettings();
         toastr.info(`Vectorization source changed to: ${ragState.vectorSource}`);
     });
 
-    $('#carrot_rag_openai_model').val(ragState.openaiModel || 'text-embedding-ada-002').on('change', function() {
+    $('#carrot_rag_openai_model').val(ragState.openaiModel || 'text-embedding-ada-002').on('change', async function() {
         ragState.openaiModel = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_cohere_model').val(ragState.cohereModel || 'embed-english-v3.0').on('change', function() {
+    $('#carrot_rag_cohere_model').val(ragState.cohereModel || 'embed-english-v3.0').on('change', async function() {
         ragState.cohereModel = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_google_model').val(ragState.googleModel || 'text-embedding-005').on('change', function() {
+    $('#carrot_rag_google_model').val(ragState.googleModel || 'text-embedding-005').on('change', async function() {
         ragState.googleModel = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_togetherai_model').val(ragState.togetheraiModel || 'togethercomputer/m2-bert-80M-32k-retrieval').on('change', function() {
+    $('#carrot_rag_togetherai_model').val(ragState.togetheraiModel || 'togethercomputer/m2-bert-80M-32k-retrieval').on('change', async function() {
         ragState.togetheraiModel = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_ollama_model').val(ragState.ollamaModel || 'mxbai-embed-large').on('input', function() {
+    $('#carrot_rag_ollama_model').val(ragState.ollamaModel || 'mxbai-embed-large').on('input', async function() {
         ragState.ollamaModel = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_ollama_keep').prop('checked', ragState.ollamaKeep || false).on('change', function() {
+    $('#carrot_rag_ollama_keep').prop('checked', ragState.ollamaKeep || false).on('change', async function() {
         ragState.ollamaKeep = Boolean($(this).prop('checked'));
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_vllm_model').val(ragState.vllmModel || '').on('input', function() {
+    $('#carrot_rag_vllm_model').val(ragState.vllmModel || '').on('input', async function() {
         ragState.vllmModel = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
     });
 
-    $('#carrot_rag_webllm_model').val(ragState.webllmModel || '').on('input', function() {
+    $('#carrot_rag_webllm_model').val(ragState.webllmModel || '').on('input', async function() {
         ragState.webllmModel = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
     });
 
     // URL settings for sources that need them
-    $('#carrot_rag_use_alt_url').prop('checked', ragState.useAltUrl || false).on('change', function() {
+    $('#carrot_rag_use_alt_url').prop('checked', ragState.useAltUrl || false).on('change', async function() {
         ragState.useAltUrl = Boolean($(this).prop('checked'));
-        persistRagSettings();
+        await persistRagSettings();
         $('#carrot_rag_alt_url_container').toggle(ragState.useAltUrl);
     });
 
-    $('#carrot_rag_alt_url').val(ragState.altUrl || '').on('input', function() {
+    $('#carrot_rag_alt_url').val(ragState.altUrl || '').on('input', async function() {
         ragState.altUrl = String($(this).val());
-        persistRagSettings();
+        await persistRagSettings();
     });
 
     // Initialize URL container visibility
@@ -10813,14 +10893,17 @@ function bindSettingsEvents() {
     // Initialize vectorization settings visibility
     toggleRAGVectorSettings();
 
-    if (!window.__CarrotKernelRagInitialized) {
-        initializeRAG();
-        window.__CarrotKernelRagInitialized = true;
-    }
-    if (ragState.enabled) {
-        addRAGButtonsToAllMessages();
-    }
-    persistRagSettings();
+    // Initialize RAG system asynchronously
+    (async () => {
+        if (!window.__CarrotKernelRagInitialized) {
+            await initializeRAG();
+            window.__CarrotKernelRagInitialized = true;
+        }
+        if (ragState.enabled) {
+            await addRAGButtonsToAllMessages();
+        }
+        await persistRagSettings();
+    })();
 
     // Show context selection popup for moving collections
     async function showCopyContextPopup(collectionId, sourceContext) {
@@ -10969,7 +11052,7 @@ function bindSettingsEvents() {
             });
 
             // Handle radio button change
-            popup.find('input[name="copy-context-level"]').on('change', function() {
+            popup.find('input[name="copy-context-level"]').on('change', async function() {
                 popup.find('.copy-context-option').css('border-color', 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))');
                 $(this).closest('.copy-context-option').css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
             });
@@ -11148,7 +11231,7 @@ function bindSettingsEvents() {
             });
 
             // Handle radio button change
-            popup.find('input[name="rag-context-level"]').on('change', function() {
+            popup.find('input[name="rag-context-level"]').on('change', async function() {
                 popup.find('.context-option').css('border-color', 'var(--SmartThemeBorderColor, rgba(255,255,255,0.1))');
                 $(this).closest('.context-option').css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
             });
@@ -11181,90 +11264,6 @@ function bindSettingsEvents() {
         });
     }
 
-    // "Save All Fullsheets in Chat" button handler
-    $('#carrot-rag-vectorize-btn').on('click', async function() {
-        if (!ragState.enabled) {
-            toastr.warning('Smart Context is disabled. Please enable it first.');
-            return;
-        }
-
-        // Show context selection popup
-        const selectedContextLevel = await showContextSelectionPopup();
-
-        // User cancelled
-        if (!selectedContextLevel) {
-            return;
-        }
-
-        // Temporarily override context level for this operation
-        const originalContextLevel = ragState.contextLevel;
-        ragState.contextLevel = selectedContextLevel;
-
-        // Show current settings
-        const chunkingMode = ragState.simpleChunking ? 'Simple (section-based)' : 'Advanced (with size/overlap)';
-        toastr.info(`Saving to <strong>${selectedContextLevel.toUpperCase()}</strong> storage using <strong>${chunkingMode}</strong> chunking`, 'Vectorization Settings', { timeOut: 4000, extendedTimeOut: 2000, escapeHtml: false });
-
-        const $btn = $(this);
-        const originalText = $btn.html();
-        $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> Scanning...').prop('disabled', true);
-
-        try {
-            let fullsheetsFound = 0;
-            let vectorized = 0;
-            let errors = 0;
-
-            // Scan all messages in chat for fullsheets
-            for (let i = 0; i < chat.length; i++) {
-                const message = chat[i];
-                if (message.is_user || !message.mes) {
-                    continue;
-                }
-
-                // Detect if message contains a fullsheet
-                const fullsheetInfo = detectFullsheetInMessage(message.mes);
-                if (fullsheetInfo) {
-                    fullsheetsFound++;
-                    console.log(`🥕 Found fullsheet for ${fullsheetInfo.characterName} in message ${i}`);
-
-                    // Vectorize the fullsheet
-                    try {
-                        const success = await vectorizeFullsheetFromMessage(
-                            fullsheetInfo.characterName,
-                            fullsheetInfo.content
-                        );
-                        if (success) {
-                            vectorized++;
-                        } else {
-                            errors++;
-                        }
-                    } catch (error) {
-                        console.error(`Failed to vectorize fullsheet for ${fullsheetInfo.characterName}:`, error);
-                        errors++;
-                    }
-                }
-            }
-
-            // Show results
-            if (fullsheetsFound === 0) {
-                toastr.info('No fullsheets found in chat');
-            } else if (vectorized === fullsheetsFound) {
-                toastr.success(`✅ Successfully vectorized ${vectorized} fullsheet${vectorized > 1 ? 's' : ''} to ${selectedContextLevel.toUpperCase()} storage!`);
-            } else if (vectorized > 0) {
-                toastr.warning(`Vectorized ${vectorized} of ${fullsheetsFound} fullsheet${fullsheetsFound > 1 ? 's' : ''} to ${selectedContextLevel.toUpperCase()} storage (${errors} failed)`);
-            } else {
-                toastr.error(`Failed to vectorize ${fullsheetsFound} fullsheet${fullsheetsFound > 1 ? 's' : ''}`);
-            }
-
-        } catch (error) {
-            console.error('Error scanning for fullsheets:', error);
-            toastr.error(`Error scanning for fullsheets: ${error.message}`);
-        } finally {
-            // Restore original context level
-            ragState.contextLevel = originalContextLevel;
-            $btn.html(originalText).prop('disabled', false);
-        }
-    });
-
     // ============================
     // RAG Debugging Utilities
     // ============================
@@ -11272,9 +11271,9 @@ function bindSettingsEvents() {
     // Make RAG debugging functions globally accessible
     window.CarrotRAGDebug = {
         // View all stored collections
-        viewCollections: function() {
-            const contextLevel = getCurrentContextLevel();
-            const library = getContextualLibrary();
+        viewCollections: async function() {
+            const contextLevel = await getCurrentContextLevel();
+            const library = await getContextualLibrary();
             const collections = Object.keys(library);
             console.log(`🥕 RAG Collections (${contextLevel.toUpperCase()} storage):`, collections);
             console.log('Total collections:', collections.length);
@@ -11282,9 +11281,9 @@ function bindSettingsEvents() {
         },
 
         // View chunks for a specific collection
-        viewChunks: function(collectionId) {
-            const contextLevel = getCurrentContextLevel();
-            const library = getContextualLibrary();
+        viewChunks: async function(collectionId) {
+            const contextLevel = await getCurrentContextLevel();
+            const library = await getContextualLibrary();
             const chunks = library[collectionId];
             if (!chunks) {
                 console.warn(`Collection "${collectionId}" not found in ${contextLevel} storage`);
@@ -11297,8 +11296,8 @@ function bindSettingsEvents() {
         },
 
         // View a specific chunk by hash
-        viewChunk: function(collectionId, hash) {
-            const chunks = this.viewChunks(collectionId);
+        viewChunk: async function(collectionId, hash) {
+            const chunks = await this.viewChunks(collectionId);
             if (!chunks) return null;
             const chunk = chunks[hash];
             if (!chunk) {
@@ -11310,87 +11309,347 @@ function bindSettingsEvents() {
         },
 
         // Get collection stats
-        getStats: function(collectionId) {
-            const chunks = this.viewChunks(collectionId);
+        getStats: async function(collectionId) {
+            const chunks = await this.viewChunks(collectionId);
             if (!chunks) return null;
 
-            const chunkArray = Object.values(chunks);
+            const chunkArray = Object.values(chunks).map(chunk => {
+                initializeChunkKeywordMetadata(chunk);
+                return chunk;
+            });
+
             const totalChunks = chunkArray.length;
             const totalSize = chunkArray.reduce((sum, c) => sum + (c.text?.length || 0), 0);
-            const avgSize = totalSize / totalChunks;
+            const avgSize = totalChunks ? Math.round(totalSize / totalChunks) : 0;
+            const sectionCount = [...new Set(chunkArray.map(c => c.section).filter(Boolean))].length;
 
-            const sections = [...new Set(chunkArray.map(c => c.section))];
-            const tags = [...new Set(chunkArray.flatMap(c => c.tags || []))];
-
-            const stats = {
-                totalChunks,
-                totalSize,
-                avgSize: Math.round(avgSize),
-                sections,
-                uniqueTags: tags.length,
-                sampleTags: tags.slice(0, 10)
-            };
-
-            console.log('🥕 Collection Stats:', stats);
-            return stats;
+            return { totalChunks, totalSize, avgSize, sectionCount };
         },
-
-        // View all data (WARNING: can be large)
-        viewAll: function() {
-            const contextLevel = getCurrentContextLevel();
-            const library = getContextualLibrary();
-            console.log(`🥕 Full RAG Library (${contextLevel.toUpperCase()} storage):`, library);
-            return library;
-        },
-
-        // Test RAG query
-        testQuery: async function(characterName, queryText) {
-            console.log('🥕 Testing RAG query for:', characterName);
-            console.log('Query text:', queryText);
-
-            const { queryRAG } = await import('./fullsheet-rag.js');
-            const results = await queryRAG(characterName, queryText);
-
-            console.log('🥕 Query Results:', results);
-            console.log('Total results:', results.length);
-
-            return results;
-        }
     };
 
-    console.log('🥕 RAG Debug utilities loaded. Try:');
-    console.log('  CarrotRAGDebug.viewCollections() - List all collections');
-    console.log('  CarrotRAGDebug.viewChunks("collection_id") - View chunks');
-    console.log('  CarrotRAGDebug.getStats("collection_id") - Get stats');
-    console.log('  CarrotRAGDebug.testQuery("CharName", "query") - Test query');
+        $('.carrot-system-keyword-toggle').on('change', function() {
+            const hash = $(this).data('hash');
+            const keyword = $(this).data('keyword');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) {
+                return;
+            }
 
-    // Initialize viewer context selector
-    const viewerContextLevel = ragState.contextLevel || 'global';
-    $('#carrot_rag_viewer_context').val(viewerContextLevel);
+            const normalized = normalizeKeywordClient(keyword);
+            chunk.disabledKeywords = ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient);
 
-    // RAG Data Viewer UI
-    $('#carrot-rag-refresh-viewer').on('click', function() {
-        // Get the selected context from the viewer dropdown
-        const viewerContext = $('#carrot_rag_viewer_context').val() || 'global';
+            if (this.checked) {
+                chunk.disabledKeywords = chunk.disabledKeywords.filter(value => value !== normalized);
+            } else if (!chunk.disabledKeywords.includes(normalized)) {
+                chunk.disabledKeywords.push(normalized);
+            }
+            updateChunkKeywordCache(chunk);
+            renderChunks(modifiedChunks, getSearchTerm());
+        });
 
-        // Temporarily override the context level for the viewer
-        const originalContext = ragState.contextLevel;
-        ragState.contextLevel = viewerContext;
+        // Keyword weight input handler
+        $('.carrot-keyword-weight-input').on('change', function() {
+            const hash = $(this).data('hash');
+            const keyword = $(this).data('keyword');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) {
+                return;
+            }
 
-        const contextLevel = getCurrentContextLevel();
+            const newWeight = parseInt($(this).val(), 10);
+            const normalized = normalizeKeywordClient(keyword);
+            const defaultPriority = fullsheetAPI.getKeywordPriority ? fullsheetAPI.getKeywordPriority(keyword) : 20;
+
+            if (!chunk.customWeights) {
+                chunk.customWeights = {};
+            }
+
+            // Only store if different from default
+            if (newWeight !== defaultPriority && !isNaN(newWeight)) {
+                chunk.customWeights[normalized] = newWeight;
+            } else {
+                delete chunk.customWeights[normalized];
+            }
+
+            renderChunks(modifiedChunks, getSearchTerm());
+        });
+
+        // Reset weight button handler
+        $('.carrot-reset-weight-btn').on('click', function() {
+            const hash = $(this).data('hash');
+            const keyword = $(this).data('keyword');
+            const chunk = modifiedChunks[hash];
+            if (!chunk || !chunk.customWeights) {
+                return;
+            }
+
+            const normalized = normalizeKeywordClient(keyword);
+            delete chunk.customWeights[normalized];
+
+            renderChunks(modifiedChunks, getSearchTerm());
+        });
+
+        // Keyword weight display click handler
+        // Keyword toggle button handler (enable/disable)
+        $('.carrot-keyword-toggle-btn').on('click', function() {
+            const hash = $(this).data('hash');
+            const keyword = $(this).data('keyword');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) {
+                return;
+            }
+
+            const normalized = normalizeKeywordClient(keyword);
+            chunk.disabledKeywords = ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient);
+
+            const isDisabled = chunk.disabledKeywords.includes(normalized);
+            if (isDisabled) {
+                chunk.disabledKeywords = chunk.disabledKeywords.filter(value => value !== normalized);
+            } else {
+                chunk.disabledKeywords.push(normalized);
+            }
+
+            updateChunkKeywordCache(chunk);
+            renderChunks(modifiedChunks, getSearchTerm());
+        });
+
+        // Show all keywords button handler
+        $('.carrot-show-all-keywords').on('click', function() {
+            const hash = $(this).data('hash');
+            const hiddenDiv = $(`#hidden-keywords-${hash}`);
+            const $btn = $(this);
+
+            if (hiddenDiv.is(':visible')) {
+                hiddenDiv.slideUp(200);
+                $btn.html('<i class="fa-solid fa-chevron-down"></i> Show more keywords');
+            } else {
+                hiddenDiv.slideDown(200);
+                $btn.html('<i class="fa-solid fa-chevron-up"></i> Show fewer keywords');
+            }
+        });
+
+        // Add linked section button handler
+        $('.carrot-add-linked-section').on('click', function() {
+            const hash = $(this).data('hash');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) {
+                return;
+            }
+
+            // Get all sections from all chunks for selection
+            const allSections = Object.values(modifiedChunks)
+                .map(c => c.section)
+                .filter(s => s && s !== chunk.section);
+            const uniqueSections = [...new Set(allSections)].sort();
+
+            if (uniqueSections.length === 0) {
+                toastr.info('No other sections available to link');
+                return;
+            }
+
+            const sectionName = prompt(
+                `Add linked section:\n\nAvailable sections:\n${uniqueSections.slice(0, 10).join('\n')}${uniqueSections.length > 10 ? '\n...' : ''}\n\nEnter section name:`,
+                uniqueSections[0]
+            );
+
+            if (!sectionName || sectionName.trim() === '') return;
+
+            if (!chunk.linkedSections) {
+                chunk.linkedSections = [];
+            }
+
+            if (!chunk.linkedSections.includes(sectionName.trim())) {
+                chunk.linkedSections.push(sectionName.trim());
+                renderChunks(modifiedChunks, getSearchTerm());
+            }
+        });
+
+        // Remove linked section button handler
+        $('.carrot-remove-linked-section').on('click', function() {
+            const hash = $(this).data('hash');
+            const section = $(this).data('section');
+            const chunk = modifiedChunks[hash];
+            if (!chunk || !chunk.linkedSections) {
+                return;
+            }
+
+            chunk.linkedSections = chunk.linkedSections.filter(s => s !== section);
+            renderChunks(modifiedChunks, getSearchTerm());
+        });
+
+        // Delete button handler
+        $('.carrot-chunk-delete-btn').on('click', function() {
+            const hash = $(this).data('hash');
+            const confirmed = confirm('Delete this chunk? This cannot be undone.');
+            if (!confirmed) return;
+
+            delete modifiedChunks[hash];
+            renderChunks(modifiedChunks, getSearchTerm());
+        });
+
+        // Chunk text edit handler
+        $('.carrot-chunk-text-edit').on('input', function() {
+            const hash = $(this).data('hash');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) {
+                return;
+            }
+            chunk.text = $(this).val();
+        });
+
+        // Custom keywords edit handler
+        $('.carrot-custom-keywords').on('input', function() {
+            const hash = $(this).data('hash');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) {
+                return;
+            }
+            const value = $(this).val();
+            chunk.customKeywords = value.split(/[,\n]+/).map(k => k.trim()).filter(Boolean);
+            updateChunkKeywordCache(chunk);
+        });
+
+        // Custom regex edit handler
+        $('.carrot-custom-regex').on('input', function() {
+            const hash = $(this).data('hash');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) {
+                return;
+            }
+            chunk.customRegex = parseRegexList($(this).val());
+        });
+
+        // Reset keywords button handler
+        $('.carrot-reset-keywords').on('click', function() {
+            const hash = $(this).data('hash');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) {
+                return;
+            }
+            chunk.disabledKeywords = [];
+            chunk.customWeights = {};
+            updateChunkKeywordCache(chunk);
+            renderChunks(modifiedChunks, getSearchTerm());
+        });
+    }
+
+    // Modal close handlers
+    $('#carrot-rag-modal-close, #carrot-rag-modal-cancel').on('click', function() {
+        $('#carrot-rag-visualizer-modal').fadeOut(200, function () {
+            $(this).removeClass('is-visible').css('display', 'none');
+        });
+        $('body').css('overflow', '');
+        currentEditingCollection = null;
+        modifiedChunks = {};
+    });
+
+    // Save changes
+    $('#carrot-rag-modal-save').on('click', function() {
+        if (!currentEditingCollection) return;
+
+        // Clean up editing flags
+        Object.values(modifiedChunks).forEach(chunk => delete chunk._editing);
+
+        // Save to contextual library
         const library = getContextualLibrary();
-        const collections = Object.keys(library);
-        const $list = $('#carrot-rag-collections-list');
+        library[currentEditingCollection] = modifiedChunks;
+        saveSettingsDebounced();
 
-        // Restore original context
-        ragState.contextLevel = originalContext;
+        toastr.success('Chunks saved!');
+        $('#carrot-rag-visualizer-modal').fadeOut(200, function () {
+            $(this).removeClass('is-visible').css('display', 'none');
+        });
+        $('body').css('overflow', '');
+        currentEditingCollection = null;
+        modifiedChunks = {};
 
-        if (collections.length === 0) {
-            $list.html(`<div style="color: #ef4444; padding: 10px; background: rgba(239,68,68,0.1); border-radius: 4px;">No collections saved yet for <strong>${contextLevel}</strong> context. Generate and save a fullsheet first!</div>`).show();
-            return;
+        // Refresh the viewer list
+        $('#carrot-rag-refresh-viewer').click();
+    });
+
+    // Search functionality
+    $('#carrot-rag-chunk-search').on('input', async function() {
+        const searchTerm = $(this).val();
+        renderChunks(modifiedChunks, searchTerm);
+    });
+
+    // Format toggle functionality
+    $('#carrot-rag-format-toggle').on('click', function() {
+        chunkFormattingEnabled = !chunkFormattingEnabled;
+
+        const $btn = $(this);
+        const $icon = $btn.find('i');
+        const $label = $btn.find('.chunk-format-label');
+
+        if (chunkFormattingEnabled) {
+            $icon.removeClass('fa-align-left').addClass('fa-file-code');
+            $label.text('Formatted');
+            $btn.attr('title', 'Showing formatted text (click for plain)');
+        } else {
+            $icon.removeClass('fa-file-code').addClass('fa-align-left');
+            $label.text('Plain');
+            $btn.attr('title', 'Showing plain text (click for formatted)');
         }
 
-        let html = `<div style="color: #10b981; margin-bottom: 15px; font-weight: 600;">Found ${collections.length} collection${collections.length > 1 ? 's' : ''} in <span style="text-transform: uppercase; color: #8b5cf6;">${contextLevel}</span> storage</div>`;
+        // Re-render all chunks to apply formatting
+        renderChunks(modifiedChunks, getSearchTerm());
+    });
+
+    
+    // Helper for the viewer to get ALL data for a specific level
+    function getFullLibraryForLevel(level) {
+        console.log(`[getFullLibraryForLevel] Getting full library for level: ${level}`);
+        const ragState = extension_settings[extensionName]?.rag;
+        if (!ragState?.libraries) {
+            console.log('[getFullLibraryForLevel] No libraries found in ragState.');
+            return {};
+        }
+
+        let combinedLibrary = {};
+        switch(level) {
+            case 'character':
+                const allCharLibs = ragState.libraries.character || {};
+                for (const charId in allCharLibs) {
+                    Object.assign(combinedLibrary, allCharLibs[charId]);
+                }
+                return combinedLibrary;
+            case 'chat':
+                const allChatLibs = ragState.libraries.chat || {};
+                 for (const chatId in allChatLibs) {
+                    Object.assign(combinedLibrary, allChatLibs[chatId]);
+                }
+                return combinedLibrary;
+            case 'global':
+            default:
+                return ragState.libraries.global || {};
+        }
+    }
+
+    // RAG Data Viewer UI
+    $(document).on('click', '#carrot-rag-refresh-viewer', function() {
+        console.log('🥕 RAG Viewer: Refresh button clicked.');
+
+        const viewerContext = $('#carrot_rag_viewer_context').val() || 'global';
+        console.log('🥕 RAG Viewer: Context selected:', viewerContext);
+        
+        const library = getFullLibraryForLevel(viewerContext);
+        console.log('🥕 RAG Viewer: Found library:', library);
+
+        const collections = Object.keys(library);
+        console.log('🥕 RAG Viewer: Found collections:', collections);
+
+        const $list = $('#carrot-rag-collections-list');
+
+        if (collections.length === 0) {
+            console.log('🥕 RAG Viewer: No collections found, showing empty state.');
+            $list.html(`<div style="color: #ef4444; padding: 10px; background: rgba(239,68,68,0.1); border-radius: 4px;">No collections saved yet for <strong>${viewerContext}</strong> storage. Generate and save a fullsheet first!</div>`).show();
+            $('#carrot-rag-empty-state').hide();
+            return;
+        }
+        
+        $('#carrot-rag-empty-state').hide();
+        
+        let html = `<div style="color: #10b981; margin-bottom: 15px; font-weight: 600;">Found ${collections.length} collection${collections.length > 1 ? 's' : ''} in <span style="text-transform: uppercase; color: #8b5cf6;">${viewerContext}</span> storage</div>`;
 
         collections.forEach(collectionId => {
             const chunks = library[collectionId];
@@ -11434,268 +11693,75 @@ function bindSettingsEvents() {
 
         $list.html(html).show();
 
-        // Add click handlers for "View Chunks" buttons
         $('.carrot-view-chunks-btn').on('click', function() {
             const collectionId = $(this).data('collection');
             openChunkVisualizer(collectionId);
         });
 
-        // Add click handlers for "Move to..." buttons
         $('.carrot-copy-context-btn').on('click', async function() {
             const collectionId = $(this).data('collection');
             const currentViewerContext = viewerContext;
 
-            // Show context selection popup
             const selectedContextLevel = await showCopyContextPopup(collectionId, currentViewerContext);
 
             if (!selectedContextLevel) {
-                return; // User cancelled
+                return;
             }
 
-            // Get the source library
-            const originalContext = ragState.contextLevel;
-            ragState.contextLevel = currentViewerContext;
-            const sourceLibrary = getContextualLibrary();
+            const sourceLibrary = getFullLibraryForLevel(currentViewerContext);
             const chunks = sourceLibrary[collectionId];
 
             if (!chunks) {
                 toastr.error('Collection not found');
-                ragState.contextLevel = originalContext;
+                return;
+            }
+            
+            const ragState = extension_settings[extensionName].rag;
+
+            // Add to target
+            const targetContext = getContext();
+            let targetId;
+            if (selectedContextLevel === 'character') targetId = targetContext.characterId;
+            if (selectedContextLevel === 'chat') targetId = targetContext.chatId;
+
+            if (selectedContextLevel !== 'global' && (targetId === null || targetId === undefined)) {
+                toastr.error(`No active ${selectedContextLevel} to move data to.`);
                 return;
             }
 
-            // Get the target library
-            ragState.contextLevel = selectedContextLevel;
-            const targetLibrary = getContextualLibrary();
-
-            // Move the collection (copy to target, delete from source)
-            targetLibrary[collectionId] = JSON.parse(JSON.stringify(chunks)); // Deep clone to target
+            if (!ragState.libraries[selectedContextLevel]) ragState.libraries[selectedContextLevel] = {};
+            if (selectedContextLevel !== 'global' && !ragState.libraries[selectedContextLevel][targetId]) {
+                ragState.libraries[selectedContextLevel][targetId] = {};
+            }
+            
+            const targetLib = (selectedContextLevel === 'global') ? ragState.libraries.global : ragState.libraries[selectedContextLevel][targetId];
+            targetLib[collectionId] = JSON.parse(JSON.stringify(chunks));
 
             // Delete from source
-            ragState.contextLevel = currentViewerContext;
-            const sourceLibraryAgain = getContextualLibrary();
-            delete sourceLibraryAgain[collectionId];
+            delete sourceLibrary[collectionId];
 
-            // Restore original context and save
-            ragState.contextLevel = originalContext;
             saveSettingsDebounced();
 
             const characterName = collectionId.replace(/^carrotkernel_char_/, '').replace(/_/g, ' ');
             toastr.success(`Moved ${characterName} from ${currentViewerContext.toUpperCase()} to ${selectedContextLevel.toUpperCase()} storage`);
 
-            // Refresh the viewer to show updated list
             $('#carrot-rag-refresh-viewer').click();
         });
     });
 
-    // Chunk Visualizer Modal Functions
-    let currentEditingCollection = null;
-    let modifiedChunks = {};
+    
+        // Handler for expanding/collapsing chunk details in the RAG viewer
+        $(document).on('click', '.carrot-chunk-toggle-drawer', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
 
-    function openChunkVisualizer(collectionId) {
-        const contextLevel = getCurrentContextLevel();
-        const library = getContextualLibrary();
-        const chunks = library[collectionId];
-        const characterName = collectionId.replace(/^carrotkernel_char_/, '').replace(/_/g, ' ');
+            const $header = $(this).closest('.inline-drawer-header');
+            const $drawer = $header.closest('.inline-drawer');
+            const $content = $drawer.find('.inline-drawer-content');
 
-        currentEditingCollection = collectionId;
-        modifiedChunks = JSON.parse(JSON.stringify(chunks)); // Deep clone
-
-        // Update modal title
-        $('#carrot-rag-modal-title').html(`<i class="fa-solid fa-cube"></i> ${characterName} <span style="font-size: 0.7em; color: #8b5cf6; text-transform: uppercase;">[${contextLevel}]</span>`);
-        $('#carrot-rag-modal-subtitle').text(`${collectionId} - ${Object.keys(chunks).length} chunks`);
-
-        // Render chunks
-        renderChunks(modifiedChunks);
-
-        // Show modal
-        $('#carrot-rag-visualizer-modal').fadeIn(200);
-        $('body').css('overflow', 'hidden'); // Prevent background scrolling
-    }
-
-    function renderChunks(chunks, searchTerm = '') {
-        const chunkArray = Object.entries(chunks).map(([hash, data]) => ({ hash, ...data }));
-
-        // Filter by search term
-        const filtered = searchTerm
-            ? chunkArray.filter(chunk =>
-                chunk.text.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                chunk.section.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                (chunk.topic && chunk.topic.toLowerCase().includes(searchTerm.toLowerCase())) ||
-                (chunk.tags && chunk.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase())))
-            )
-            : chunkArray;
-
-        // Update stats
-        const totalSize = filtered.reduce((sum, c) => sum + (c.text?.length || 0), 0);
-        const avgSize = filtered.length ? Math.round(totalSize / filtered.length) : 0;
-        const sections = [...new Set(filtered.map(c => c.section))];
-
-        $('#carrot-rag-chunk-stats').html(`
-            <div><strong>Showing:</strong> ${filtered.length} / ${chunkArray.length}</div>
-            <div><strong>Total Size:</strong> ${totalSize.toLocaleString()} chars</div>
-            <div><strong>Avg Size:</strong> ${avgSize} chars</div>
-            <div><strong>Sections:</strong> ${sections.length}</div>
-        `);
-
-        // Render chunk cards
-        const container = $('#carrot-rag-chunks-container');
-        if (filtered.length === 0) {
-            container.html('<div style="text-align: center; color: var(--grey70, #94a3b8); padding: 40px; font-size: 1.1em;">No chunks found</div>');
-            return;
-        }
-
-        let html = '';
-        filtered.forEach((chunk, index) => {
-            const isEditing = chunk._editing;
-            html += `
-                <div class="carrot-rag-chunk-card" data-hash="${chunk.hash}" style="background: var(--black10a, rgba(0,0,0,0.1)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 8px; padding: 20px; margin-bottom: 15px; transition: all 0.2s;">
-                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
-                        <div style="flex: 1;">
-                            <div style="color: var(--SmartThemeQuoteColor, #10b981); font-weight: 600; font-size: 1.05em; margin-bottom: 4px;">
-                                ${chunk.section}${chunk.topic ? ` • ${chunk.topic}` : ''}
-                            </div>
-                            ${chunk.tags && chunk.tags.length ? `
-                                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;">
-                                    ${chunk.tags.map(tag => `<span style="background: var(--black30a, rgba(0,0,0,0.3)); color: var(--SmartThemeQuoteColor, #34d399); padding: 3px 8px; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">${tag}</span>`).join('')}
-                                </div>
-                            ` : ''}
-                            <div style="color: var(--grey70, #64748b); font-size: 0.85em; font-family: monospace;">
-                                Hash: ${chunk.hash} | Size: ${chunk.text.length} chars | Index: ${chunk.index}
-                            </div>
-                        </div>
-                        <div style="display: flex; gap: 8px;">
-                            <button class="carrot-chunk-edit-btn" data-hash="${chunk.hash}" style="background: var(--black30a, rgba(0,0,0,0.3)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.2)); color: var(--SmartThemeEmColor, #60a5fa); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.9em; transition: all 0.2s;">
-                                <i class="fa-solid fa-${isEditing ? 'check' : 'edit'}"></i> ${isEditing ? 'Done' : 'Edit'}
-                            </button>
-                            <button class="carrot-chunk-delete-btn" data-hash="${chunk.hash}" style="background: var(--black30a, rgba(0,0,0,0.3)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.2)); color: var(--crimson70, #f87171); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.9em; transition: all 0.2s;">
-                                <i class="fa-solid fa-trash"></i>
-                            </button>
-                        </div>
-                    </div>
-                    ${isEditing ? `
-                        <textarea class="carrot-chunk-text-edit" data-hash="${chunk.hash}" style="width: 100%; min-height: 150px; background: var(--black30a, rgba(0,0,0,0.3)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.2)); border-radius: 6px; padding: 12px; color: var(--SmartThemeEmColor, white); font-family: monospace; font-size: 0.9em; resize: vertical;">${chunk.text}</textarea>
-                    ` : `
-                        <div style="color: var(--SmartThemeEmColor, #cbd5e1); line-height: 1.6; white-space: pre-wrap; font-family: 'Segoe UI', sans-serif; font-size: 0.95em; max-height: 200px; overflow-y: auto; padding: 12px; background: var(--black20a, rgba(0,0,0,0.2)); border-radius: 6px; border-left: 3px solid var(--SmartThemeQuoteColor, #10b981);">${chunk.text}</div>
-                    `}
-                </div>
-            `;
+            $content.slideToggle(200); // Use a standard slide animation
+            $header.toggleClass('open');
         });
-
-        container.html(html);
-
-        // Bind edit buttons
-        $('.carrot-chunk-edit-btn').on('click', function() {
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-
-            if (chunk._editing) {
-                // Save edit
-                const newText = $(`.carrot-chunk-text-edit[data-hash="${hash}"]`).val();
-                chunk.text = newText;
-                chunk._editing = false;
-            } else {
-                // Start editing
-                chunk._editing = true;
-            }
-
-            renderChunks(modifiedChunks, $('#carrot-rag-chunk-search').val());
-        });
-
-        // Bind delete buttons
-        $('.carrot-chunk-delete-btn').on('click', function() {
-            const hash = $(this).data('hash');
-            if (confirm('Delete this chunk? This cannot be undone.')) {
-                delete modifiedChunks[hash];
-                renderChunks(modifiedChunks, $('#carrot-rag-chunk-search').val());
-                toastr.info('Chunk deleted (not saved yet)');
-            }
-        });
-    }
-
-    // Modal close handlers
-    $('#carrot-rag-modal-close, #carrot-rag-modal-cancel').on('click', function() {
-        $('#carrot-rag-visualizer-modal').fadeOut(200);
-        $('body').css('overflow', '');
-        currentEditingCollection = null;
-        modifiedChunks = {};
-    });
-
-    // Save changes
-    $('#carrot-rag-modal-save').on('click', function() {
-        if (!currentEditingCollection) return;
-
-        // Clean up editing flags
-        Object.values(modifiedChunks).forEach(chunk => delete chunk._editing);
-
-        // Save to contextual library
-        const library = getContextualLibrary();
-        library[currentEditingCollection] = modifiedChunks;
-        saveSettingsDebounced();
-
-        toastr.success('Chunks saved!');
-        $('#carrot-rag-visualizer-modal').fadeOut(200);
-        $('body').css('overflow', '');
-        currentEditingCollection = null;
-        modifiedChunks = {};
-
-        // Refresh the viewer list
-        $('#carrot-rag-refresh-viewer').click();
-    });
-
-    // Search functionality
-    $('#carrot-rag-chunk-search').on('input', function() {
-        const searchTerm = $(this).val();
-        renderChunks(modifiedChunks, searchTerm);
-    });
-
-    // Delete All Collections button
-    $('#carrot-rag-clear-collections-btn').on('click', function() {
-        const contextLevel = getCurrentContextLevel();
-        const library = getContextualLibrary();
-        const collectionCount = Object.keys(library).length;
-
-        if (collectionCount === 0) {
-            toastr.info(`No collections to delete in ${contextLevel} storage`);
-            return;
-        }
-
-        const confirmed = confirm(`Delete ALL ${collectionCount} saved collection${collectionCount > 1 ? 's' : ''} from ${contextLevel.toUpperCase()} storage? This cannot be undone!`);
-        if (!confirmed) return;
-
-        // Clear the contextual library
-        const ragState = extension_settings[extensionName].rag;
-        const context = getContext();
-
-        switch (contextLevel) {
-            case 'character':
-                const charId = context?.characterId;
-                if (charId !== null && charId !== undefined && ragState.libraries?.character) {
-                    ragState.libraries.character[charId] = {};
-                }
-                break;
-            case 'chat':
-                const chatId = context?.chatId;
-                if (chatId && ragState.libraries?.chat) {
-                    ragState.libraries.chat[chatId] = {};
-                }
-                break;
-            case 'global':
-            default:
-                if (ragState.libraries?.global) {
-                    ragState.libraries.global = {};
-                }
-                break;
-        }
-
-        saveSettingsDebounced();
-
-        toastr.success(`Deleted ${collectionCount} collection${collectionCount > 1 ? 's' : ''} from ${contextLevel} storage`);
-
-        // Refresh viewer
-        $('#carrot-rag-collections-list').hide();
-        $('#carrot-rag-collections-viewer').find('div').first().text(`All ${contextLevel} collections deleted. Click "Refresh" to see any new ones.`);
-    });
 
     // Lorebook selection toggle
     $(document).on('change', '.carrot-lorebook-toggle', function() {
@@ -11794,7 +11860,7 @@ function bindSettingsEvents() {
     });
     
     // Search functionality
-    $('#carrot-search-lorebooks').on('input', function() {
+    $('#carrot-search-lorebooks').on('input', async function() {
         const searchTerm = $(this).val().toLowerCase();
         $('.carrot-lorebook-item').each(function() {
             const lorebookName = $(this).find('.carrot-lorebook-name').text().toLowerCase();
@@ -11803,7 +11869,7 @@ function bindSettingsEvents() {
     });
 
     // Pack Manager Events
-    $('#carrot_auto_check_updates').prop('checked', settings.autoCheckUpdates !== false).on('change', function() {
+    $('#carrot_auto_check_updates').prop('checked', settings.autoCheckUpdates !== false).on('change', async function() {
         extension_settings[extensionName].autoCheckUpdates = $(this).prop('checked');
         saveSettingsDebounced();
     });
@@ -11992,23 +12058,23 @@ function bindSettingsEvents() {
 
     // Mobile touch support for clickable status panels
     // Add touch event handlers to ensure modals open on mobile devices
-    const mobileClickableSelectors = [
-        '.carrot-status-templates.carrot-clickable',
-        '.carrot-status-packs.carrot-clickable',
-        '.carrot-status-system.carrot-clickable',
-        '.carrot-status-repository.carrot-clickable',
-        '.carrot-loadout-manager.carrot-clickable'
-    ];
+    if ('ontouchstart' in window || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0)) {
+        const mobileClickableSelectors = [
+            '.carrot-status-templates.carrot-clickable',
+            '.carrot-status-packs.carrot-clickable',
+            '.carrot-status-system.carrot-clickable',
+            '.carrot-status-repository.carrot-clickable',
+            '.carrot-loadout-manager.carrot-clickable'
+        ];
 
-    mobileClickableSelectors.forEach(selector => {
-        $(document).on('touchend', selector, function(e) {
-            // Don't prevent default - let onclick work naturally
-            // Just ensure the element is tappable
-            console.log('🥕 MOBILE DEBUG: Touch event fired for:', selector);
+        mobileClickableSelectors.forEach(selector => {
+            $(document).on('touchend', selector, function(e) {
+                // Don't prevent default - let onclick work naturally
+                // Just ensure the element is tappable
+                console.log('MOBILE DEBUG: Touch event fired for:', selector);
+            });
         });
-    });
-
-    console.log('🥕 MOBILE DEBUG: Mobile touch handlers registered for status panels');
+    }
 }
 
 
@@ -17010,7 +17076,7 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
         });
 
         // Lorebook enable/disable toggles
-        $('.lorebook-enable-toggle').off('change').on('change', function() {
+        $('.lorebook-enable-toggle').off('change').on('change', async function() {
             const lorebook = $(this).data('lorebook');
             const isEnabled = $(this).prop('checked');
 
@@ -17132,18 +17198,18 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
         });
         
         // Core settings event binding
-        $('#context-enabled').off('change').on('change', function() {
+        $('#context-enabled').off('change').on('change', async function() {
             const isEnabled = $(this).prop('checked');
             CarrotDebug.ui(`CarrotKernel ${isEnabled ? 'enabled' : 'disabled'} for current context`);
         });
         
-        $('#context-scan-startup').off('change').on('change', function() {
+        $('#context-scan-startup').off('change').on('change', async function() {
             const isEnabled = $(this).prop('checked');
             CarrotDebug.ui(`Auto-scan on startup ${isEnabled ? 'enabled' : 'disabled'}`);
         });
         
         // Display mode radio buttons
-        $('input[name="display-mode"]').off('change').on('change', function() {
+        $('input[name="display-mode"]').off('change').on('change', async function() {
             const displayMode = $(this).val();
             CarrotDebug.ui(`Display mode changed to: ${displayMode}`);
         });
@@ -21248,9 +21314,699 @@ Most common categories:<br/>
 }
 
 // Close the main CarrotKernel object
-};
 
-// =============================================================================
+    // Chunk Visualizer Modal Functions
+    let currentEditingCollection = null;
+    let modifiedChunks = {};
+    let chunkFormattingEnabled = false; // Toggle for formatted text display
+
+    const CUSTOM_KEYWORD_PRIORITY = 140;
+
+    function ensureArrayValue(value) {
+        return Array.isArray(value) ? value : [];
+    }
+
+    /**
+     * Check if a string is a regex pattern
+     * @param {string} str - String to check
+     * @returns {boolean}
+     */
+    function isValidRegex(str) {
+        if (!str) return false;
+        // Check for regex-like patterns (contains special regex chars or slash notation)
+        return /^\/.*\/[gimsuvy]*$/.test(str) || /[\[\](){}.*+?^$|\\]/.test(str);
+    }
+
+    /**
+     * Format chunk text with basic HTML formatting
+     * @param {string} text - Raw text content
+     * @returns {string} - Formatted HTML
+     */
+    function formatChunkText(text) {
+        if (!text) return '';
+
+        let formatted = escapeHtml(text);
+
+        // Convert **bold** to <strong>
+        formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+        // Convert *italic* to <em>
+        formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+        // Convert line breaks to <br>
+        formatted = formatted.replace(/\n/g, '<br>');
+
+        // Convert section headers (lines starting with #)
+        formatted = formatted.replace(/^### (.+?)(<br>|$)/gm, '<h4 style="margin: 12px 0 6px; font-weight: 600;">$1</h4>');
+        formatted = formatted.replace(/^## (.+?)(<br>|$)/gm, '<h3 style="margin: 14px 0 8px; font-weight: 600;">$1</h3>');
+        formatted = formatted.replace(/^# (.+?)(<br>|$)/gm, '<h2 style="margin: 16px 0 10px; font-weight: 600;">$1</h2>');
+
+        return formatted;
+    }
+
+    function normalizeKeywordClient(word) {
+        if (!word) {
+            return '';
+        }
+        let normalized = word.toLowerCase();
+        const replacements = [
+            /(?:ing|ingly)$/,
+            /(?:edly)$/,
+            /(?:tion|tions)$/,
+            /(?:ment|ments)$/,
+            /(?:ness|nesses)$/,
+            /(?:ally)$/,
+            /(?:ies)$/,
+            /(?:ers|er)$/,
+            /(?:less)$/,
+            /(?:ful)$/,
+            /(?:ous)$/,
+            /(?:ly)$/,
+            /(?:ed)$/,
+            /(?:es)$/,
+            /(?:s)$/,
+        ];
+
+        for (const regex of replacements) {
+            if (regex.test(normalized)) {
+                normalized = normalized.replace(regex, '');
+                break;
+            }
+        }
+
+        if (normalized.length < 4) {
+            normalized = word.toLowerCase();
+        }
+
+        return normalized.trim();
+    }
+
+    function formatRegexList(rules) {
+        return ensureArrayValue(rules)
+            .map(rule => {
+                if (!rule) return '';
+                if (typeof rule === 'string') return rule;
+                const flags = rule.flags || 'i';
+                return `${rule.pattern}|${flags}`;
+            })
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    function parseRegexList(input) {
+        if (!input) {
+            return [];
+        }
+        const lines = input.split(/\n+/);
+        const results = [];
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+
+            let pattern = line;
+            let flags = 'i';
+
+            const slashMatch = line.match(/^\/(.+)\/(\w*)$/);
+            if (slashMatch) {
+                pattern = slashMatch[1];
+                flags = slashMatch[2] || 'i';
+            } else if (line.includes('|')) {
+                const parts = line.split('|');
+                pattern = parts.shift();
+                const last = parts.pop();
+                flags = last ? last : 'i';
+            }
+
+            if (!pattern) {
+                continue;
+            }
+
+            results.push({
+                pattern,
+                flags: flags || 'i',
+                priority: CUSTOM_KEYWORD_PRIORITY,
+                source: 'custom',
+            });
+        }
+
+        return results;
+    }
+
+    function normalizeRegexList(list) {
+        return ensureArrayValue(list).map(entry => {
+            if (!entry) return null;
+            if (typeof entry === 'string') {
+                return { pattern: entry, flags: 'i', priority: CUSTOM_KEYWORD_PRIORITY, source: 'custom' };
+            }
+            return {
+                pattern: entry.pattern,
+                flags: entry.flags || 'i',
+                priority: entry.priority ?? CUSTOM_KEYWORD_PRIORITY,
+                source: entry.source || 'custom',
+            };
+        }).filter(Boolean);
+    }
+
+    function updateChunkKeywordCache(chunk) {
+        const disabledSet = new Set(ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient));
+        const systemKeywords = ensureArrayValue(chunk.systemKeywords);
+        const customKeywords = ensureArrayValue(chunk.customKeywords);
+        const allKeywords = Array.from(new Set([...systemKeywords, ...customKeywords]));
+        chunk.keywords = allKeywords.filter(keyword => !disabledSet.has(normalizeKeywordClient(keyword)));
+    }
+
+    function initializeChunkKeywordMetadata(chunk) {
+        chunk.systemKeywords = ensureArrayValue(chunk.systemKeywords && chunk.systemKeywords.length ? chunk.systemKeywords : (chunk.defaultSystemKeywords || chunk.keywords || []));
+        if (!chunk.systemKeywords.length && chunk.text) {
+            chunk.systemKeywords = ensureArrayValue(chunk.keywords);
+        }
+        chunk.defaultSystemKeywords = ensureArrayValue(chunk.defaultSystemKeywords && chunk.defaultSystemKeywords.length ? chunk.defaultSystemKeywords : chunk.systemKeywords);
+        chunk.keywordGroups = ensureArrayValue(chunk.keywordGroups && chunk.keywordGroups.length ? chunk.keywordGroups : (chunk.defaultKeywordGroups || []));
+        chunk.defaultKeywordGroups = ensureArrayValue(chunk.defaultKeywordGroups && chunk.defaultKeywordGroups.length ? chunk.defaultKeywordGroups : chunk.keywordGroups);
+        chunk.keywordRegex = normalizeRegexList(chunk.keywordRegex && chunk.keywordRegex.length ? chunk.keywordRegex : (chunk.defaultKeywordRegex || []));
+        chunk.defaultKeywordRegex = normalizeRegexList(chunk.defaultKeywordRegex && chunk.defaultKeywordRegex.length ? chunk.defaultKeywordRegex : chunk.keywordRegex);
+        chunk.customKeywords = ensureArrayValue(chunk.customKeywords);
+        chunk.customRegex = normalizeRegexList(chunk.customRegex);
+        chunk.disabledKeywords = ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient);
+        chunk.tags = ensureArrayValue(chunk.tags);
+        updateChunkKeywordCache(chunk);
+    }
+
+    const escapeHtml = (value) => {
+        const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        return String(value ?? '').replace(/[&<>"']/g, (char) => map[char]);
+    };
+
+    function openChunkVisualizer(collectionId) {
+        const contextLevel = getCurrentContextLevel();
+        const library = getContextualLibrary();
+        const chunks = library[collectionId];
+        if (!chunks) {
+            toastr.warning('No chunks found for this collection.');
+            return;
+        }
+
+        const characterName = collectionId.replace(/^carrotkernel_char_/, '').replace(/_/g, ' ');
+
+        currentEditingCollection = collectionId;
+        modifiedChunks = JSON.parse(JSON.stringify(chunks));
+        Object.entries(modifiedChunks).forEach(([, chunk]) => {
+            initializeChunkKeywordMetadata(chunk);
+        });
+
+        $('#carrot-rag-modal-title').html(
+            `<i class="fa-solid fa-cube"></i> ${escapeHtml(characterName)} <span style="font-size: 0.7em; color: #8b5cf6; text-transform: uppercase;">[${contextLevel}]</span>`,
+        );
+        $('#carrot-rag-modal-subtitle').text(`${collectionId} - ${Object.keys(chunks).length} chunks`);
+
+        renderChunks(modifiedChunks);
+
+        $('#carrot-rag-visualizer-modal')
+            .addClass('is-visible')
+            .fadeIn(200, function () {
+                $(this).css('display', 'flex');
+            });
+        $('body').css('overflow', 'hidden');
+    }
+
+    function renderChunks(chunks, searchTerm = '') {
+        const chunkArray = Object.entries(chunks || {}).map(([hash, data]) => {
+            const chunk = { hash, ...data };
+            initializeChunkKeywordMetadata(chunk);
+            return chunk;
+        });
+
+        const normalizedSearch = (searchTerm ?? '').toLowerCase().trim();
+        const filtered = normalizedSearch
+            ? chunkArray.filter(chunk => {
+                const text = (chunk.text || '').toLowerCase();
+                const section = (chunk.section || '').toLowerCase();
+                const topic = (chunk.topic || '').toLowerCase();
+                const tags = ensureArrayValue(chunk.tags).map(tag => tag.toLowerCase());
+                const keywords = ensureArrayValue(chunk.keywords).map(keyword => keyword.toLowerCase());
+                const customKeywords = ensureArrayValue(chunk.customKeywords).map(keyword => keyword.toLowerCase());
+                return (
+                    text.includes(normalizedSearch) ||
+                    section.includes(normalizedSearch) ||
+                    topic.includes(normalizedSearch) ||
+                    tags.some(tag => tag.includes(normalizedSearch)) ||
+                    keywords.some(keyword => keyword.includes(normalizedSearch)) ||
+                    customKeywords.some(keyword => keyword.includes(normalizedSearch))
+                );
+            })
+            : chunkArray;
+
+        const totalSize = filtered.reduce((sum, c) => sum + (c.text?.length || 0), 0);
+        const avgSize = filtered.length ? Math.round(totalSize / filtered.length) : 0;
+        const sectionCount = [...new Set(filtered.map(c => c.section).filter(Boolean))].length;
+
+        $('#carrot-rag-chunk-stats').html(`
+            <div class="chunk-stat">
+                <i class="fa-solid fa-layer-group"></i>
+                <span class="chunk-stat__label">Showing</span>
+                <span class="chunk-stat__value">${filtered.length}</span>
+                <span class="chunk-stat__divider">/</span>
+                <span class="chunk-stat__value">${chunkArray.length}</span>
+            </div>
+            <div class="chunk-stat">
+                <i class="fa-solid fa-ruler-horizontal"></i>
+                <span class="chunk-stat__label">Total</span>
+                <span class="chunk-stat__value">${totalSize.toLocaleString()} chars</span>
+            </div>
+            <div class="chunk-stat">
+                <i class="fa-solid fa-scale-balanced"></i>
+                <span class="chunk-stat__label">Average</span>
+                <span class="chunk-stat__value">${avgSize} chars</span>
+            </div>
+            <div class="chunk-stat">
+                <i class="fa-solid fa-diagram-project"></i>
+                <span class="chunk-stat__label">Sections</span>
+                <span class="chunk-stat__value">${sectionCount}</span>
+            </div>
+        `);
+
+        const container = $('#carrot-rag-chunks-container');
+        if (!filtered.length) {
+            container.html(`
+                <div class="chunk-empty-state">
+                    <i class="fa-solid fa-eye-slash"></i>
+                    <p>No chunks match your filters.</p>
+                </div>
+            `);
+            return;
+        }
+
+        const html = filtered.map(chunk => {
+            const chunkHashAttr = escapeHtml(chunk.hash);
+            const sectionTitle = escapeHtml(chunk.section || 'Untitled');
+            const topicTitle = chunk.topic ? ` &bull; ${escapeHtml(chunk.topic)}` : '';
+            const isEditing = !!chunk._editing;
+            const systemKeywords = ensureArrayValue(chunk.systemKeywords);
+            const customKeywords = ensureArrayValue(chunk.customKeywords);
+            const disabledSet = new Set(ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient));
+            const customKeywordSet = new Set(customKeywords.map(normalizeKeywordClient));
+            const activeKeywords = ensureArrayValue(chunk.keywords);
+            const systemRegex = normalizeRegexList(chunk.keywordRegex);
+            const customRegex = normalizeRegexList(chunk.customRegex);
+
+            if (!chunk.linkedSections) chunk.linkedSections = [];
+            if (!chunk.customWeights) chunk.customWeights = {};
+
+            const getWeight = (keyword, normalized) => {
+                const defaultPriority = fullsheetAPI.getKeywordPriority ? fullsheetAPI.getKeywordPriority(keyword) : 20;
+                const customWeight = chunk.customWeights[normalized];
+                return customWeight !== undefined
+                    ? customWeight
+                    : (customKeywordSet.has(normalized) ? CUSTOM_KEYWORD_PRIORITY : defaultPriority);
+            };
+
+            const sortedKeywords = [...activeKeywords].sort((a, b) => {
+                const aNorm = normalizeKeywordClient(a);
+                const bNorm = normalizeKeywordClient(b);
+                return getWeight(b, bNorm) - getWeight(a, aNorm);
+            });
+
+            // Collapsed state: show top 3 keywords as subtle text, not interactive pills
+            const topKeywords = sortedKeywords.slice(0, 3);
+            const collapsedKeywordDisplay = topKeywords.length > 0
+                ? `<span class="chunk-keywords-preview">${topKeywords.map(k => escapeHtml(k)).join(', ')}${sortedKeywords.length > 3 ? ` +${sortedKeywords.length - 3}` : ''}</span>`
+                : `<span class="chunk-keywords-preview empty">No keywords</span>`;
+
+            // Metadata badges (like ST's Position, Depth, Order, Trigger%)
+            const charCount = chunk.text?.length || 0;
+            const metadataBadges = `
+                <div class="chunk-metadata-badges">
+                    <span class="chunk-meta-badge" title="Character count">${charCount}c</span>
+                    ${chunk.index !== undefined ? `<span class="chunk-meta-badge" title="Chunk index">#${chunk.index}</span>` : ''}
+                </div>
+            `;
+
+            const activeKeywordChips = sortedKeywords.map(keyword => {
+                const normalized = normalizeKeywordClient(keyword);
+                const weight = getWeight(keyword, normalized);
+                const isCustom = customKeywordSet.has(normalized);
+                const isDisabled = disabledSet.has(normalized);
+                const classes = ['chunk-keyword-chip'];
+                if (isCustom) classes.push('is-custom');
+                if (isDisabled) classes.push('is-disabled');
+                return `<span class="${classes.join(' ')}">${escapeHtml(keyword)}<span class="chunk-keyword-chip__weight">${weight}</span></span>`;
+            }).join('');
+
+            const activeKeywordHtml = activeKeywordChips
+                ? `
+                    <section class="chunk-keyword-panel">
+                        <header class="chunk-keyword-panel__header">
+                            <span>Active keywords</span>
+                            <span>${sortedKeywords.length}</span>
+                        </header>
+                        <div class="chunk-keyword-panel__body">
+                            ${activeKeywordChips}
+                        </div>
+                    </section>
+                `
+                : '';
+
+            const customKeywordsValue = customKeywords.join(', ');
+            const customRegexValue = formatRegexList(customRegex);
+
+            const systemKeywordGrid = systemKeywords.length
+                ? systemKeywords.map(keyword => {
+                    const normalized = normalizeKeywordClient(keyword);
+                    const checked = !disabledSet.has(normalized);
+                    const weight = getWeight(keyword, normalized);
+                    const defaultPriority = fullsheetAPI.getKeywordPriority ? fullsheetAPI.getKeywordPriority(keyword) : 20;
+                    const hasCustomWeight = chunk.customWeights[normalized] !== undefined;
+                    return `
+                        <div class="chunk-weight-row${checked ? '' : ' is-disabled'}">
+                            <label class="chunk-weight-row__toggle">
+                                <input type="checkbox" class="chunk-weight-row__checkbox carrot-system-keyword-toggle" data-hash="${chunkHashAttr}" data-keyword="${escapeHtml(keyword)}" ${checked ? 'checked' : ''}>
+                                <span class="chunk-weight-row__name">${escapeHtml(keyword)}</span>
+                            </label>
+                            <div class="chunk-weight-row__controls">
+                                <input type="number" class="chunk-weight-row__input carrot-keyword-weight-input" data-hash="${chunkHashAttr}" data-keyword="${escapeHtml(keyword)}" value="${weight}" min="1" max="200" title="${hasCustomWeight ? 'Custom weight' : `Default weight: ${defaultPriority}`}">
+                                ${hasCustomWeight ? `<button type="button" class="chunk-weight-row__reset carrot-reset-weight-btn" data-hash="${chunkHashAttr}" data-keyword="${escapeHtml(keyword)}" title="Reset to default"><i class="fa-solid fa-rotate"></i></button>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('')
+                : '<div class="chunk-keyword-empty">No system keywords detected</div>';
+
+            // Prepare keyword options for select2 - exactly like ST
+            const keywordOptions = sortedKeywords.map(k => escapeHtml(k)).join(',');
+
+            const editingContent = `
+                <div class="world_entry_edit">
+                    <div class="flex-container wide100p alignitemscenter">
+                        <div class="world_entry_form_control keyprimary flex1">
+                            <small class="textAlignCenter">Primary Keywords</small>
+                            <select class="keyprimaryselect keyselect carrot-chunk-keywords" name="key" data-hash="${chunkHashAttr}" placeholder="Keywords or Regexes" multiple="multiple"></select>
+                        </div>
+                    </div>
+                    <div class="world_entry_thin_controls flex-container flexFlowColumn">
+                        <div class="world_entry_form_control flex1">
+                            <label for="content">
+                                <small><span data-i18n="Content">Content</span></small>
+                            </label>
+                            ${chunkFormattingEnabled
+                                ? `<div class="chunk-formatted-display">${formatChunkText(chunk.text || '')}</div>`
+                                : `<textarea class="text_pole autoSetHeight carrot-chunk-text-edit" name="content" data-hash="${chunkHashAttr}" placeholder="Chunk content...">${escapeHtml(chunk.text || '')}</textarea>`
+                            }
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // ST lorebook always shows edit form when expanded (no separate view mode)
+            const isOpen = !!isEditing;
+            const chevronClass = isOpen ? 'fa-circle-chevron-up up' : 'fa-circle-chevron-down down';
+            const bodyContent = editingContent; // Always use edit form when expanded
+
+            const bodyClasses = ['inline-drawer-content', 'inline-drawer-outlet', 'wide100p'];
+            const bodyStyle = isOpen ? 'style="display: block;"' : 'style="display: none;"';
+
+            return `
+                <div class="world_entry" data-hash="${chunkHashAttr}">
+                    <form class="world_entry_form wi-card-entry">
+                        <div class="inline-drawer wide100p">
+                            <div class="inline-drawer-header gap5px padding0">
+                                <span class="drag-handle">&#9776;</span>
+                                <div class="gap5px world_entry_thin_controls wide100p alignitemscenter">
+                                    <div class="inline-drawer-toggle fa-fw fa-solid ${chevronClass} inline-drawer-icon carrot-chunk-toggle-drawer" data-hash="${chunkHashAttr}" aria-expanded="${isOpen ? 'true' : 'false'}"></div>
+                                    <div class="fa-solid fa-toggle-on" title="Entry is active"></div>
+                                    <div class="flex-container alignitemscenter wide100p flexNoGap">
+                                        <div class="WIEntryTitleAndStatus flex-container flex1 alignitemscenter">
+                                            <div class="flex-container flex1">
+                                                <textarea class="text_pole chunk-title-field" rows="1" placeholder="Entry Title/Memo" readonly style="resize: none; cursor: pointer;">${sectionTitle}${topicTitle}</textarea>
+                                            </div>
+                                        </div>
+                                        <div class="chunk-header-right">
+                                            ${collapsedKeywordDisplay}
+                                            ${metadataBadges}
+                                        </div>
+                                    </div>
+                                </div>
+                                <i class="menu_button fa-solid fa-trash-can carrot-chunk-delete-btn" data-hash="${chunkHashAttr}" title="Delete chunk"></i>
+                            </div>
+                            <div class="${bodyClasses.join(' ')}" ${bodyStyle}>
+                                ${bodyContent}
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }).join('');
+
+        container.html(html);
+
+        // Initialize select2 on all keyword selects - copy ST's exact implementation
+        filtered.forEach(chunk => {
+            const hash = chunk.hash;
+            const $select = $(`.carrot-chunk-keywords[data-hash="${hash}"]`);
+            if (!$select.length) return;
+
+            // Get current keywords for this chunk
+            const systemKeywords = ensureArrayValue(chunk.systemKeywords);
+            const customKeywords = ensureArrayValue(chunk.customKeywords);
+            const systemRegex = normalizeRegexList(chunk.keywordRegex);
+            const allKeywords = [...new Set([...systemKeywords, ...customKeywords])];
+            const customKeywordSet = new Set(customKeywords.map(normalizeKeywordClient));
+            const disabledSet = new Set(ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient));
+
+            // Format regex patterns for display (pattern/flags format)
+            const regexItems = systemRegex.map(rule =>
+                `${rule.pattern}${rule.flags ? `/${rule.flags}` : ''}`
+            );
+
+            if (!chunk.customWeights) chunk.customWeights = {};
+
+            const getWeight = (keyword) => {
+                const normalized = normalizeKeywordClient(keyword);
+                const defaultPriority = fullsheetAPI.getKeywordPriority ? fullsheetAPI.getKeywordPriority(keyword) : 20;
+                const customWeight = chunk.customWeights[normalized];
+                return customWeight !== undefined
+                    ? customWeight
+                    : (customKeywordSet.has(normalized) ? CUSTOM_KEYWORD_PRIORITY : defaultPriority);
+            };
+
+            // Initialize select2 FIRST
+            $select.select2({
+                tags: true,
+                tokenSeparators: [','],
+                placeholder: $select.attr('placeholder'),
+                width: '100%',
+                templateSelection: function(item) {
+                    const keyword = item.text;
+                    const isRegex = isValidRegex(keyword);
+
+                    // Regex items - special styling
+                    if (isRegex) {
+                        const $regexTag = $('<span>').addClass('regex_item');
+                        $regexTag.append($('<span>').addClass('regex_icon'));
+                        $regexTag.append(document.createTextNode(` ${keyword}`));
+                        return $regexTag;
+                    }
+
+                    // Regular keyword items
+                    const normalized = normalizeKeywordClient(keyword);
+                    const weight = getWeight(keyword);
+                    const isCustom = customKeywordSet.has(normalized);
+                    const isDisabled = disabledSet.has(normalized);
+
+                    const $tag = $('<span>').addClass('item');
+
+                    // Keyword text
+                    const $text = $('<span>').addClass('keyword-text').text(keyword);
+
+                    // Weight badge - clickable to edit
+                    const $weight = $('<span>')
+                        .addClass('keyword-weight-badge')
+                        .attr('data-keyword', keyword)
+                        .attr('data-hash', hash)
+                        .attr('title', 'Click to edit weight')
+                        .text(`[${weight}]`)
+                        .css({
+                            'opacity': '0.85',
+                            'font-size': '0.85em',
+                            'margin-left': '4px',
+                            'cursor': 'pointer',
+                            'padding': '1px 4px',
+                            'border-radius': '3px',
+                            'background': 'rgba(255,255,255,0.1)',
+                            'font-family': 'monospace'
+                        });
+
+                    $tag.append($text).append($weight);
+
+                    if (isCustom) {
+                        $tag.css('color', 'var(--SmartThemeQuoteColor)');
+                    }
+                    if (isDisabled) {
+                        $tag.css('opacity', '0.5');
+                    }
+
+                    return $tag;
+                }
+            });
+
+            // NOW populate with keywords AND regex AFTER select2 is initialized
+            allKeywords.forEach(keyword => {
+                const option = new Option(keyword, keyword, true, true);
+                $select.append(option);
+            });
+
+            // Add regex patterns as read-only display items
+            regexItems.forEach(regex => {
+                const option = new Option(regex, regex, true, true);
+                $(option).attr('disabled', 'disabled'); // Make read-only
+                $select.append(option);
+            });
+
+            $select.trigger('change.select2');
+
+            // Handle keyword changes
+            $select.on('change', function() {
+                let newKeywords = $(this).val() || [];
+
+                // Filter out regex items (they're read-only display only)
+                const regexSet = new Set(regexItems);
+                newKeywords = newKeywords.filter(k => !regexSet.has(k));
+
+                // Update all keyword arrays
+                chunk.keywords = newKeywords;
+                chunk.systemKeywords = systemKeywords.filter(k => newKeywords.includes(k));
+                chunk.customKeywords = newKeywords.filter(k => !systemKeywords.includes(k));
+
+                // Set default weight for new custom keywords
+                newKeywords.forEach(keyword => {
+                    const normalized = normalizeKeywordClient(keyword);
+                    if (!systemKeywords.includes(keyword) && chunk.customWeights[normalized] === undefined) {
+                        chunk.customWeights[normalized] = CUSTOM_KEYWORD_PRIORITY;
+                    }
+                });
+            });
+
+            // Stop propagation to prevent drawer closing
+            $select.on('click', function(e) {
+                e.stopPropagation();
+            });
+
+            $select.next('.select2-container').on('click', function(e) {
+                e.stopPropagation();
+            });
+
+            // Stop propagation on all input fields to prevent drawer close
+            const $card = $(`.world_entry[data-hash="${hash}"]`);
+            $card.find('textarea, input, select').on('click focus', function(e) {
+                e.stopPropagation();
+            });
+
+            // Save textarea changes to chunk object (only when not in formatted mode)
+            if (!chunkFormattingEnabled) {
+                $card.find('.carrot-chunk-text-edit').on('change input', function() {
+                    chunk.text = $(this).val();
+                });
+            }
+        });
+
+        // Weight editing handler - delegated to handle dynamically rendered badges
+        $(document).off('click', '.keyword-weight-badge').on('click', '.keyword-weight-badge', function(e) {
+            e.stopPropagation();
+            e.preventDefault();
+
+            const $badge = $(this);
+            const keyword = $badge.attr('data-keyword');
+            const hash = $badge.attr('data-hash');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) return;
+
+            const normalized = normalizeKeywordClient(keyword);
+            const currentWeight = chunk.customWeights?.[normalized] ||
+                (ensureArrayValue(chunk.customKeywords).map(normalizeKeywordClient).includes(normalized) ? CUSTOM_KEYWORD_PRIORITY :
+                (fullsheetAPI.getKeywordPriority ? fullsheetAPI.getKeywordPriority(keyword) : 20));
+
+            // Create inline input
+            const $input = $('<input>')
+                .attr('type', 'number')
+                .attr('min', '1')
+                .attr('max', '200')
+                .val(currentWeight)
+                .css({
+                    'width': '60px',
+                    'padding': '2px 4px',
+                    'font-size': '0.85em',
+                    'font-family': 'monospace',
+                    'background': 'var(--SmartThemeUserMesBlurTintColor)',
+                    'border': '1px solid var(--SmartThemeBorderColor)',
+                    'border-radius': '3px',
+                    'color': 'inherit'
+                })
+                .addClass('keyword-weight-input');
+
+            // Replace badge with input
+            $badge.replaceWith($input);
+            $input.focus().select();
+
+            // Save on blur or enter
+            $input.on('blur keydown', function(e) {
+                if (e.type === 'keydown' && e.key !== 'Enter') return;
+
+                const newWeight = parseInt($(this).val()) || currentWeight;
+
+                // Clamp between 1-200
+                const clampedWeight = Math.max(1, Math.min(200, newWeight));
+
+                // Save to chunk
+                if (!chunk.customWeights) chunk.customWeights = {};
+                chunk.customWeights[normalized] = clampedWeight;
+
+                // Re-render to update display
+                renderChunks(modifiedChunks, getSearchTerm());
+            });
+
+            $input.on('click', function(e) {
+                e.stopPropagation();
+            });
+        });
+    }
+
+    const getSearchTerm = () => $('#carrot-rag-chunk-search').val();
+
+    // Drawer toggle handler - clicking expands and shows edit form
+    $(document).on('click', '.carrot-chunk-toggle-drawer, .world_entry_thin_controls, .text_pole[readonly]', function(e) {
+        // Don't toggle if clicking on keyword tags or action buttons
+        if ($(e.target).closest('.tags, .menu_button, .chunk-keywords-preview, .chunk-metadata-badges').length) {
+            return;
+        }
+
+        const $clickedElement = $(this);
+        const hash = $clickedElement.data('hash') || $clickedElement.closest('[data-hash]').data('hash');
+        if (!hash) return;
+
+        const chunk = modifiedChunks[hash];
+        if (!chunk) return;
+
+        const card = $(`.world_entry[data-hash="${hash}"]`);
+        const drawer = card.find('.inline-drawer-content');
+        const icon = card.find('.carrot-chunk-toggle-drawer');
+        const isCurrentlyOpen = drawer.is(':visible');
+
+        if (isCurrentlyOpen) {
+            // Closing - just animate, don't re-render
+            chunk._editing = false;
+            drawer.stop(true, true).slideUp(200);
+            icon.attr('aria-expanded', 'false')
+                .removeClass('fa-circle-chevron-up up')
+                .addClass('fa-circle-chevron-down down');
+        } else {
+            // Opening - set flag and show with animation
+            chunk._editing = true;
+            drawer.stop(true, true).slideDown(200);
+            icon.attr('aria-expanded', 'true')
+                .removeClass('fa-circle-chevron-down down')
+                .addClass('fa-circle-chevron-up up');
+        }
+    });
 // BABY BUNNY MODE MESSAGE BUTTON (following qvink_memory pattern)
 // =============================================================================
 
@@ -21309,6 +22065,86 @@ function initialize_baby_bunny_message_button() {
 
         // Manually trigger the Baby Bunny Mode processing
         await checkForCompletedSheets(targetMessage, message_id);
+
+        // Check if this is also a fullsheet and offer to vectorize
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🔬 CHECKING FOR FULLSHEET VECTORIZATION OPPORTUNITY');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        try {
+            console.log('Step 1: Ensuring RAG module is loaded...');
+            await fullsheetRAGPromise;
+            console.log('   Module loaded successfully');
+
+            console.log('Step 2: Checking if RAG is enabled...');
+            const ragEnabled = extension_settings[extensionName]?.rag?.enabled;
+            console.log(`   RAG enabled: ${ragEnabled}`);
+            console.log(`   Extension settings:`, extension_settings[extensionName]?.rag);
+
+            if (!ragEnabled) {
+                console.log('❌ RAG is not enabled - skipping vectorization check');
+                console.log('   To enable: Go to CarrotKernel settings and enable RAG');
+                return;
+            }
+
+            console.log('Step 3: Detecting fullsheet in message...');
+            console.log(`   Message length: ${targetMessage.mes?.length || 0} chars`);
+            console.log(`   Message preview:`, targetMessage.mes?.substring(0, 200));
+
+            const fullsheetInfo = fullsheetAPI.detectFullsheetInMessage(targetMessage.mes);
+
+            console.log('Step 4: Fullsheet detection result:');
+            if (fullsheetInfo) {
+                console.log('✅ FULLSHEET DETECTED!');
+                console.log('   Character:', fullsheetInfo.characterName);
+                console.log('   Section count:', fullsheetInfo.sectionCount);
+                console.log('   Content length:', fullsheetInfo.content.length);
+            } else {
+                console.log('❌ NOT A FULLSHEET');
+                console.log('   Possible reasons:');
+                console.log('   - Message too short (< 5000 chars)');
+                console.log('   - Missing SECTION headers (need at least 3)');
+                console.log('   - Missing BunnymoTags');
+                return;
+            }
+
+            console.log('Step 5: Showing confirmation dialog...');
+
+            // Ask user if they want to vectorize
+            const shouldVectorize = confirm(
+                `🔬 Fullsheet Detected!\n\n` +
+                `Character: ${fullsheetInfo.characterName}\n` +
+                `Sections: ${fullsheetInfo.sectionCount}\n` +
+                `Size: ${Math.round(fullsheetInfo.content.length / 1000)}KB\n\n` +
+                `Would you like to vectorize this fullsheet for RAG (Retrieval-Augmented Generation)?\n\n` +
+                `This will enable smart context injection during chats with this character.`
+            );
+
+            if (shouldVectorize) {
+                console.log('✅ User confirmed - starting vectorization...');
+                toastr.info('🔬 Vectorizing fullsheet...', 'RAG System', { timeOut: 3000 });
+
+                const success = await fullsheetAPI.vectorizeFullsheetFromMessage(
+                    fullsheetInfo.characterName,
+                    fullsheetInfo.content
+                );
+
+                if (success) {
+                    toastr.success(
+                        `✅ ${fullsheetInfo.characterName} fullsheet vectorized successfully!`,
+                        'RAG System',
+                        { timeOut: 5000 }
+                    );
+                }
+            } else {
+                console.log('❌ User declined vectorization');
+            }
+        } catch (error) {
+            console.error('❌ Error checking for fullsheet vectorization:', error);
+            console.error('   Error stack:', error.stack);
+        }
+
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
     });
 }
 
@@ -21501,3 +22337,9 @@ document.addEventListener('click', function(e) {
         }, 300);
     }
 }, true);
+
+
+
+
+
+

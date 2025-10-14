@@ -429,17 +429,6 @@
                         </div>
                     </div>
 
-                    <div class="carrot-action-bar">
-                        <button id="carrot-rag-vectorize-btn" class="carrot-primary-btn">
-                            <i class="fa-solid fa-cube"></i>
-                            Save All Fullsheets in Chat
-                        </button>
-                        <button id="carrot-rag-clear-collections-btn" class="carrot-danger-btn">
-                            <i class="fa-solid fa-trash"></i>
-                            Delete All Saved Data
-                        </button>
-                    </div>
-
                     <!-- RAG Data Viewer -->
                     <div class="inline-drawer" style="margin-top: 24px;">
                         <div class="inline-drawer-toggle inline-drawer-header" style="padding: 14px 18px; background: var(--black30a, rgba(0,0,0,0.3)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 8px; cursor: pointer; transition: all 0.2s;">
@@ -807,56 +796,47 @@
             </div>
 
             <!-- RAG Chunk Visualizer Modal -->
-            <div id="carrot-rag-visualizer-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.85)); z-index: 10000; overflow-y: auto;">
-                <div style="max-width: 1200px; margin: 50px auto; background: var(--SmartThemeBodyColor, #1e293b); border-radius: 12px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); padding: 0; position: relative; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">
-                    <!-- Header -->
-                    <div style="background: linear-gradient(135deg, color-mix(in srgb, var(--SmartThemeBodyColor, #1e293b) 80%, var(--SmartThemeQuoteColor, #10b981) 20%), var(--SmartThemeBodyColor, #1e293b)); padding: 24px 30px; border-radius: 12px 12px 0 0; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">
-                        <div>
-                            <h2 id="carrot-rag-modal-title" style="margin: 0; color: var(--SmartThemeEmColor, white); font-size: 1.5em; font-weight: 700;">
+            <div id="carrot-rag-visualizer-modal" class="carrot-rag-overlay">
+                <section class="drawer-content chunk-modal" role="dialog" aria-modal="true" aria-labelledby="carrot-rag-modal-title">
+                    <header class="chunk-modal__header flex-container alignitemscenter spaceBetween">
+                        <div class="chunk-modal__title flex-container flexFlowColumn">
+                            <h2 id="carrot-rag-modal-title" class="chunk-modal__heading">
                                 <i class="fa-solid fa-cube"></i> Chunk Visualizer
                             </h2>
-                            <p id="carrot-rag-modal-subtitle" style="margin: 5px 0 0 0; color: var(--SmartThemeEmColor, rgba(255,255,255,0.9)); font-size: 0.95em; opacity: 0.9;"></p>
+                            <p id="carrot-rag-modal-subtitle" class="chunk-modal__subtitle"></p>
                         </div>
-                        <button id="carrot-rag-modal-close" style="background: rgba(255,255,255,0.2); border: none; color: var(--SmartThemeEmColor, white); width: 40px; height: 40px; border-radius: 50%; cursor: pointer; font-size: 1.2em; transition: all 0.2s; display: flex; align-items: center; justify-content: center;">
+                        <button id="carrot-rag-modal-close" class="menu_button chunk-modal__close" type="button" aria-label="Close chunk viewer">
                             <i class="fa-solid fa-times"></i>
                         </button>
+                    </header>
+                    <div class="chunk-modal__toolbar flex-container alignitemscenter">
+                        <input type="text" id="carrot-rag-chunk-search" class="text_pole textarea_compact chunk-search-input" placeholder="Search chunks...">
+                        <button id="carrot-rag-format-toggle" class="menu_button chunk-format-toggle" type="button" title="Toggle formatted text display">
+                            <i class="fa-solid fa-align-left"></i>
+                            <span class="chunk-format-label">Plain</span>
+                        </button>
+                        <div id="carrot-rag-chunk-stats" class="chunk-stat-list flex-container alignitemscenter" aria-live="polite"></div>
                     </div>
-
-                    <!-- Search and Stats Bar -->
-                    <div style="padding: 20px 30px; background: var(--black30a, rgba(0,0,0,0.3)); border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">
-                        <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-                            <input type="text" id="carrot-rag-chunk-search" placeholder="🔍 Search chunks..." style="flex: 1; min-width: 250px; padding: 10px 15px; background: var(--black30a, rgba(0,0,0,0.3)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.2)); border-radius: 6px; color: var(--SmartThemeEmColor, white); font-size: 0.95em;">
-                            <div id="carrot-rag-chunk-stats" style="display: flex; gap: 20px; color: var(--grey70, #94a3b8); font-size: 0.9em;">
-                                <!-- Stats will be populated here -->
-                            </div>
-                        </div>
+                    <div id="carrot-rag-chunks-container" class="chunk-list">
+                        <!-- Chunks populated dynamically -->
                     </div>
-
-                    <!-- Chunks Container -->
-                    <div id="carrot-rag-chunks-container" style="padding: 30px; max-height: 70vh; overflow-y: auto; background: var(--SmartThemeBodyColor, #1e293b);">
-                        <!-- Chunks will be populated here -->
-                    </div>
-
-                    <!-- Footer Actions -->
-                    <div style="padding: 20px 30px; background: var(--black30a, rgba(0,0,0,0.3)); border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 0 0 12px 12px; display: flex; justify-content: space-between; align-items: center;">
-                        <div style="color: var(--grey70, #94a3b8); font-size: 0.9em;">
+                    <footer class="chunk-modal__footer flex-container alignitemscenter spaceBetween">
+                        <div class="chunk-footer__info">
                             <i class="fa-solid fa-info-circle"></i> Click any chunk to edit, or delete unwanted chunks
                         </div>
-                        <div style="display: flex; gap: 10px;">
-                            <button id="carrot-rag-modal-save" class="carrot-primary-btn" style="padding: 10px 20px;">
+                        <div class="chunk-footer__actions flex-container alignitemscenter">
+                            <button id="carrot-rag-modal-save" class="carrot-primary-btn chunk-footer__button" type="button">
                                 <i class="fa-solid fa-save"></i> Save Changes
                             </button>
-                            <button id="carrot-rag-modal-cancel" class="carrot-secondary-btn" style="padding: 10px 20px;">
+                            <button id="carrot-rag-modal-cancel" class="carrot-secondary-btn chunk-footer__button" type="button">
                                 Cancel
                             </button>
                         </div>
-                    </div>
-                </div>
+                    </footer>
+                </section>
             </div>
-
 
             </div>
         </div>
     </div>
 </div>
-

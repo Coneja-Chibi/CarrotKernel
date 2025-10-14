@@ -1723,7 +1723,7 @@
     /* Optimized backdrop filter for performance */
     backdrop-filter: blur(2px);
     contain: layout style paint;
-    z-index: 1000;
+    z-index: 999997;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -5786,4 +5786,493 @@
 /* Keep the Enable toggle clickable */
 #carrot-rag-settings.carrot-disabled #carrot_rag_enabled {
     pointer-events: auto;
+}
+/* =============================================================================
+   RAG CHUNK VISUALIZER MODAL STYLING
+   ============================================================================= */
+
+/* Modal overlay */
+.carrot-rag-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 3100;
+    justify-content: center;
+    align-items: center;
+    backdrop-filter: blur(4px);
+}
+
+.carrot-rag-overlay.is-visible {
+    display: flex !important;
+}
+
+/* Modal container */
+.chunk-modal {
+    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.9));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+    border-radius: 12px;
+    width: 90vw;
+    max-width: 1400px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    animation: modalSlideIn 0.3s ease;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Modal header */
+.chunk-modal__header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+    background: var(--black10a, rgba(0, 0, 0, 0.2));
+}
+
+.chunk-modal__heading {
+    margin: 0;
+    font-size: 1.4em;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    letter-spacing: 0.01em;
+}
+
+.chunk-modal__subtitle {
+    margin: 4px 0 0 0;
+    font-size: 0.9em;
+    opacity: 0.7;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+}
+
+.chunk-modal__close {
+    font-size: 1.5em;
+    padding: 8px;
+    transition: all 0.15s ease;
+    opacity: 0.7;
+}
+
+.chunk-modal__close:hover {
+    opacity: 1;
+    transform: scale(1.1);
+    color: #ff6b6b;
+}
+
+/* Toolbar */
+.chunk-modal__toolbar {
+    padding: 16px 24px;
+    gap: 16px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+    background: var(--black10a, rgba(0, 0, 0, 0.1));
+}
+
+.chunk-search-input {
+    flex: 1;
+    max-width: 400px;
+    transition: all 0.2s ease;
+}
+
+.chunk-search-input:focus {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, transparent);
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+.chunk-stat-list {
+    gap: 20px;
+    flex: 1;
+    justify-content: flex-end;
+}
+
+.chunk-stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.9em;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 8%, transparent);
+    transition: all 0.15s ease;
+}
+
+.chunk-stat:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 15%, transparent);
+}
+
+.chunk-stat i {
+    color: var(--SmartThemeQuoteColor, #10b981);
+    opacity: 0.9;
+}
+
+.chunk-stat__label {
+    opacity: 0.75;
+    font-weight: 500;
+}
+
+.chunk-stat__value {
+    font-weight: 700;
+    font-family: monospace;
+}
+
+.chunk-stat__divider {
+    opacity: 0.5;
+}
+
+/* Chunk list container */
+.chunk-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 24px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 50%, transparent);
+}
+
+.chunk-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+.chunk-list::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--SmartThemeBorderColor) 60%, transparent);
+    border-radius: 4px;
+}
+
+.chunk-list::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--SmartThemeBorderColor) 80%, transparent);
+}
+
+/* Modal footer */
+.chunk-modal__footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+    background: var(--black10a, rgba(0, 0, 0, 0.2));
+}
+
+.chunk-footer__info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+.chunk-footer__actions {
+    gap: 12px;
+}
+
+.chunk-footer__button {
+    padding: 10px 20px;
+}
+
+/* Chunk viewer - regex and keyword styling improvements */
+.regex_item .regex_icon {
+    background-color: var(--black30a);
+    color: var(--SmartThemeBodyColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 7px;
+    font-weight: bold;
+    font-size: calc(var(--mainFontSize) * 0.75);
+    padding: 0px 3px;
+    position: relative;
+    top: -1px;
+    margin-right: 3px;
+}
+
+.regex_item .regex_icon::before {
+    content: ".*";
+    font-family: monospace;
+}
+
+.chunk-tag__weight {
+    opacity: 0.7;
+    font-size: 0.85em;
+    font-family: monospace;
+    margin-left: 4px;
+}
+
+.chunk-tag--custom {
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 15%, transparent) !important;
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, transparent) !important;
+}
+
+.chunk-tag--custom .chunk-tag__weight {
+    color: var(--SmartThemeQuoteColor);
+    opacity: 1;
+}
+
+.chunk-tag--disabled {
+    opacity: 0.5;
+    border-style: dashed !important;
+}
+
+.chunk-tag__overflow {
+    opacity: 0.6;
+    font-size: 0.85em;
+    margin-left: 6px;
+}
+
+/* Minimal chunk viewer styling - let ST classes handle everything */
+#carrot-rag-chunks-container .world_entry {
+    margin-bottom: 5px;
+    transition: all 0.2s ease;
+}
+
+#carrot-rag-chunks-container .world_entry:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Chunk header refinements */
+.chunk-title-field {
+    font-weight: 500;
+    letter-spacing: 0.01em;
+}
+
+.chunk-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: 12px;
+}
+
+/* Keywords preview - subtle text in collapsed state */
+.chunk-keywords-preview {
+    font-size: 0.9em;
+    color: var(--SmartThemeEmColor);
+    opacity: 0.75;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+    font-weight: 400;
+}
+
+.chunk-keywords-preview.empty {
+    opacity: 0.5;
+    font-style: italic;
+}
+
+/* Metadata badges - clean, minimal design like ST's Position/Depth/Order badges */
+.chunk-metadata-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chunk-meta-badge {
+    font-size: 0.85em;
+    font-family: monospace;
+    font-weight: 500;
+    padding: 2px 8px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 60%, transparent);
+    border-radius: 4px;
+    color: var(--SmartThemeEmColor);
+    opacity: 0.85;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+}
+
+.chunk-meta-badge:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 20%, transparent);
+}
+
+/* Regex container styling to match ST input fields */
+.regex_item_container {
+    min-height: 34px;
+    padding: 6px;
+    background: var(--SmartThemeUserMesBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 5px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+
+/* Weight display in collapsed header tags */
+.chunk-tag__weight {
+    opacity: 0.7;
+    font-size: 0.85em;
+    font-family: monospace;
+    margin-left: 3px;
+}
+
+.chunk-tag--custom .chunk-tag__weight {
+    color: var(--SmartThemeQuoteColor);
+    opacity: 1;
+}
+
+/* Weight badge in select2 - clickable */
+.keyword-weight-badge {
+    transition: all 0.15s ease;
+}
+
+.keyword-weight-badge:hover {
+    opacity: 1 !important;
+    background: rgba(255, 255, 255, 0.2) !important;
+    transform: scale(1.05);
+}
+
+/* Weight input while editing */
+.keyword-weight-input {
+    animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Drag handle refinement */
+#carrot-rag-chunks-container .drag-handle {
+    opacity: 0.4;
+    transition: opacity 0.15s ease;
+    font-size: 1em;
+}
+
+#carrot-rag-chunks-container .world_entry:hover .drag-handle {
+    opacity: 0.7;
+}
+
+/* Chevron refinement */
+#carrot-rag-chunks-container .inline-drawer-toggle {
+    transition: transform 0.2s ease, opacity 0.15s ease;
+}
+
+#carrot-rag-chunks-container .inline-drawer-toggle:hover {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+/* Toggle icon refinement */
+#carrot-rag-chunks-container .fa-toggle-on {
+    color: var(--SmartThemeQuoteColor);
+    opacity: 0.85;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+#carrot-rag-chunks-container .fa-toggle-on:hover {
+    opacity: 1;
+    transform: scale(1.05);
+}
+
+/* Delete button refinement */
+#carrot-rag-chunks-container .carrot-chunk-delete-btn {
+    opacity: 0.6;
+    transition: all 0.15s ease;
+}
+
+#carrot-rag-chunks-container .carrot-chunk-delete-btn:hover {
+    opacity: 1;
+    color: #ff6b6b;
+    transform: scale(1.1);
+}
+
+/* Expanded content refinement */
+#carrot-rag-chunks-container .inline-drawer-content {
+    padding-top: 12px;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 40%, transparent);
+}
+
+/* Select2 container polish */
+#carrot-rag-chunks-container .select2-container {
+    transition: all 0.2s ease;
+}
+
+#carrot-rag-chunks-container .select2-container:focus-within {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, transparent);
+}
+
+/* Content textarea refinement */
+#carrot-rag-chunks-container .carrot-chunk-text-edit {
+    line-height: 1.5;
+    letter-spacing: 0.01em;
+}
+
+/* Label typography */
+#carrot-rag-chunks-container .world_entry_form_control label small {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    font-size: 0.8em;
+    opacity: 0.85;
+}
+
+/* Format toggle button */
+.chunk-format-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 60%, transparent);
+    transition: all 0.15s ease;
+    font-size: 0.9em;
+    font-weight: 500;
+}
+
+.chunk-format-toggle:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 20%, transparent);
+    transform: translateY(-1px);
+}
+
+.chunk-format-toggle i {
+    font-size: 1em;
+}
+
+.chunk-format-label {
+    font-family: monospace;
+    font-size: 0.9em;
+}
+
+/* Formatted text display */
+.chunk-formatted-display {
+    padding: 12px;
+    background: var(--SmartThemeUserMesBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 5px;
+    line-height: 1.6;
+    letter-spacing: 0.01em;
+    min-height: 100px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.chunk-formatted-display strong {
+    font-weight: 600;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.chunk-formatted-display em {
+    font-style: italic;
+    opacity: 0.9;
+}
+
+.chunk-formatted-display h2,
+.chunk-formatted-display h3,
+.chunk-formatted-display h4 {
+    color: var(--SmartThemeEmColor);
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 40%, transparent);
+    padding-bottom: 4px;
 }
