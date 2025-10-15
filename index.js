@@ -11886,57 +11886,57 @@ function bindSettingsEvents() {
             if (!chunk) return;
             chunk.inclusionPrioritize = this.checked;
         });
-
-        // Chunk link checkbox handler
-        $('.carrot-chunk-link-checkbox').on('change', function() {
-            const hash = $(this).data('hash');
-            const targetHash = $(this).data('target');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) return;
-
-            if (!chunk.chunkLinks) chunk.chunkLinks = [];
-
-            if (this.checked) {
-                // Get selected mode from radio buttons
-                const mode = $(`.carrot-link-mode-radio[data-hash="${hash}"]:checked`).val() || 'soft';
-
-                // Add link if not already present
-                if (!chunk.chunkLinks.some(link => link.targetHash === targetHash)) {
-                    chunk.chunkLinks.push({ targetHash, mode });
-                }
-            } else {
-                // Remove link
-                chunk.chunkLinks = chunk.chunkLinks.filter(link => link.targetHash !== targetHash);
-            }
-
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
     }
 
-    // Inline drawer toggle for linked chunks section (delegated event)
-    $(document).on('click', '.world_entry_thin_controls .inline-drawer-toggle', function(e) {
-        e.stopPropagation();
-        e.preventDefault();
+    // Chunk link checkbox handler (delegated event)
+    $(document).on('change', '.carrot-chunk-link-checkbox', function() {
+        const hash = $(this).data('hash');
+        const targetHash = $(this).data('target');
+        const chunk = modifiedChunks[hash];
+        if (!chunk) return;
 
-        const $toggle = $(this);
-        const $drawer = $toggle.closest('.inline-drawer');
-        const $content = $drawer.find('.inline-drawer-content');
-        const $icon = $toggle.find('.inline-drawer-icon');
+        if (!chunk.chunkLinks) chunk.chunkLinks = [];
 
-        if ($content.is(':visible')) {
-            $content.slideUp(200);
-            $icon.removeClass('fa-circle-chevron-up up').addClass('fa-circle-chevron-down down');
+        if (this.checked) {
+            // Get selected mode from radio buttons
+            const mode = $(`.carrot-link-mode-radio[data-hash="${hash}"]:checked`).val() || 'soft';
+
+            // Add link if not already present
+            if (!chunk.chunkLinks.some(link => link.targetHash === targetHash)) {
+                chunk.chunkLinks.push({ targetHash, mode });
+            }
         } else {
-            $content.slideDown(200);
-            $icon.removeClass('fa-circle-chevron-down down').addClass('fa-circle-chevron-up up');
+            // Remove link
+            chunk.chunkLinks = chunk.chunkLinks.filter(link => link.targetHash !== targetHash);
         }
+
+        renderChunks(modifiedChunks, getSearchTerm());
     });
+
+    // Link mode radio button handler (delegated event)
+    $(document).on('change', '.carrot-link-mode-radio', function() {
+        const hash = $(this).data('hash');
+        const newMode = $(this).val();
+        const chunk = modifiedChunks[hash];
+        if (!chunk || !chunk.chunkLinks) return;
+
+        // Update mode for all existing links of this chunk
+        chunk.chunkLinks.forEach(link => {
+            link.mode = newMode;
+        });
+
+        renderChunks(modifiedChunks, getSearchTerm());
+    });
+
+    // Inline drawer toggle for linked chunks section - Let ST's native handler manage this
+    // No custom handler needed since we're using ST's standard inline-drawer structure
 
     // Modal close handlers
     $('#carrot-rag-modal-close, #carrot-rag-modal-cancel').on('click', function() {
-        // Clean up all event handlers to prevent auto-opening
+        // Clean up only our specific event handlers
         $(document).off('click', '.carrot-chunk-toggle-drawer');
-        $(document).off('click', '.world_entry_thin_controls');
+        // DO NOT remove .world_entry_thin_controls handlers - that breaks ST's native lorebook!
+        // Our delegated handlers are specific enough that they won't leak
         $(document).off('click', '.text_pole[readonly]');
         $(document).off('click', '.keyword-weight-badge');
         $(document).off('click', '.carrot-chunk-delete-btn');
@@ -11956,9 +11956,9 @@ function bindSettingsEvents() {
         // Clean up editing flags
         Object.values(modifiedChunks).forEach(chunk => delete chunk._editing);
 
-        // Clean up all event handlers
+        // Clean up only our specific event handlers
         $(document).off('click', '.carrot-chunk-toggle-drawer');
-        $(document).off('click', '.world_entry_thin_controls');
+        // DO NOT remove .world_entry_thin_controls handlers - that breaks ST's native lorebook!
         $(document).off('click', '.text_pole[readonly]');
         $(document).off('click', '.keyword-weight-badge');
         $(document).off('click', '.carrot-chunk-delete-btn');
@@ -22420,6 +22420,22 @@ Most common categories:<br/>
             const chunkLinksArray = ensureArrayValue(chunk.chunkLinks);
             const chunkLinksMap = new Map(chunkLinksArray.map(link => [link.targetHash, link.mode]));
 
+            // Find incoming links (other chunks that link TO this chunk)
+            const incomingLinks = Object.entries(modifiedChunks)
+                .filter(([h, c]) => h !== chunk.hash && ensureArrayValue(c.chunkLinks).some(link => link.targetHash === chunk.hash))
+                .map(([h, c]) => ({
+                    hash: h,
+                    title: c.comment || c.section || 'Untitled',
+                    mode: ensureArrayValue(c.chunkLinks).find(link => link.targetHash === chunk.hash)?.mode || 'soft'
+                }));
+
+            // Find outgoing links (this chunk links TO others)
+            const outgoingLinks = chunkLinksArray.map(link => ({
+                hash: link.targetHash,
+                title: modifiedChunks[link.targetHash]?.comment || modifiedChunks[link.targetHash]?.section || 'Untitled',
+                mode: link.mode
+            })).filter(link => modifiedChunks[link.hash]); // Only include links to existing chunks
+
             const availableChunks = Object.entries(modifiedChunks)
                 .filter(([h, c]) => h !== chunk.hash)
                 .map(([h, c]) => ({
@@ -22435,6 +22451,18 @@ Most common categories:<br/>
                         <div class="world_entry_form_control keyprimary flex1">
                             <small class="textAlignCenter">Primary Keywords</small>
                             <select class="keyprimaryselect keyselect carrot-chunk-keywords" name="key" data-hash="${chunkHashAttr}" placeholder="Keywords or Regexes" multiple="multiple"></select>
+                        </div>
+                    </div>
+
+                    <div class="world_entry_thin_controls flex-container flexFlowColumn">
+                        <div class="world_entry_form_control flex1">
+                            <label for="content">
+                                <small><span data-i18n="Content">Content</span></small>
+                            </label>
+                            ${chunkFormattingEnabled
+                                ? `<div class="chunk-formatted-display" data-hash="${chunkHashAttr}" style="cursor: pointer; padding: 10px; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 4px; min-height: 100px;" title="Click to edit">${formatChunkText(chunk.text || '')}</div>`
+                                : `<textarea class="text_pole autoSetHeight carrot-chunk-text-edit" name="content" data-hash="${chunkHashAttr}" placeholder="Chunk content...">${escapeHtml(chunk.text || '')}</textarea>`
+                            }
                         </div>
                     </div>
 
@@ -22457,53 +22485,89 @@ Most common categories:<br/>
                         <small style="opacity: 0.7; font-size: 0.85em; display: block;">Only one entry with the same label will be activated</small>
                     </div>
 
-                    <!-- Linked Chunks Section (ST "Additional Matching Sources" Style) -->
-                    <div class="world_entry_thin_controls inline-drawer" style="margin-top: 12px;">
-                        <div class="inline-drawer-toggle inline-drawer-header" style="background: transparent; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 6px; padding: 10px; cursor: pointer;">
-                            <div class="flex-container alignitemscenter wide100p">
-                                <div class="flex1">
-                                    <small>Linked Chunks</small>
+                    <!-- Link Relationship Summary -->
+                    ${(incomingLinks.length > 0 || outgoingLinks.length > 0) ? `
+                        <div style="margin-top: 12px; padding: 8px; background: var(--black10a, rgba(0,0,0,0.1)); border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 6px; font-size: 0.9em;">
+                            ${outgoingLinks.length > 0 ? `
+                                <div style="margin-bottom: ${incomingLinks.length > 0 ? '6px' : '0'};">
+                                    <small style="opacity: 0.7;">This activates:</small>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;">
+                                        ${outgoingLinks.map(link => `
+                                            <span style="padding: 2px 6px; background: var(--black20a, rgba(0,0,0,0.2)); border-radius: 4px; display: flex; align-items: center; gap: 4px;">
+                                                <span class="fa-solid fa-arrow-right" style="font-size: 0.7em; color: var(--SmartThemeBorderColor);"></span>
+                                                <span>${escapeHtml(link.title)}</span>
+                                                <span class="fa-solid fa-${link.mode === 'force' ? 'bolt' : 'arrow-up'}" style="color: ${link.mode === 'force' ? 'var(--SmartThemeQuoteColor)' : 'var(--SmartThemeEmColor)'}; font-size: 0.7em;"></span>
+                                            </span>
+                                        `).join('')}
+                                    </div>
                                 </div>
-                                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down" style="color: #3b82f6;"></div>
-                            </div>
-                        </div>
-                        <div class="inline-drawer-content" style="display: none; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-top: none; border-radius: 0 0 6px 6px; padding: 10px; background: var(--black10a, rgba(0,0,0,0.1));">
-                            <div class="chunk-links-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px;">
-                                ${availableChunks.map(target => `
-                                    <label class="checkbox_label flex-container alignitemscenter" style="gap: 6px; padding: 6px; border-radius: 4px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='var(--black30a, rgba(0,0,0,0.2))'" onmouseout="this.style.background=''">
-                                        <span class="fa-solid fa-circle" style="color: #3b82f6; font-size: 0.6em;"></span>
-                                        <input type="checkbox" class="carrot-chunk-link-checkbox" data-hash="${chunkHashAttr}" data-target="${escapeHtml(target.hash)}" data-mode="${target.mode}" ${target.linked ? 'checked' : ''}>
-                                        <small style="flex: 1;">${escapeHtml(target.title)}</small>
-                                        ${target.linked ? `<span class="fa-solid fa-${target.mode === 'force' ? 'bolt' : 'arrow-up'}" style="color: ${target.mode === 'force' ? '#ef4444' : '#10b981'}; font-size: 0.8em;" title="${target.mode === 'force' ? 'Force (always)' : 'Soft (boost)'}"></span>` : ''}
-                                    </label>
-                                `).join('')}
-                            </div>
-                            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">
-                                <small style="opacity: 0.7; font-size: 0.85em; display: block; margin-bottom: 6px;">Link Mode:</small>
-                                <div class="flex-container alignitemscenter" style="gap: 12px;">
-                                    <label class="checkbox_label flex-container alignitemscenter" style="gap: 4px;">
-                                        <input type="radio" name="chunk-link-mode-${chunkHashAttr}" value="soft" class="carrot-link-mode-radio" data-hash="${chunkHashAttr}" checked>
-                                        <small><span class="fa-solid fa-arrow-up" style="color: #10b981;"></span> Soft (boost priority)</small>
-                                    </label>
-                                    <label class="checkbox_label flex-container alignitemscenter" style="gap: 4px;">
-                                        <input type="radio" name="chunk-link-mode-${chunkHashAttr}" value="force" class="carrot-link-mode-radio" data-hash="${chunkHashAttr}">
-                                        <small><span class="fa-solid fa-bolt" style="color: #ef4444;"></span> Force (always activate)</small>
-                                    </label>
+                            ` : ''}
+                            ${incomingLinks.length > 0 ? `
+                                <div>
+                                    <small style="opacity: 0.7;">Activated by:</small>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;">
+                                        ${incomingLinks.map(link => `
+                                            <span style="padding: 2px 6px; background: var(--black20a, rgba(0,0,0,0.2)); border-radius: 4px; display: flex; align-items: center; gap: 4px;">
+                                                <span>${escapeHtml(link.title)}</span>
+                                                <span class="fa-solid fa-arrow-right" style="font-size: 0.7em; color: var(--SmartThemeBorderColor);"></span>
+                                                <span class="fa-solid fa-${link.mode === 'force' ? 'bolt' : 'arrow-up'}" style="color: ${link.mode === 'force' ? 'var(--SmartThemeQuoteColor)' : 'var(--SmartThemeEmColor)'}; font-size: 0.7em;"></span>
+                                            </span>
+                                        `).join('')}
+                                    </div>
                                 </div>
-                            </div>
+                            ` : ''}
                         </div>
-                    </div>
+                    ` : ''}
 
-                    <div class="world_entry_thin_controls flex-container flexFlowColumn">
-                        <div class="world_entry_form_control flex1">
-                            <label for="content">
-                                <small><span data-i18n="Content">Content</span></small>
-                            </label>
-                            ${chunkFormattingEnabled
-                                ? `<div class="chunk-formatted-display" data-hash="${chunkHashAttr}" style="cursor: pointer; padding: 10px; border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1)); border-radius: 4px; min-height: 100px;" title="Click to edit">${formatChunkText(chunk.text || '')}</div>`
-                                : `<textarea class="text_pole autoSetHeight carrot-chunk-text-edit" name="content" data-hash="${chunkHashAttr}" placeholder="Chunk content...">${escapeHtml(chunk.text || '')}</textarea>`
-                            }
+                    <!-- Linked Chunks Section (ST Style - Vertical List) -->
+                    <div class="inline-drawer wide100p flexFlowColumn" style="margin-top: 12px;">
+                        <div class="inline-drawer-toggle inline-drawer-header" style="cursor: pointer;">
+                            <strong>Linked Chunks ${outgoingLinks.length > 0 ? `<span style="opacity: 0.6;">(${outgoingLinks.length})</span>` : ''}</strong>
+                            <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
                         </div>
+                        <div class="inline-drawer-content flex-container flexFlowRow flexGap10 paddingBottom5px">
+                            ${availableChunks.length === 0 ? `
+                                <small style="opacity: 0.6; padding: 10px;">No other chunks available to link</small>
+                            ` : `
+                                <small class="flex-container flex1 flexFlowColumn">
+                                    ${availableChunks.slice(0, Math.ceil(availableChunks.length / 2)).map(target => `
+                                        <label class="checkbox flex-container alignItemsCenter flexNoGap" title="${escapeHtml(target.title)}${target.linked ? ` (${target.mode === 'force' ? 'Force' : 'Soft'} link)` : ''}">
+                                            <input type="checkbox" class="carrot-chunk-link-checkbox" data-hash="${chunkHashAttr}" data-target="${escapeHtml(target.hash)}" ${target.linked ? 'checked' : ''}>
+                                            <span style="display: flex; align-items: center; gap: 4px;">
+                                                ${escapeHtml(target.title)}
+                                                ${target.linked ? `<span class="fa-solid fa-${target.mode === 'force' ? 'bolt' : 'arrow-up'}" style="color: ${target.mode === 'force' ? 'var(--SmartThemeQuoteColor)' : 'var(--SmartThemeEmColor)'}; font-size: 0.7em;"></span>` : ''}
+                                            </span>
+                                        </label>
+                                    `).join('')}
+                                </small>
+                                ${availableChunks.length > 1 ? `
+                                    <small class="flex-container flex1 flexFlowColumn">
+                                        ${availableChunks.slice(Math.ceil(availableChunks.length / 2)).map(target => `
+                                            <label class="checkbox flex-container alignItemsCenter flexNoGap" title="${escapeHtml(target.title)}${target.linked ? ` (${target.mode === 'force' ? 'Force' : 'Soft'} link)` : ''}">
+                                                <input type="checkbox" class="carrot-chunk-link-checkbox" data-hash="${chunkHashAttr}" data-target="${escapeHtml(target.hash)}" ${target.linked ? 'checked' : ''}>
+                                                <span style="display: flex; align-items: center; gap: 4px;">
+                                                    ${escapeHtml(target.title)}
+                                                    ${target.linked ? `<span class="fa-solid fa-${target.mode === 'force' ? 'bolt' : 'arrow-up'}" style="color: ${target.mode === 'force' ? 'var(--SmartThemeQuoteColor)' : 'var(--SmartThemeEmColor)'}; font-size: 0.7em;"></span>` : ''}
+                                                </span>
+                                            </label>
+                                        `).join('')}
+                                    </small>
+                                ` : ''}
+                            `}
+                        </div>
+                        ${availableChunks.length > 0 ? `
+                            <div class="flex-container alignitemscenter" style="gap: 12px; padding: 10px 10px 5px 10px; border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));">
+                                <small style="opacity: 0.7;">Link Mode:</small>
+                                <label class="checkbox_label flex-container alignitemscenter flexNoGap" style="gap: 4px;">
+                                    <input type="radio" name="chunk-link-mode-${chunkHashAttr}" value="soft" class="carrot-link-mode-radio" data-hash="${chunkHashAttr}" checked>
+                                    <small><span class="fa-solid fa-arrow-up" style="color: var(--SmartThemeEmColor);"></span> Soft</small>
+                                </label>
+                                <label class="checkbox_label flex-container alignitemscenter flexNoGap" style="gap: 4px;">
+                                    <input type="radio" name="chunk-link-mode-${chunkHashAttr}" value="force" class="carrot-link-mode-radio" data-hash="${chunkHashAttr}">
+                                    <small><span class="fa-solid fa-bolt" style="color: var(--SmartThemeQuoteColor);"></span> Force</small>
+                                </label>
+                            </div>
+                        ` : ''}
                     </div>
                 </div>
             `;
