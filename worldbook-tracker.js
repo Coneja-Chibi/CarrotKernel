@@ -1704,7 +1704,9 @@ const getMessageSourceIcon = (messageSource) => {
     return icons[messageSource] || '❓';
 };
 
+// Get device-specific ID for per-device settings
 const init = () => {
+
     const trigger = document.createElement('div');
     trigger.classList.add('ck-trigger');
     trigger.title = '🥕 CarrotKernel WorldBook Tracker\n---\nright click for options';
@@ -2048,6 +2050,7 @@ const init = () => {
         }
     });
 
+
     document.body.append(trigger);
 
     // Create visual connection line
@@ -2221,6 +2224,7 @@ const init = () => {
 
         document.body.append(panel);
     }
+
 
     // Dynamic positioning function - moved outside panel block for accessibility
     const positionPanel = () => {
@@ -2402,6 +2406,7 @@ const init = () => {
             }
             configPanel.append(alphabetRow);
         }
+
         const repositionRow = document.createElement('div'); {
             repositionRow.classList.add('ck-config-row');
             repositionRow.title = 'Enter reposition & scale mode';
@@ -2420,7 +2425,7 @@ const init = () => {
         }
         const resetPositionRow = document.createElement('div'); {
             resetPositionRow.classList.add('ck-config-row');
-            resetPositionRow.title = 'Reset the trigger icon to its default position and size';
+            resetPositionRow.title = 'Reset position and size';
             resetPositionRow.style.cursor = 'pointer';
             const lbl = document.createElement('div'); {
                 lbl.textContent = 'Reset Position & Size';
@@ -2429,10 +2434,9 @@ const init = () => {
                 resetPositionRow.append(lbl);
             }
             resetPositionRow.addEventListener('click', () => {
-                // Remove saved position and size from localStorage
+                // Reset trigger position and size
                 localStorage.removeItem('ck-trigger-position');
                 localStorage.removeItem('ck-trigger-size');
-                // Reset trigger to default position and size
                 trigger.style.position = 'absolute';
                 trigger.style.bottom = '0.125em';
                 trigger.style.left = '0.25em';

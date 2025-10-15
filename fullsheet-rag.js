@@ -46,14 +46,17 @@ const MODULE_NAME = 'fullsheet-rag';
 // Collection ID prefix for CarrotKernel fullsheets
 const COLLECTION_PREFIX = 'carrotkernel_char_';
 
-// Section header regex for fullsheet chunking (language-agnostic: ## WORD #/#:)
-const SECTION_HEADER_REGEX = /^##\s+\S+\s+\d+\/\d+:/mi;
+// Section header regex for fullsheet chunking - LANGUAGE-AGNOSTIC & VERY PERMISSIVE
+// \S+ matches ANY Unicode non-whitespace (Chinese/Japanese/Korean/Arabic/Cyrillic/etc.)
+// Examples: "## SECTION 1/8", "##セクション 1/8", "# 部分 1/8", "SECCIÓN 1/8", "##Раздел 1/8"
+const SECTION_HEADER_REGEX = /^#{1,2}\s*\S+\s+\d+\/\d+/mi;
 
-// Minimum size to be considered a fullsheet (5000 chars)
-const FULLSHEET_MIN_SIZE = 5000;
+// Minimum size to be considered a fullsheet (3000 chars - more permissive)
+const FULLSHEET_MIN_SIZE = 3000;
 
-// BunnymoTags pattern - universal tag structure detection (language-agnostic)
-// Matches any tag in the format <WORD:content> regardless of language
+// BunnymoTags pattern - UNIVERSAL TAG STRUCTURE (works for ALL languages)
+// [^\s>]+ matches ANY Unicode non-whitespace (not just English letters)
+// Examples: <NAME:John>, <名前:太郎>, <NOMBRE:Juan>, <ИМЯ:Иван>, <이름:철수>, <اسم:أحمد>
 const BUNNYMOTAGS_PATTERN = /<[^\s>]+:[^>]+>/;
 
 // Prompt tag used when injecting results into the model
@@ -1261,55 +1264,71 @@ function chunkFullsheetSimple(content, characterName) {
     const chunks = [];
     let chunkIndex = 0;
 
-    // Split by any ## header
-    const headerRegex = /^##\s+(.+)$/gm;
+    // Split by any ## or # header - VERY PERMISSIVE
+    const headerRegex = /^#{1,2}\s*(.+)$/gm;
     const sections = [];
-    let lastIndex = 0;
+
+    // Collect all matches first
+    const matches = [];
     let match;
-
     while ((match = headerRegex.exec(normalized)) !== null) {
-        if (lastIndex < match.index) {
-            const preContent = normalized.substring(lastIndex, match.index).trim();
-            if (preContent && sections.length === 0) {
-                sections.push({
-                    title: 'Header',
-                    content: preContent
-                });
-            } else if (preContent && sections.length > 0) {
-                // Content from previous section
-                sections[sections.length - 1].content += '\n' + preContent;
-            }
-        }
-
-        const sectionTitle = match[1].trim();
-
-        // Find the start of the next section
-        headerRegex.lastIndex = match.index + match[0].length;
-        const nextMatch = headerRegex.exec(normalized);
-        headerRegex.lastIndex = match.index + match[0].length;
-
-        const endIndex = nextMatch ? nextMatch.index : normalized.length;
-        const sectionContent = normalized.substring(match.index + match[0].length, endIndex).trim();
-
-        sections.push({
-            title: sectionTitle,
-            content: sectionContent
+        matches.push({
+            index: match.index,
+            length: match[0].length,
+            title: match[1].trim()
         });
-
-        lastIndex = endIndex;
     }
 
-    // If no sections found, treat entire content as one chunk
+    debugLog(`Simple chunking: Found ${matches.length} header matches`);
+
+    // IMPORTANT: Track what content we've captured to ensure nothing is lost
+    let capturedRanges = [];
+
+    // Store any content before first header
+    if (matches.length > 0 && matches[0].index > 0) {
+        const preContent = normalized.substring(0, matches[0].index).trim();
+        if (preContent && preContent.length >= 10) { // Only skip if truly empty (allow very short content)
+            sections.push({
+                title: 'Header',
+                content: preContent
+            });
+            capturedRanges.push({ start: 0, end: matches[0].index });
+        }
+    }
+
+    // Process each match
+    matches.forEach((currentMatch, idx) => {
+        const nextMatch = matches[idx + 1];
+        const endIndex = nextMatch ? nextMatch.index : normalized.length;
+        const sectionContent = normalized.substring(currentMatch.index + currentMatch.length, endIndex).trim();
+
+        // ALWAYS include the section, even if content is empty or just whitespace
+        // This ensures every header gets chunked
+        sections.push({
+            title: currentMatch.title,
+            content: sectionContent || '(Empty section)' // Placeholder for empty sections
+        });
+        capturedRanges.push({ start: currentMatch.index, end: endIndex });
+    });
+
+    // FAILSAFE: If no sections found, treat entire content as one chunk
     if (sections.length === 0) {
         sections.push({
             title: DEFAULT_SECTION_TITLE,
-            content: normalized.trim()
+            content: normalized.trim() || '(Empty content)'
         });
     }
 
-    debugLog(`Simple chunking: Found ${sections.length} sections`);
+    // VALIDATION: Check if we missed any content
+    const totalContentLength = normalized.length;
+    const capturedLength = capturedRanges.reduce((sum, range) => sum + (range.end - range.start), 0);
+    if (capturedLength < totalContentLength * 0.9) { // If we missed more than 10% of content
+        console.warn(`⚠️ Simple chunking may have missed content: Captured ${capturedLength}/${totalContentLength} chars (${Math.round(capturedLength/totalContentLength*100)}%)`);
+    }
 
-    // Create one chunk per section
+    debugLog(`Simple chunking: Found ${sections.length} sections, captured ${capturedLength}/${totalContentLength} chars`);
+
+    // Create one chunk per section - NEVER skip sections
     sections.forEach(section => {
         const tags = collectTags(section.content);
         const chunkText = `[${section.title}]\n${section.content}`;
@@ -1327,6 +1346,7 @@ function chunkFullsheetSimple(content, characterName) {
     debugLog(`Simple chunked fullsheet for ${characterName}`, {
         totalChunks: chunks.length,
         averageSize: chunks.length ? Math.round(chunks.reduce((sum, c) => sum + c.text.length, 0) / chunks.length) : 0,
+        sections: sections.map(s => ({ title: s.title, length: s.content.length })),
     });
 
     return chunks;
@@ -1343,11 +1363,77 @@ function chunkFullsheetSimple(content, characterName) {
 function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapSize = 300) {
     const settings = getRAGSettings();
 
-    // Use simple chunking if enabled
+    // Use section-based chunking if enabled
     if (settings.simpleChunking) {
         return chunkFullsheetSimple(content, characterName);
     }
 
+    // Math-based chunking: Split entire content into equal-sized chunks
+    return chunkFullsheetMathBased(content, characterName, targetChunkSize, overlapSize);
+}
+
+/**
+ * Pure math-based chunking: Split entire content into equal-sized chunks with overlap
+ * Ignores section headers, just splits by size
+ */
+function chunkFullsheetMathBased(content, characterName, targetChunkSize = 1000, overlapSize = 300) {
+    // Strip TAG SYNTHESIS before chunking
+    content = stripTagSynthesis(content);
+
+    const normalized = content.replace(/\r\n/g, '\n').trim();
+    const chunks = [];
+
+    if (!normalized) {
+        return chunks;
+    }
+
+    debugLog(`Math-based chunking: Total content length = ${normalized.length} chars`);
+
+    // Split the entire content into chunks using the math-based splitter
+    const fragments = splitTextToSizedChunks(normalized, targetChunkSize, overlapSize);
+
+    debugLog(`Math-based chunking: Split into ${fragments.length} chunks`);
+
+    fragments.forEach((fragment, idx) => {
+        const chunkText = fragment.trim();
+        if (!chunkText || chunkText.length < 50) {
+            return; // Skip tiny/empty chunks
+        }
+
+        const hash = getStringHash(`${characterName}|math|${idx}|${chunkText}`);
+        const tags = collectTags(chunkText);
+
+        // Build metadata for math-based chunk
+        const metadata = buildChunkMetadata(
+            `Chunk ${idx + 1}/${fragments.length}`,
+            null,
+            chunkText,
+            tags
+        );
+
+        chunks.push({
+            text: chunkText,
+            hash,
+            index: idx,
+            metadata,
+        });
+    });
+
+    debugLog(`Math-based chunking complete for ${characterName}`, {
+        totalChunks: chunks.length,
+        averageSize: chunks.length ? Math.round(chunks.reduce((sum, c) => sum + c.text.length, 0) / chunks.length) : 0,
+        targetSize: targetChunkSize,
+        overlap: overlapSize,
+    });
+
+    return chunks;
+}
+
+/**
+ * Section-based chunking with intelligent subsection handling
+ * This is the OLD chunkFullsheet logic, now renamed for clarity
+ */
+function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 1000, overlapSize = 300) {
     // Strip TAG SYNTHESIS before chunking
     content = stripTagSynthesis(content);
 
@@ -1355,52 +1441,59 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
     const chunks = [];
     let chunkIndex = 0;
 
-    // Split by numbered section headers: ## [WORD] #/#: (language-agnostic)
-    // Matches: ## SECTION 1/8:, ## セクション 1/8:, ## SECCIÓN 1/8:, etc.
-    const sectionRegex = /^##\s+(\S+)\s+(\d+)\/(\d+):\s*(.*)$/gim;
+    // Split by numbered section headers - VERY PERMISSIVE & LANGUAGE-AGNOSTIC
+    // Matches ANY word followed by numbers (works for all languages):
+    // ## SECTION 1/8:, ##セクション 1/8, # 部分 1/8, SECCIÓN 1/8:, etc.
+    // \S+ matches any non-whitespace = works for Chinese, Japanese, Korean, Arabic, Cyrillic, etc.
+    const sectionRegex = /^#{0,2}\s*(\S+)\s+(\d+)\s*\/\s*(\d+):?\s*(.*)$/gim;
     const sections = [];
-    let lastIndex = 0;
-    let match;
     let sectionKeyword = 'Section'; // Will be extracted from first match
 
+    // Collect all matches first to avoid lastIndex issues
+    const matches = [];
+    let match;
     while ((match = sectionRegex.exec(normalized)) !== null) {
-        if (lastIndex < match.index) {
-            // Store any content before the first section (title, header, etc.)
-            const preContent = normalized.substring(lastIndex, match.index).trim();
-            if (preContent && sections.length === 0) {
-                sections.push({
-                    number: 0,
-                    title: 'Header',
-                    content: preContent
-                });
-            }
-        }
+        matches.push({
+            index: match.index,
+            length: match[0].length,
+            keyword: match[1],
+            sectionNum: parseInt(match[2]),
+            totalSections: parseInt(match[3]),
+            sectionTitle: match[4].trim()
+        });
+    }
 
-        // Extract: [1]=keyword, [2]=section#, [3]=total#, [4]=title
+    debugLog(`Found ${matches.length} section headers in fullsheet`);
+
+    // Store any content before the first section (title, header, etc.)
+    if (matches.length > 0 && matches[0].index > 0) {
+        const preContent = normalized.substring(0, matches[0].index).trim();
+        if (preContent) {
+            sections.push({
+                number: 0,
+                title: 'Header',
+                content: preContent
+            });
+        }
+    }
+
+    // Process each match
+    matches.forEach((currentMatch, idx) => {
         if (sections.length === 0) {
-            sectionKeyword = match[1]; // Remember the keyword used (SECTION, セクション, etc.)
+            sectionKeyword = currentMatch.keyword; // Remember the keyword used
         }
-        const sectionNum = parseInt(match[2]);
-        const totalSections = parseInt(match[3]);
-        const sectionTitle = match[4].trim();
 
-        // Find the start of the next section
-        sectionRegex.lastIndex = match.index + match[0].length;
-        const nextMatch = sectionRegex.exec(normalized);
-        sectionRegex.lastIndex = match.index + match[0].length; // Reset for next iteration
-
+        const nextMatch = matches[idx + 1];
         const endIndex = nextMatch ? nextMatch.index : normalized.length;
-        const sectionContent = normalized.substring(match.index + match[0].length, endIndex).trim();
+        const sectionContent = normalized.substring(currentMatch.index + currentMatch.length, endIndex).trim();
 
         sections.push({
-            number: sectionNum,
-            title: sectionTitle,
+            number: currentMatch.sectionNum,
+            title: currentMatch.sectionTitle,
             content: sectionContent,
-            fullTitle: `${sectionKeyword} ${sectionNum}/${totalSections}: ${sectionTitle}`
+            fullTitle: `${sectionKeyword} ${currentMatch.sectionNum}/${currentMatch.totalSections}: ${currentMatch.sectionTitle}`
         });
-
-        lastIndex = endIndex;
-    }
+    });
 
     // If no sections found, treat entire content as one chunk
     if (sections.length === 0) {
@@ -1864,6 +1957,13 @@ async function queryRAG(characterName, queryText) {
         collectionId,
         queryLength: queryText.length,
         topK: settings.topK,
+        availableLibraries: Object.keys(allLibraries),
+        libraryContents: Object.entries(allLibraries).map(([name, lib]) => ({
+            name,
+            hasLibrary: !!lib,
+            hasCollection: lib ? !!lib[collectionId] : false,
+            collectionKeys: lib ? Object.keys(lib).slice(0, 5) : []
+        }))
     });
 
     const queryKeywords = extractKeywords(queryText);
@@ -1873,47 +1973,67 @@ async function queryRAG(characterName, queryText) {
     const libraryNames = [];
 
     for (const [libName, library] of Object.entries(allLibraries)) {
-        if (!library || !library[collectionId]) {
+        if (!library || typeof library !== 'object') {
+            debugLog(`Skipping ${libName}: not a valid library object`);
             continue;
         }
-        libraryNames.push(libName);
-        libraryQueries.push(
-            (async () => {
-                try {
-                    const exists = await collectionExists(collectionId);
-                    if (!exists) {
-                        return { libName, chunks: [] };
-                    }
 
-                    const response = await apiQueryCollection(collectionId, queryText, settings.topK, settings.scoreThreshold);
-                    const metadata = Array.isArray(response?.metadata) ? response.metadata : [];
-                    const hashes = Array.isArray(response?.hashes) ? response.hashes : [];
+        // Query ALL collections in this library, not just the current character's
+        const collectionsInLibrary = Object.keys(library);
+        debugLog(`Checking ${libName} library:`, {
+            hasLibrary: true,
+            collectionsCount: collectionsInLibrary.length,
+            collections: collectionsInLibrary.slice(0, 10) // Show first 10
+        });
 
-                    const chunks = [];
-                    for (let i = 0; i < Math.max(metadata.length, hashes.length); i++) {
-                        const meta = metadata[i] || {};
-                        const hash = Number(hashes[i] ?? meta.hash);
-                        if (Number.isNaN(hash)) continue;
+        if (collectionsInLibrary.length === 0) {
+            debugLog(`Skipping ${libName}: no collections in library`);
+            continue;
+        }
 
-                        const entry = libraryEntryToChunk(hash, library[collectionId][hash], {
-                            reason: {
-                                score: meta.score ?? null,
-                                rank: i,
-                                source: libName,
-                            },
-                        });
-                        if (entry) {
-                            chunks.push(entry);
+        // Query each collection in this library
+        for (const currentCollectionId of collectionsInLibrary) {
+            libraryNames.push(`${libName}:${currentCollectionId}`);
+            libraryQueries.push(
+                (async () => {
+                    try {
+                        const exists = await collectionExists(currentCollectionId);
+                        if (!exists) {
+                            debugLog(`Collection ${currentCollectionId} not found in vector DB`);
+                            return { libName: `${libName}:${currentCollectionId}`, chunks: [] };
                         }
-                    }
 
-                    return { libName, chunks, library: library[collectionId] };
-                } catch (error) {
-                    console.error(`Failed to query ${libName} library:`, error);
-                    return { libName, chunks: [] };
-                }
-            })()
-        );
+                        const response = await apiQueryCollection(currentCollectionId, queryText, settings.topK, settings.scoreThreshold);
+                        const metadata = Array.isArray(response?.metadata) ? response.metadata : [];
+                        const hashes = Array.isArray(response?.hashes) ? response.hashes : [];
+
+                        const chunks = [];
+                        for (let i = 0; i < Math.max(metadata.length, hashes.length); i++) {
+                            const meta = metadata[i] || {};
+                            const hash = Number(hashes[i] ?? meta.hash);
+                            if (Number.isNaN(hash)) continue;
+
+                            const entry = libraryEntryToChunk(hash, library[currentCollectionId][hash], {
+                                reason: {
+                                    score: meta.score ?? null,
+                                    rank: i,
+                                    source: `${libName}:${currentCollectionId}`,
+                                },
+                            });
+                            if (entry) {
+                                chunks.push(entry);
+                            }
+                        }
+
+                        debugLog(`Queried ${currentCollectionId} in ${libName}: found ${chunks.length} chunks`);
+                        return { libName: `${libName}:${currentCollectionId}`, chunks, library: library[currentCollectionId] };
+                    } catch (error) {
+                        console.error(`Failed to query ${currentCollectionId} in ${libName} library:`, error);
+                        return { libName: `${libName}:${currentCollectionId}`, chunks: [] };
+                    }
+                })()
+            );
+        }
     }
 
     if (libraryQueries.length === 0) {
@@ -2234,47 +2354,56 @@ function detectFullsheetInMessage(messageText) {
     console.log(`   Message length: ${messageText?.length || 0} chars`);
     console.log(`   Min size required: ${FULLSHEET_MIN_SIZE}`);
 
-    if (!messageText || messageText.length < FULLSHEET_MIN_SIZE) {
+    // Very permissive - if there's ANY structured content, try to parse it
+    if (!messageText || messageText.length < 1000) {
         console.log('❌ [detectFullsheetInMessage] Message too short or empty');
         return null;
     }
 
-    // Check for section headers with pattern: ## [WORD] #/#: (language-agnostic)
+    // Check for section headers with pattern - VERY PERMISSIVE & LANGUAGE-AGNOSTIC
     console.log('🔍 [detectFullsheetInMessage] Looking for numbered section headers...');
-    console.log(`   Pattern: ## [word] number/number:`);
+    console.log(`   Pattern: [##] [ANY-WORD] number/number (works for all languages)`);
+    console.log(`   Examples: "## SECTION 1/8", "##セクション 1/8", "# 部分 1/8", "SECCIÓN 1/8"`);
     console.log(`   Message sample:`, messageText.substring(0, 500));
 
-    // Match any header with format: ## WORD #/#: (works for any language)
-    const sectionMatches = messageText.match(/##\s+\S+\s+(\d+)\/(\d+):/gi);
+    // Match any header with format - allows with/without ##, with/without colon, spaces around /
+    // \S+ matches ANY non-whitespace characters (Chinese/Japanese/Korean/Arabic/Cyrillic/etc.)
+    const sectionMatches = messageText.match(/^#{0,2}\s*\S+\s+\d+\s*\/\s*\d+/gim);
     console.log(`   Found ${sectionMatches?.length || 0} numbered section headers`);
     if (sectionMatches) {
         console.log(`   Matches:`, sectionMatches);
     }
 
-    if (!sectionMatches || sectionMatches.length < 3) {
-        console.log('❌ [detectFullsheetInMessage] Not enough section headers (need at least 3 with #/# format)');
-        return null;
-    }
-
-    // Check for BunnymoTags (universal structure detection - language-agnostic)
+    // Check for BunnymoTags - UNIVERSAL & LANGUAGE-AGNOSTIC
     console.log('🔍 [detectFullsheetInMessage] Looking for BunnymoTags...');
-    console.log(`   Checking for tag structure <TAG:content> (any language)`);
+    console.log(`   Checking for tag structure <TAG:content> (works for ALL languages)`);
+    console.log(`   Examples: <NAME:John>, <名前:太郎>, <NOMBRE:Juan>, <ИМЯ:Иван>`);
 
-    // Count how many tags exist (need at least 3 for a valid fullsheet)
+    // [^\s>]+ matches ANY non-whitespace non-> characters (works for all Unicode)
     const tagMatches = messageText.match(/<[^\s>]+:[^>]+>/g);
     const tagCount = tagMatches ? tagMatches.length : 0;
     console.log(`   Found ${tagCount} tags with format <TAG:content>`);
 
-    if (tagCount < 3) {
-        console.log('❌ [detectFullsheetInMessage] Not enough BunnymoTags found (need at least 3)');
+    // VERY PERMISSIVE: Need either 2+ sections OR 3+ tags
+    const hasSections = sectionMatches && sectionMatches.length >= 2;
+    const hasTags = tagCount >= 3;
+
+    console.log(`   Has sufficient sections: ${hasSections} (${sectionMatches?.length || 0} found, need 2+)`);
+    console.log(`   Has sufficient tags: ${hasTags} (${tagCount} found, need 3+)`);
+
+    if (!hasSections && !hasTags) {
+        console.log('❌ [detectFullsheetInMessage] Not enough structure (need 2+ sections OR 3+ tags)');
         return null;
     }
 
-    // Try to extract character name from the FIRST tag that looks like a name field
+    console.log('✅ [detectFullsheetInMessage] Fullsheet structure detected!');
+
+    // Try to extract character name from the FIRST tag - LANGUAGE-AGNOSTIC
     console.log('🔍 [detectFullsheetInMessage] Extracting character name...');
 
     // Universal name extraction: Find the first tag in the document (usually the name tag)
-    // Pattern matches <ANYTHING:content> format
+    // Works for ANY language: <NAME:John>, <名前:太郎>, <NOMBRE:Juan>, <ИМЯ:Иван>, etc.
+    // [^\s>]+ matches any non-whitespace characters (all Unicode scripts)
     const firstTagMatch = messageText.match(/<[^\s>]+:\s*([^>]+)>/);
     console.log(`   First tag match:`, firstTagMatch);
 

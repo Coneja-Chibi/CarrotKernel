@@ -11813,15 +11813,43 @@ function bindSettingsEvents() {
         });
 
         // Delete button handler - use event delegation for dynamically rendered chunks
-        $(document).on('click', '.carrot-chunk-delete-btn', function(e) {
+        $(document).on('click', '.carrot-chunk-delete-btn', async function(e) {
             e.stopPropagation();
             e.stopImmediatePropagation();
 
             const hash = $(this).data('hash');
-            const confirmed = confirm('Delete this chunk? This cannot be undone.');
+            const chunk = modifiedChunks[hash];
+            if (!chunk) return;
+
+            const confirmed = confirm(`Delete chunk "${chunk.metadata?.section || 'Chunk'}"? This cannot be undone.`);
             if (!confirmed) return;
 
+            // Remove from modifiedChunks (affects UI)
             delete modifiedChunks[hash];
+
+            // Remove from the actual library
+            const collectionId = currentEditingCollection;
+            if (collectionId) {
+                const library = getContextualLibrary();
+                if (library[collectionId] && library[collectionId][hash]) {
+                    delete library[collectionId][hash];
+
+                    // Also delete from vector DB if it exists
+                    try {
+                        if (fullsheetRAGLoaded && fullsheetAPI.purgeOrphanedVectors) {
+                            await fullsheetAPI.purgeOrphanedVectors(collectionId, [hash]);
+                            console.log(`✅ Deleted chunk ${hash} from vector DB`);
+                        }
+                    } catch (error) {
+                        console.warn(`⚠️ Failed to delete from vector DB (chunk may not be vectorized):`, error);
+                    }
+
+                    // Save extension settings to persist the deletion
+                    await saveSettingsDebounced();
+                    console.log(`🗑️ Deleted chunk: ${chunk.metadata?.section || hash}`);
+                }
+            }
+
             renderChunks(modifiedChunks, getSearchTerm());
         });
 
@@ -12143,8 +12171,8 @@ function bindSettingsEvents() {
 
             html += `
                 <div style="background: rgba(16,185,129,0.1); padding: 15px; border-radius: 6px; margin-bottom: 10px; border-left: 3px solid #10b981;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <div style="flex: 1;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; gap: 10px;">
+                        <div style="flex: 1; min-width: 0;">
                             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
                                 <div style="font-weight: 600; font-size: 1.1em; color: #10b981;">
                                     ${characterName}
@@ -12157,15 +12185,15 @@ function bindSettingsEvents() {
                                 ${collectionId}
                             </div>
                         </div>
-                        <div style="display: flex; gap: 8px; align-items: center;">
+                        <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end;">
                             <div class="fa-solid fa-toggle-${ragState.disabledCollections?.includes(collectionId) ? 'off' : 'on'} carrot-toggle-collection-btn" data-collection="${collectionId}" title="${ragState.disabledCollections?.includes(collectionId) ? 'Collection disabled - click to enable' : 'Collection enabled - click to disable'}" style="cursor: pointer; font-size: 1.2em; color: ${ragState.disabledCollections?.includes(collectionId) ? 'var(--grey70)' : 'var(--SmartThemeQuoteColor)'}; padding: 6px;"></div>
-                            <button class="carrot-secondary-btn carrot-view-chunks-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em;">
+                            <button class="carrot-secondary-btn carrot-view-chunks-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em; white-space: nowrap;">
                                 <i class="fa-solid fa-eye"></i> View Chunks
                             </button>
-                            <button class="carrot-primary-btn carrot-copy-context-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em;">
+                            <button class="carrot-primary-btn carrot-copy-context-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em; white-space: nowrap;">
                                 <i class="fa-solid fa-right-left"></i> Move to...
                             </button>
-                            <button class="menu_button carrot-delete-collection-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em; color: #ff6b6b;" title="Delete this collection">
+                            <button class="menu_button carrot-delete-collection-btn" data-collection="${collectionId}" style="padding: 6px 12px; font-size: 0.85em; color: #ff6b6b; flex-shrink: 0;" title="Delete this collection">
                                 <i class="fa-solid fa-trash-can"></i>
                             </button>
                         </div>
@@ -16970,18 +16998,41 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
 
             console.log('🥕 Step A: Downloading JSON file from:', rawUrl);
             // Download the JSON file
-            const response = await fetch(rawUrl);
+            const response = await fetch(rawUrl, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json, text/plain, */*'
+                },
+                cache: 'no-cache'
+            });
             console.log('🥕 Response status:', response.status);
             console.log('🥕 Response content-type:', response.headers.get('content-type'));
 
             if (!response.ok) {
-                throw new Error(`Failed to download: ${response.status}`);
+                throw new Error(`Failed to download: ${response.status} ${response.statusText}`);
             }
 
-            const jsonData = await response.text();
+            // Parse as JSON first to validate structure
+            console.log('🥕 Step A1: Parsing JSON...');
+            let parsedJson;
+            try {
+                parsedJson = await response.json();
+                console.log('🥕 JSON parsed successfully. Keys:', Object.keys(parsedJson));
+            } catch (parseError) {
+                console.error('🥕 JSON parse failed:', parseError);
+                throw new Error(`Invalid JSON data: ${parseError.message}`);
+            }
+
+            // Validate it's a proper world info structure
+            if (!parsedJson.entries || typeof parsedJson.entries !== 'object') {
+                throw new Error('Downloaded file is not a valid SillyTavern lorebook (missing entries)');
+            }
+
+            // Convert back to formatted JSON string for the File object
+            const jsonData = JSON.stringify(parsedJson, null, 2);
             console.log('🥕 Downloaded data length:', jsonData.length);
-            console.log('🥕 First 200 chars:', jsonData.substring(0, 200));
-            
+            console.log('🥕 Entry count:', Object.keys(parsedJson.entries).length);
+
             console.log('🥕 Step B: Creating File object...');
             // Create a File object (simulating file upload)
             const blob = new Blob([jsonData], { type: 'application/json' });
@@ -17001,13 +17052,29 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
             
             console.log('🥕 Step D: Calling importWorldInfo...');
             // Import using ST's native system
-            const importResult = await importWorldInfo(file);
-            console.log('🥕 Import result:', importResult);
-            
+            let importResult;
+            try {
+                importResult = await importWorldInfo(file);
+                console.log('🥕 Import result:', importResult);
+            } catch (importError) {
+                console.error('🥕 importWorldInfo failed:', importError);
+                console.error('🥕 Error details:', {
+                    message: importError.message,
+                    stack: importError.stack,
+                    file: { name: file.name, size: file.size, type: file.type }
+                });
+                throw new Error(`Failed to import lorebook: ${importError.message}`);
+            }
+
             console.log('🥕 Step E: Updating world info list...');
             // Refresh ST's lorebook list
-            const updateResult = await updateWorldInfoList();
-            console.log('🥕 Update result:', updateResult);
+            try {
+                const updateResult = await updateWorldInfoList();
+                console.log('🥕 Update result:', updateResult);
+            } catch (updateError) {
+                console.warn('🥕 updateWorldInfoList failed (non-critical):', updateError);
+                // Non-critical - continue even if this fails
+            }
             
             // Track the installation in our settings
             if (!extension_settings[extensionName]) {
