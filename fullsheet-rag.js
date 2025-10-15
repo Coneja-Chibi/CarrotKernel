@@ -46,14 +46,15 @@ const MODULE_NAME = 'fullsheet-rag';
 // Collection ID prefix for CarrotKernel fullsheets
 const COLLECTION_PREFIX = 'carrotkernel_char_';
 
-// Section header regex for fullsheet chunking
-const SECTION_HEADER_REGEX = /^##\s+SECTION\s+\d+\/\d+:/mi;
+// Section header regex for fullsheet chunking (language-agnostic: ## WORD #/#:)
+const SECTION_HEADER_REGEX = /^##\s+\S+\s+\d+\/\d+:/mi;
 
 // Minimum size to be considered a fullsheet (5000 chars)
 const FULLSHEET_MIN_SIZE = 5000;
 
-// BunnymoTags indicators for fullsheet detection
-const BUNNYMOTAGS_INDICATORS = ['<Name:', '<SPECIES:', '<GENDER:', '<GENRE:'];
+// BunnymoTags pattern - universal tag structure detection (language-agnostic)
+// Matches any tag in the format <WORD:content> regardless of language
+const BUNNYMOTAGS_PATTERN = /<[^\s>]+:[^>]+>/;
 
 // Prompt tag used when injecting results into the model
 const RAG_PROMPT_TAG = 'carrotkernel_rag';
@@ -126,6 +127,50 @@ function getContextualLibrary() {
         default:
             return ragState.libraries.global;
     }
+}
+
+/**
+ * Get ALL contextual libraries relevant to the current chat context
+ * Returns: { global: {...}, character: {...}, chat: {...} } with actual library objects
+ */
+function getAllContextualLibraries() {
+    const context = getContext();
+    ensureRagState();
+    const ragState = extension_settings[extensionName].rag;
+
+    if (!ragState.libraries) {
+        ragState.libraries = {
+            global: {},
+            character: {},
+            chat: {}
+        };
+    }
+
+    const result = {
+        global: ragState.libraries.global || {},
+        character: null,
+        chat: null
+    };
+
+    // Add character library if we have a character context
+    const charId = context?.characterId;
+    if (charId !== null && charId !== undefined) {
+        if (!ragState.libraries.character[charId]) {
+            ragState.libraries.character[charId] = {};
+        }
+        result.character = ragState.libraries.character[charId];
+    }
+
+    // Add chat library if we have a chat context
+    const chatId = context?.chatId;
+    if (chatId) {
+        if (!ragState.libraries.chat[chatId]) {
+            ragState.libraries.chat[chatId] = {};
+        }
+        result.chat = ragState.libraries.chat[chatId];
+    }
+
+    return result;
 }
 
 // ============================================================================
@@ -398,6 +443,55 @@ async function apiQueryCollection(collectionId, searchText, topK, threshold = 0.
     return await response.json();
 }
 
+/**
+ * Delete specific hashes from a vector collection
+ */
+async function apiDeleteVectorHashes(collectionId, hashes) {
+    ensureVectorConfig();
+
+    const response = await fetch('/api/vector/delete', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            collectionId: collectionId,
+            hashes: hashes,
+            source: getVectorSettings().source,
+        }),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to delete vectors from ${collectionId}. Status: ${response.status}. Message: ${errorText}`);
+    }
+
+    return await response.json();
+}
+
+/**
+ * Delete an entire vector collection
+ */
+async function apiDeleteCollection(collectionId) {
+    ensureVectorConfig();
+
+    const response = await fetch('/api/vector/purge', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            collectionId: collectionId,
+            source: getVectorSettings().source,
+        }),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to purge collection ${collectionId}. Status: ${response.status}. Message: ${errorText}`);
+    }
+
+    return await response.json();
+}
+
 // ============================================================================
 // SETTINGS MANAGEMENT
 // ============================================================================
@@ -422,6 +516,8 @@ function getRAGSettings() {
         debugMode: ragState.debugMode ?? false,
         smartCrossReference: ragState.smartCrossReference ?? true,
         crosslinkThreshold: ragState.crosslinkThreshold ?? 0.25,
+        lastEmbeddingSource: ragState.lastEmbeddingSource ?? null,
+        lastEmbeddingModel: ragState.lastEmbeddingModel ?? null,
         keywordFallback: ragState.keywordFallback ?? true,
         keywordFallbackPriority: ragState.keywordFallbackPriority ?? false,
         keywordFallbackLimit: ragState.keywordFallbackLimit ?? 2,
@@ -457,14 +553,46 @@ function debugLog(message, data = null) {
  * @param {string} characterName - Character name
  * @returns {string} Collection ID (e.g., "carrotkernel_char_Atsu")
  */
-function generateCollectionId(characterName) {
-    // Sanitize character name (remove special chars, keep alphanumeric and underscores)
+function generateCollectionId(characterName, contextOverride = null) {
+    // Sanitize character name (keep Unicode letters, numbers, and underscores)
+    // This preserves non-English characters while removing only problematic symbols
     const sanitized = characterName
-        .replace(/[^a-zA-Z0-9_]/g, '_')
-        .replace(/_+/g, '_')
+        .replace(/[\s\-]+/g, '_')  // Replace spaces and hyphens with underscores
+        .replace(/[^\p{L}\p{N}_]/gu, '_')  // Keep Unicode letters (\p{L}), numbers (\p{N}), and underscores
+        .replace(/_+/g, '_')  // Collapse multiple underscores
+        .replace(/^_|_$/g, '')  // Remove leading/trailing underscores
         .toLowerCase();
 
-    return `${COLLECTION_PREFIX}${sanitized}`;
+    // Include context level in collection ID to prevent cross-contamination
+    const contextLevel = contextOverride || getCurrentContextLevel();
+    const context = getContext();
+
+    let collectionId = `${COLLECTION_PREFIX}${sanitized}`;
+
+    // Add context suffix based on storage level
+    switch(contextLevel) {
+        case 'chat':
+            const chatId = context?.chatId;
+            if (chatId) {
+                // Include chat ID to keep chat-level embeddings separate
+                const safeChatId = String(chatId).replace(/[^a-z0-9_]/gi, '_').toLowerCase();
+                collectionId += `_chat_${safeChatId}`;
+            }
+            break;
+        case 'character':
+            const charId = context?.characterId;
+            if (charId !== null && charId !== undefined) {
+                // Include character ID to keep character-level embeddings separate
+                collectionId += `_charid_${charId}`;
+            }
+            break;
+        case 'global':
+        default:
+            // Global uses just the character name (shared across all contexts)
+            break;
+    }
+
+    return collectionId;
 }
 
 // ============================================================================
@@ -484,35 +612,43 @@ const STOP_WORDS = new Set([
  * @returns {string}
  */
 function normalizeKeyword(word) {
-    let normalized = word.toLowerCase();
-    const replacements = [
-        /(?:ing|ingly)$/,
-        /(?:edly|edly)$/,
-        /(?:edly)$/,
-        /(?:tion|tions)$/,
-        /(?:ment|ments)$/,
-        /(?:ness|nesses)$/,
-        /(?:ally|ally)$/,
-        /(?:ies)$/,
-        /(?:ers|er)$/,
-        /(?:less)$/,
-        /(?:ful)$/,
-        /(?:ous)$/,
-        /(?:ly)$/,
-        /(?:ed)$/,
-        /(?:es)$/,
-        /(?:s)$/,
-    ];
+    // Check if case-sensitive matching is enabled
+    const caseSensitive = extension_settings[extensionName]?.rag?.caseSensitiveKeywords || false;
 
-    for (const regex of replacements) {
-        if (regex.test(normalized)) {
-            normalized = normalized.replace(regex, '');
-            break;
+    // If case-sensitive, preserve original case; otherwise lowercase
+    let normalized = caseSensitive ? word : word.toLowerCase();
+
+    // Apply stemming only if not case-sensitive (stemming requires lowercase)
+    if (!caseSensitive) {
+        const replacements = [
+            /(?:ing|ingly)$/,
+            /(?:edly|edly)$/,
+            /(?:edly)$/,
+            /(?:tion|tions)$/,
+            /(?:ment|ments)$/,
+            /(?:ness|nesses)$/,
+            /(?:ally|ally)$/,
+            /(?:ies)$/,
+            /(?:ers|er)$/,
+            /(?:less)$/,
+            /(?:ful)$/,
+            /(?:ous)$/,
+            /(?:ly)$/,
+            /(?:ed)$/,
+            /(?:es)$/,
+            /(?:s)$/,
+        ];
+
+        for (const regex of replacements) {
+            if (regex.test(normalized)) {
+                normalized = normalized.replace(regex, '');
+                break;
+            }
         }
-    }
 
-    if (normalized.length < 4) {
-        normalized = word.toLowerCase();
+        if (normalized.length < 4) {
+            normalized = word.toLowerCase();
+        }
     }
 
     return normalized;
@@ -710,14 +846,85 @@ function getKeywordPriority(keyword) {
 }
 
 /**
- * Extract a unique keyword list from text. Used for cross-link scoring.
+ * Extract ONLY truly semantic keywords from text - not every single word!
+ * Uses frequency analysis and importance weighting.
  * @param {string} text
  * @returns {string[]}
  */
-function extractKeywords(text) {
-    const tokens = (text.toLowerCase().replace(/[<>]/g, ' ').match(/\b[a-z]{4,}\b/g) || [])
-        .filter(word => !STOP_WORDS.has(word));
-    return Array.from(new Set(tokens));
+/**
+ * Extract keywords using hybrid approach:
+ * 1. Title/topic words (language-agnostic)
+ * 2. Frequency analysis (language-agnostic)
+ * 3. Semantic mapping for English enhancement
+ */
+function extractKeywords(text, sectionTitle = '', topic = '') {
+    const keywords = new Set();
+
+    // STEP 1: Extract words from title/topic (language-agnostic, high priority)
+    const titleText = (sectionTitle + ' ' + topic)
+        .toLowerCase()
+        .replace(/[^\p{L}\s]/gu, ' ') // Keep all letters (Unicode), remove punctuation
+        .split(/\s+/)
+        .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+
+    titleText.forEach(word => keywords.add(word));
+
+    // STEP 2: Frequency analysis from text (language-agnostic)
+    const tokens = text
+        .toLowerCase()
+        .replace(/[<>]/g, ' ')
+        .match(/[\p{L}]{3,}/gu) || []; // Match 3+ letter words (any language)
+
+    const frequency = new Map();
+    tokens.forEach(word => {
+        if (!STOP_WORDS.has(word)) {
+            frequency.set(word, (frequency.get(word) || 0) + 1);
+        }
+    });
+
+    // Add words that appear 2+ times
+    for (const [word, count] of frequency.entries()) {
+        if (count >= 2) {
+            keywords.add(word);
+        }
+    }
+
+    // STEP 3: English semantic enhancement (optional, only if title is English)
+    const TITLE_KEYWORD_MAP = {
+        'aesthetic': ['style', 'aesthetic', 'appearance', 'visual'],
+        'expression': ['expression', 'communication', 'voice'],
+        'style': ['style', 'manner', 'approach'],
+        'philosophy': ['philosophy', 'belief', 'worldview'],
+        'origin': ['origin', 'history', 'past', 'background'],
+        'history': ['history', 'past', 'backstory'],
+        'psyche': ['psyche', 'mind', 'mental', 'psychology'],
+        'behavioral': ['behavior', 'action', 'manner'],
+        'relational': ['relationship', 'social', 'dynamic'],
+        'linguistic': ['speech', 'language', 'communication'],
+        'physical': ['physical', 'body', 'appearance'],
+        'identity': ['identity', 'self', 'essence'],
+        'emotional': ['emotion', 'feeling', 'mood'],
+        'trauma': ['trauma', 'wound', 'pain'],
+    };
+
+    // Only apply semantic mapping if title contains English words
+    const hasEnglishTitle = titleText.some(w => TITLE_KEYWORD_MAP[w]);
+    if (hasEnglishTitle) {
+        for (const titleWord of titleText) {
+            if (TITLE_KEYWORD_MAP[titleWord]) {
+                TITLE_KEYWORD_MAP[titleWord].forEach(kw => keywords.add(kw));
+            }
+        }
+    }
+
+    // Sort by frequency and limit to 15
+    const sortedKeywords = Array.from(keywords).sort((a, b) => {
+        const freqA = frequency.get(a) || 0;
+        const freqB = frequency.get(b) || 0;
+        return freqB - freqA;
+    });
+
+    return sortedKeywords.slice(0, 15);
 }
 
 const EMOJI_HEADER_REGEX = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}]/u;
@@ -763,18 +970,27 @@ function collectTags(text) {
 }
 
 function sanitizeDescriptor(value) {
-    return (value || '').replace(/[*_`~<>[\]#]|SECTION\s+\d+\/\d+:/gi, '').trim();
+    // Remove markdown formatting and section headers (language-agnostic)
+    return (value || '')
+        .replace(/[*_`~<>[\]#]/g, '')  // Remove markdown chars
+        .replace(/\S+\s+\d+\/\d+:/gi, '')  // Remove any "WORD #/#:" pattern
+        .trim();
 }
 
 function buildKeywordSetsFromGroups(groups, keywordsSet, regexSet) {
     for (const groupKey of groups) {
         const group = KEYWORD_GROUPS[groupKey];
         if (!group) continue;
+
+        // Limit keywords per group to top 5 to prevent explosion
         if (Array.isArray(group.keywords)) {
-            for (const keyword of group.keywords) {
+            const limitedKeywords = group.keywords.slice(0, 5);
+            for (const keyword of limitedKeywords) {
                 keywordsSet.add(keyword);
             }
         }
+
+        // Add all regexes (these are important for matching)
         if (Array.isArray(group.regexes)) {
             for (const regexEntry of group.regexes) {
                 regexSet.add(JSON.stringify({
@@ -858,14 +1074,15 @@ function buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags) {
         }
     }
 
-    // Manual heuristics for important phrases
-    if (/\bboundar(?:y|ies)\b/i.test(chunkText)) detectedGroups.add('boundaries');
-    if (/\bconsent\b/i.test(chunkText)) detectedGroups.add('boundaries');
-    if (/\btrauma\b/i.test(chunkText) || /\btrigger(?:ed|s)?\b/i.test(chunkText)) detectedGroups.add('trauma');
-    if (/\bflirt/i.test(chunkText) || /\bseduce/i.test(chunkText)) detectedGroups.add('flirting');
-    if (/\barous/i.test(chunkText) || /\blust/i.test(chunkText)) detectedGroups.add('arousal');
-    if (/\bjealous/i.test(chunkText) || /\bpossessive/i.test(chunkText)) detectedGroups.add('jealousy');
-    if (/\battachment\b/i.test(chunkText) || /\bavoidant\b/i.test(chunkText)) detectedGroups.add('attachment');
+    // Manual heuristics for important phrases - but require actual presence in text
+    // Only add groups if the keywords actually appear, not just pattern matches
+    const lowerText = chunkText.toLowerCase();
+    if (lowerText.includes('boundar') || lowerText.includes('consent')) detectedGroups.add('boundaries');
+    if (lowerText.includes('trauma') || lowerText.includes('trigger')) detectedGroups.add('trauma');
+    if (lowerText.includes('flirt') || lowerText.includes('seduc')) detectedGroups.add('flirting');
+    if (lowerText.includes('arous') || lowerText.includes('lust')) detectedGroups.add('arousal');
+    if (lowerText.includes('jealous') || lowerText.includes('possessive')) detectedGroups.add('jealousy');
+    if (lowerText.includes('attachment') || lowerText.includes('avoidant')) detectedGroups.add('attachment');
 
     buildKeywordSetsFromGroups(detectedGroups, keywordsSet, regexSet);
 
@@ -877,7 +1094,7 @@ function buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags) {
 }
 
 function buildChunkMetadata(sectionTitle, topic, chunkText, tags) {
-    const autoKeywords = extractKeywords(chunkText);
+    const autoKeywords = extractKeywords(chunkText, sectionTitle, topic);
     const keywordMeta = buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags);
     const systemKeywordsSet = new Set([...autoKeywords, ...keywordMeta.keywords]);
     const systemKeywords = Array.from(systemKeywordsSet);
@@ -1022,11 +1239,12 @@ function buildChunkText(section, topic, tags, body) {
  */
 function stripTagSynthesis(content) {
     // Remove TAG SYNTHESIS section (# 🎯**TAG SYNTHESIS**🎯 and everything after it until next main section or end)
-    const tagSynthesisRegex = /^#\s*🎯\*\*TAG SYNTHESIS\*\*🎯.*?(?=^##\s+SECTION\s+\d+\/\d+:|^##\s+[🤫💕🔗⚗️🌊😘🔥💚⚖️🚧]|\s*$)/gims;
+    // Language-agnostic: look for the emoji pattern, not English text
+    const tagSynthesisRegex = /^#\s*🎯\*\*[^*]+\*\*🎯.*?(?=^##\s+\S+\s+\d+\/\d+:|^##\s+[🤫💕🔗⚗️🌊😘🔥💚⚖️🚧]|\s*$)/gims;
     let cleaned = content.replace(tagSynthesisRegex, '');
 
     // Also remove if it appears as a subsection
-    const subsectionTagSynthesisRegex = /^##\s*🎯\*\*TAG SYNTHESIS\*\*🎯.*?(?=^##\s+|^#\s+|\s*$)/gims;
+    const subsectionTagSynthesisRegex = /^##\s*🎯\*\*[^*]+\*\*🎯.*?(?=^##\s+|^#\s+|\s*$)/gims;
     cleaned = cleaned.replace(subsectionTagSynthesisRegex, '');
 
     return cleaned;
@@ -1137,11 +1355,13 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
     const chunks = [];
     let chunkIndex = 0;
 
-    // Split by main SECTION headers (SECTION 1/8, SECTION 2/8, etc.)
-    const sectionRegex = /^##\s+SECTION\s+(\d+)\/(\d+):\s*(.*)$/gim;
+    // Split by numbered section headers: ## [WORD] #/#: (language-agnostic)
+    // Matches: ## SECTION 1/8:, ## セクション 1/8:, ## SECCIÓN 1/8:, etc.
+    const sectionRegex = /^##\s+(\S+)\s+(\d+)\/(\d+):\s*(.*)$/gim;
     const sections = [];
     let lastIndex = 0;
     let match;
+    let sectionKeyword = 'Section'; // Will be extracted from first match
 
     while ((match = sectionRegex.exec(normalized)) !== null) {
         if (lastIndex < match.index) {
@@ -1156,9 +1376,13 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
             }
         }
 
-        const sectionNum = parseInt(match[1]);
-        const totalSections = parseInt(match[2]);
-        const sectionTitle = match[3].trim();
+        // Extract: [1]=keyword, [2]=section#, [3]=total#, [4]=title
+        if (sections.length === 0) {
+            sectionKeyword = match[1]; // Remember the keyword used (SECTION, セクション, etc.)
+        }
+        const sectionNum = parseInt(match[2]);
+        const totalSections = parseInt(match[3]);
+        const sectionTitle = match[4].trim();
 
         // Find the start of the next section
         sectionRegex.lastIndex = match.index + match[0].length;
@@ -1172,7 +1396,7 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
             number: sectionNum,
             title: sectionTitle,
             content: sectionContent,
-            fullTitle: `SECTION ${sectionNum}/${totalSections}: ${sectionTitle}`
+            fullTitle: `${sectionKeyword} ${sectionNum}/${totalSections}: ${sectionTitle}`
         });
 
         lastIndex = endIndex;
@@ -1190,13 +1414,54 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
 
     debugLog(`Found ${sections.length} main sections in fullsheet`);
 
+    // Filter function to check if content should be chunked
+    function shouldChunkContent(content, title) {
+        const trimmed = content.trim();
+
+        // Skip empty or nearly empty content
+        if (!trimmed || trimmed.length < 50 || trimmed === '---') {
+            return false;
+        }
+
+        // Skip metadata sections (strip markdown formatting first)
+        const cleanTitle = title.replace(/[\*\#\~\_]/g, '').trim();
+        const metadataTitles = [
+            /ANALYSIS\s*COMPLETE/i,
+            /TAG\s*SYNTHESIS/i,
+            /\bsection\b\s*$/i,  // Just the word "section"
+            /BunnymoTags/i,
+            /^(Header|Footer|Metadata)$/i,
+        ];
+
+        for (const pattern of metadataTitles) {
+            if (pattern.test(cleanTitle)) {
+                return false;
+            }
+        }
+
+        // Skip sections that are mostly BunnymoTags closing blocks
+        if (/<\/BunnymoTags>/i.test(trimmed) || /<Genre>/i.test(trimmed)) {
+            return false;
+        }
+
+        return true;
+    }
+
     // Process each section
     sections.forEach(section => {
+        // Skip empty or metadata sections
+        if (!shouldChunkContent(section.content, section.fullTitle || section.title)) {
+            return;
+        }
+
         const tags = collectTags(section.content);
 
-        // Section 8 special handling - split by subsection headers
-        if (section.number === 8) {
-            const subsectionRegex = /^##\s+[💕🔗⚗️🌊😘🔥💚⚖️🚧]?\*?\*?([^*\n]+)\*?\*?/gim;
+        // Last section special handling - split by emoji subsection headers
+        // Works for any total (8, 6, 10, etc.) - just check if it's the last numbered section
+        const isLastSection = sections.length > 0 && section.number === Math.max(...sections.map(s => s.number));
+        if (isLastSection) {
+            // Match any ## header with optional emoji prefix
+            const subsectionRegex = /^##\s+([^\n]+)$/gim;
             const subsections = [];
             let subLastIndex = 0;
             let subMatch;
@@ -1208,9 +1473,12 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
 
                 const subEndIndex = nextSubMatch ? nextSubMatch.index : section.content.length;
                 const subsectionContent = section.content.substring(subMatch.index + subMatch[0].length, subEndIndex).trim();
-                const subsectionTitle = subMatch[1].trim().replace(/\*/g, '');
+                const subsectionTitle = subMatch[1].trim()
+                    .replace(/\*/g, '')  // Remove asterisks
+                    .replace(/^[💕🔗⚗️🌊😘🔥💚⚖️🚧🎯]\s*/, '');  // Remove leading emojis
 
-                if (subsectionContent) {
+                // Skip metadata subsections
+                if (shouldChunkContent(subsectionContent, subsectionTitle)) {
                     subsections.push({
                         title: subsectionTitle,
                         content: subsectionContent
@@ -1222,7 +1490,7 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
 
             // Create chunks for each subsection
             if (subsections.length > 0) {
-                debugLog(`Section 8 split into ${subsections.length} subsections`);
+                debugLog(`Last section split into ${subsections.length} subsections`);
                 subsections.forEach(subsection => {
                     const chunkText = `[${section.fullTitle} > ${subsection.title}]\n${subsection.content}`;
                     const hash = getStringHash(`${characterName}|${section.fullTitle}|${subsection.title}|${chunkIndex}|${chunkText}`);
@@ -1250,7 +1518,7 @@ function chunkFullsheet(content, characterName, targetChunkSize = 1000, overlapS
                 });
             }
         } else {
-            // Sections 1-7: Keep as single chunks, or split if too large
+            // Other sections: Keep as single chunks, or split if too large
             if (section.content.length <= targetChunkSize * 1.5) {
                 // Small enough to keep as single chunk
                 const chunkText = `[${section.fullTitle}]\n${section.content}`;
@@ -1583,14 +1851,16 @@ async function queryRAG(characterName, queryText) {
     }
 
     const collectionId = generateCollectionId(characterName);
-    const library = getChunkLibrary(collectionId);
-    if (!library) {
-        debugLog(`No local chunk library for ${collectionId}; vectorize the fullsheet first.`);
+
+    // Check if this collection is disabled
+    if (settings.disabledCollections?.includes(collectionId)) {
+        debugLog(`Collection ${collectionId} is disabled, skipping query`);
         return [];
     }
 
+    const allLibraries = getAllContextualLibraries();
 
-    debugLog(`Querying RAG for ${characterName}`, {
+    debugLog(`Querying RAG for ${characterName} across all contextual libraries`, {
         collectionId,
         queryLength: queryText.length,
         topK: settings.topK,
@@ -1598,62 +1868,113 @@ async function queryRAG(characterName, queryText) {
 
     const queryKeywords = extractKeywords(queryText);
 
+    // Build parallel queries for each library that has this collection
+    const libraryQueries = [];
+    const libraryNames = [];
+
+    for (const [libName, library] of Object.entries(allLibraries)) {
+        if (!library || !library[collectionId]) {
+            continue;
+        }
+        libraryNames.push(libName);
+        libraryQueries.push(
+            (async () => {
+                try {
+                    const exists = await collectionExists(collectionId);
+                    if (!exists) {
+                        return { libName, chunks: [] };
+                    }
+
+                    const response = await apiQueryCollection(collectionId, queryText, settings.topK, settings.scoreThreshold);
+                    const metadata = Array.isArray(response?.metadata) ? response.metadata : [];
+                    const hashes = Array.isArray(response?.hashes) ? response.hashes : [];
+
+                    const chunks = [];
+                    for (let i = 0; i < Math.max(metadata.length, hashes.length); i++) {
+                        const meta = metadata[i] || {};
+                        const hash = Number(hashes[i] ?? meta.hash);
+                        if (Number.isNaN(hash)) continue;
+
+                        const entry = libraryEntryToChunk(hash, library[collectionId][hash], {
+                            reason: {
+                                score: meta.score ?? null,
+                                rank: i,
+                                source: libName,
+                            },
+                        });
+                        if (entry) {
+                            chunks.push(entry);
+                        }
+                    }
+
+                    return { libName, chunks, library: library[collectionId] };
+                } catch (error) {
+                    console.error(`Failed to query ${libName} library:`, error);
+                    return { libName, chunks: [] };
+                }
+            })()
+        );
+    }
+
+    if (libraryQueries.length === 0) {
+        debugLog(`No libraries contain collection ${collectionId}; vectorize the fullsheet first.`);
+        return [];
+    }
+
     try {
-        const exists = await collectionExists(collectionId);
-        if (!exists) {
-            debugLog(`Collection ${collectionId} does not exist on disk, cannot query`);
-            return [];
-        }
+        // Run all library queries in parallel for performance
+        const results = await Promise.all(libraryQueries);
 
-        const response = await apiQueryCollection(collectionId, queryText, settings.topK, settings.scoreThreshold);
-        const metadata = Array.isArray(response?.metadata) ? response.metadata : [];
-        const hashes = Array.isArray(response?.hashes) ? response.hashes : [];
+        // Merge all primary chunks, deduplicating by hash (prefer higher scores)
+        const primaryChunksMap = new Map();
+        let totalPrimary = 0;
 
-        const primaryChunks = [];
-        for (let i = 0; i < Math.max(metadata.length, hashes.length); i++) {
-            const meta = metadata[i] || {};
-            const hash = Number(hashes[i] ?? meta.hash);
-            if (Number.isNaN(hash)) {
-                continue;
-            }
-            const entry = libraryEntryToChunk(hash, library[hash], {
-                reason: {
-                    score: meta.score ?? null,
-                    rank: i,
-                },
-            });
-            if (entry) {
-                primaryChunks.push(entry);
+        for (const { libName, chunks } of results) {
+            for (const chunk of chunks) {
+                totalPrimary++;
+                const existing = primaryChunksMap.get(chunk.hash);
+                if (!existing || (chunk.reason?.score ?? 0) > (existing.reason?.score ?? 0)) {
+                    primaryChunksMap.set(chunk.hash, chunk);
+                }
             }
         }
 
-        const crosslinked = deriveCrosslinks(library, primaryChunks, settings);
+        const primaryChunks = Array.from(primaryChunksMap.values());
+
+        // Merge all libraries for crosslinking and fallback
+        const mergedLibrary = {};
+        for (const { library } of results) {
+            if (library) {
+                Object.assign(mergedLibrary, library);
+            }
+        }
+
+        // Apply crosslinking across merged library
+        const crosslinked = deriveCrosslinks(mergedLibrary, primaryChunks, settings);
         const selectedHashes = new Set(primaryChunks.map(chunk => chunk.hash));
         crosslinked.forEach(chunk => selectedHashes.add(chunk.hash));
 
         const combined = [];
         const seen = new Set();
         const pushUnique = (chunk) => {
-            if (!chunk || !chunk.text) {
-                return;
-            }
-            if (seen.has(chunk.hash)) {
-                return;
-            }
+            if (!chunk || !chunk.text) return;
+            if (seen.has(chunk.hash)) return;
             seen.add(chunk.hash);
             combined.push(chunk);
         };
 
-        primaryChunks.forEach(pushUnique);
-        crosslinked.forEach(pushUnique);
+        // Filter out disabled chunks before adding to results
+        primaryChunks.filter(chunk => !chunk.disabled).forEach(pushUnique);
+        crosslinked.filter(chunk => !chunk.disabled).forEach(pushUnique);
 
+        // Apply keyword fallback across merged library
         let fallbackCount = 0;
         let fallbackChunks = [];
         if ((settings.keywordFallback ?? true) && (settings.keywordFallbackLimit ?? 0) > 0) {
             fallbackChunks = deriveKeywordFallback(
                 queryKeywords,
                 queryText,
-                library,
+                mergedLibrary,
                 selectedHashes,
                 settings.keywordFallbackLimit ?? 2,
                 settings,
@@ -1668,28 +1989,106 @@ async function queryRAG(characterName, queryText) {
             fallbackCount = combined.length - before;
         }
 
+        // Prioritize keyword fallback if enabled
         if ((settings.keywordFallbackPriority ?? false) && fallbackChunks.length) {
             const fallbackHashes = new Set(fallbackChunks.filter(Boolean).map(chunk => Number(chunk.hash)));
             combined.sort((a, b) => {
                 const aIsFallback = fallbackHashes.has(Number(a.hash));
                 const bIsFallback = fallbackHashes.has(Number(b.hash));
-                if (aIsFallback === bIsFallback) {
-                    return 0;
-                }
+                if (aIsFallback === bIsFallback) return 0;
                 return aIsFallback ? -1 : 1;
             });
         }
 
-        debugLog(`Query results for ${characterName}`, {
-            primary: primaryChunks.length,
+        // Process chunk links (force and soft modes)
+        const linkedChunks = [];
+        const softLinkedHashes = new Set();
+
+        for (const chunk of combined) {
+            const chunkLinks = Array.isArray(chunk.chunkLinks) ? chunk.chunkLinks : [];
+
+            for (const link of chunkLinks) {
+                const targetChunk = mergedLibrary[link.targetHash];
+                if (!targetChunk || targetChunk.disabled) continue;
+
+                if (link.mode === 'force') {
+                    // Force mode: add chunk immediately if not already present
+                    if (!seen.has(link.targetHash)) {
+                        const linkedChunk = libraryEntryToChunk(link.targetHash, targetChunk, {
+                            inferred: true,
+                            reason: { type: 'force-link', source: chunk.hash },
+                        });
+                        linkedChunks.push(linkedChunk);
+                        seen.add(link.targetHash);
+                    }
+                } else if (link.mode === 'soft') {
+                    // Soft mode: mark for priority boosting
+                    softLinkedHashes.add(link.targetHash);
+                }
+            }
+        }
+
+        // Add force-linked chunks
+        linkedChunks.forEach(chunk => combined.push(chunk));
+
+        // Soft-link boost: if soft-linked chunks exist in the result set, move them up
+        if (softLinkedHashes.size > 0) {
+            combined.sort((a, b) => {
+                const aIsSoft = softLinkedHashes.has(a.hash);
+                const bIsSoft = softLinkedHashes.has(b.hash);
+                if (aIsSoft === bIsSoft) return 0;
+                return aIsSoft ? -1 : 1; // Soft-linked chunks come first
+            });
+        }
+
+        // Apply inclusion group filtering (only one chunk per group)
+        const inclusionGroups = {};
+        const filteredByInclusion = [];
+
+        for (const chunk of combined) {
+            const group = chunk.inclusionGroup;
+
+            if (!group || group.trim() === '') {
+                // No inclusion group - always include
+                filteredByInclusion.push(chunk);
+                continue;
+            }
+
+            if (!inclusionGroups[group]) {
+                // First chunk in this group
+                inclusionGroups[group] = chunk;
+                filteredByInclusion.push(chunk);
+            } else {
+                // Another chunk with same group exists
+                const existing = inclusionGroups[group];
+
+                // If this chunk is prioritized and existing isn't, replace it
+                if (chunk.inclusionPrioritize && !existing.inclusionPrioritize) {
+                    const existingIndex = filteredByInclusion.indexOf(existing);
+                    if (existingIndex !== -1) {
+                        filteredByInclusion[existingIndex] = chunk;
+                    }
+                    inclusionGroups[group] = chunk;
+                }
+                // Otherwise skip this chunk (existing one stays)
+            }
+        }
+
+        debugLog(`Multi-library query results for ${characterName}`, {
+            libraries: libraryNames.join(', '),
+            totalPrimary,
+            deduplicated: primaryChunks.length,
             crosslinked: crosslinked.length,
-            delivered: combined.length,
+            linkedChunks: linkedChunks.length,
+            beforeInclusion: combined.length,
+            afterInclusion: filteredByInclusion.length,
+            delivered: filteredByInclusion.length,
             fallback: fallbackCount,
         });
 
-        return combined;
+        return filteredByInclusion;
     } catch (error) {
-        console.error(`??O Failed to query RAG for ${characterName}:`, error);
+        console.error(`Failed to query RAG for ${characterName}:`, error);
         return [];
     }
 }
@@ -1840,43 +2239,46 @@ function detectFullsheetInMessage(messageText) {
         return null;
     }
 
-    // Check for section headers (## SECTION X/8:)
-    console.log('🔍 [detectFullsheetInMessage] Looking for SECTION headers...');
-    console.log(`   Regex: /##\\s+SECTION\\s+(\\d+)\\/(\\d+):/gi`);
+    // Check for section headers with pattern: ## [WORD] #/#: (language-agnostic)
+    console.log('🔍 [detectFullsheetInMessage] Looking for numbered section headers...');
+    console.log(`   Pattern: ## [word] number/number:`);
     console.log(`   Message sample:`, messageText.substring(0, 500));
 
-    const sectionMatches = messageText.match(/##\s+SECTION\s+(\d+)\/(\d+):/gi);
-    console.log(`   Found ${sectionMatches?.length || 0} SECTION headers`);
+    // Match any header with format: ## WORD #/#: (works for any language)
+    const sectionMatches = messageText.match(/##\s+\S+\s+(\d+)\/(\d+):/gi);
+    console.log(`   Found ${sectionMatches?.length || 0} numbered section headers`);
     if (sectionMatches) {
         console.log(`   Matches:`, sectionMatches);
     }
 
     if (!sectionMatches || sectionMatches.length < 3) {
-        console.log('❌ [detectFullsheetInMessage] Not enough SECTION headers (need at least 3)');
+        console.log('❌ [detectFullsheetInMessage] Not enough section headers (need at least 3 with #/# format)');
         return null;
     }
 
-    // Check for BunnymoTags
+    // Check for BunnymoTags (universal structure detection - language-agnostic)
     console.log('🔍 [detectFullsheetInMessage] Looking for BunnymoTags...');
-    console.log(`   Required indicators:`, BUNNYMOTAGS_INDICATORS);
+    console.log(`   Checking for tag structure <TAG:content> (any language)`);
 
-    const hasBunnymoTags = BUNNYMOTAGS_INDICATORS.some(indicator => {
-        const found = messageText.includes(indicator);
-        console.log(`   Checking "${indicator}": ${found}`);
-        return found;
-    });
+    // Count how many tags exist (need at least 3 for a valid fullsheet)
+    const tagMatches = messageText.match(/<[^\s>]+:[^>]+>/g);
+    const tagCount = tagMatches ? tagMatches.length : 0;
+    console.log(`   Found ${tagCount} tags with format <TAG:content>`);
 
-    if (!hasBunnymoTags) {
-        console.log('❌ [detectFullsheetInMessage] No BunnymoTags found');
+    if (tagCount < 3) {
+        console.log('❌ [detectFullsheetInMessage] Not enough BunnymoTags found (need at least 3)');
         return null;
     }
 
-    // Try to extract character name from BunnymoTags
+    // Try to extract character name from the FIRST tag that looks like a name field
     console.log('🔍 [detectFullsheetInMessage] Extracting character name...');
-    const nameMatch = messageText.match(/<Name:([^>]+)>/i);
-    console.log(`   Name regex match:`, nameMatch);
 
-    const characterName = nameMatch ? nameMatch[1].trim().replace(/_/g, ' ') : 'Unknown';
+    // Universal name extraction: Find the first tag in the document (usually the name tag)
+    // Pattern matches <ANYTHING:content> format
+    const firstTagMatch = messageText.match(/<[^\s>]+:\s*([^>]+)>/);
+    console.log(`   First tag match:`, firstTagMatch);
+
+    const characterName = firstTagMatch ? firstTagMatch[1].trim().replace(/_/g, ' ') : 'Unknown';
     console.log(`   Extracted name: "${characterName}"`);
 
     const result = {
@@ -2125,13 +2527,32 @@ async function vectorizeFullsheetFromMessage(characterName, content) {
         saveSettingsDebounced();
         console.log(`✅ STEP 5 COMPLETE: Local library updated and saved`);
 
+        // Step 6: Track current embedding provider
+        console.log('\n🏷️  STEP 6: Tracking embedding provider...');
+        const vectorSettings = getVectorSettings();
+        ensureRagState();
+        const ragState = extension_settings[extensionName].rag;
+        ragState.lastEmbeddingSource = vectorSettings.source;
+        ragState.lastEmbeddingModel = vectorSettings.model || null;
+        saveSettingsDebounced();
+        console.log(`✅ STEP 6 COMPLETE: Tracked embedding provider`);
+        console.log(`   Source: ${vectorSettings.source}`);
+        console.log(`   Model: ${vectorSettings.model || 'default'}`);
+
         console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log(`✅ VECTORIZATION SUCCESSFUL: ${characterName}`);
         console.log(`   Total chunks: ${chunks.length}`);
         console.log(`   Collection ID: ${collectionId}`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
-        return true;
+        // Show success toast only if new chunks were added
+        if (newChunks.length > 0) {
+            toastr.success(`Chunked ${characterName}'s fullsheet (${chunks.length} chunks)`);
+            return true;
+        } else {
+            toastr.info(`${characterName}'s fullsheet already chunked`);
+            return false;
+        }
 
     } catch (error) {
         console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -2140,8 +2561,7 @@ async function vectorizeFullsheetFromMessage(characterName, content) {
         console.error('   Error stack:', error.stack);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
-        const errorMessage = `RAG vectorization error for ${characterName}. Reason: ${error.message}. Check the browser console (F12) for the full error stack.`;
-        toastr.error(errorMessage, "Vectorization Failed", {timeOut: 15000});
+        toastr.error(`Failed to chunk ${characterName}: ${error.message}`);
         return false;
     }
 }
@@ -2181,6 +2601,10 @@ function removeAllRAGButtons() {
  */
 function initializeRAG() {
     debugLog('Initializing CarrotKernel RAG system');
+
+    // Register RAG interceptor for generation events
+    eventSource.on(event_types.GENERATION_STARTED, carrotKernelRagInterceptor);
+    debugLog('✅ RAG interceptor registered for GENERATION_STARTED');
 
     // Hook into message events for button detection
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
@@ -2252,8 +2676,15 @@ async function carrotKernelRagInterceptor(chatArray, contextSize, abort, type) {
     const roleKey = settings.injectionRole?.toUpperCase?.() || 'SYSTEM';
     const promptRole = extension_prompt_roles?.[roleKey] ?? extension_prompt_roles.SYSTEM;
 
+    // Clear any existing prompt first
+    setExtensionPrompt(RAG_PROMPT_TAG, '', extension_prompt_types.IN_PROMPT, settings.injectionDepth, false, promptRole);
+
     if (!settings.enabled) {
-        setExtensionPrompt(RAG_PROMPT_TAG, '', extension_prompt_types.IN_PROMPT, settings.injectionDepth, false, promptRole);
+        return false;
+    }
+
+    // Only process on actual user-initiated generation (not dry runs, not impersonate, etc)
+    if (!type || type === 'dry' || type === 'quiet' || type === 'impersonate') {
         return false;
     }
 
@@ -2311,6 +2742,53 @@ async function carrotKernelRagInterceptor(chatArray, contextSize, abort, type) {
 
 window.carrotKernelRagInterceptor = carrotKernelRagInterceptor;
 
+/**
+ * Purge orphaned vectors from a collection
+ * Called when chunks are deleted from the library to clean up vector DB
+ */
+async function purgeOrphanedVectors(collectionId, deletedHashes) {
+    if (!Array.isArray(deletedHashes) || deletedHashes.length === 0) {
+        return;
+    }
+
+    debugLog(`Purging ${deletedHashes.length} orphaned vectors from ${collectionId}`, { deletedHashes });
+
+    try {
+        const exists = await collectionExists(collectionId);
+        if (!exists) {
+            debugLog(`Collection ${collectionId} doesn't exist, nothing to purge`);
+            return;
+        }
+
+        await apiDeleteVectorHashes(collectionId, deletedHashes);
+        debugLog(`Successfully purged ${deletedHashes.length} vectors from ${collectionId}`);
+    } catch (error) {
+        console.error(`Failed to purge orphaned vectors from ${collectionId}:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Delete an entire collection from the vector database
+ */
+async function deleteEntireCollection(collectionId) {
+    debugLog(`Deleting entire collection: ${collectionId}`);
+
+    try {
+        const exists = await collectionExists(collectionId);
+        if (!exists) {
+            debugLog(`Collection ${collectionId} doesn't exist, nothing to delete`);
+            return;
+        }
+
+        await apiDeleteCollection(collectionId);
+        debugLog(`Successfully deleted collection ${collectionId}`);
+    } catch (error) {
+        console.error(`Failed to delete collection ${collectionId}:`, error);
+        throw error;
+    }
+}
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================
@@ -2329,6 +2807,10 @@ globalThis.CarrotKernelFullsheetRag = {
     vectorizeFullsheetFromMessage,
     getCurrentContextLevel,
     getContextualLibrary,
+    getAllContextualLibraries,
+    purgeOrphanedVectors,
+    deleteEntireCollection,
+    apiInsertVectorItems,
 };
 
 // ES6 Module Exports (for dynamic import)
@@ -2341,6 +2823,7 @@ export {
     vectorizeFullsheetFromMessage,
     getCurrentContextLevel,
     getContextualLibrary,
+    getAllContextualLibraries,
     getKeywordPriority,
     normalizeKeyword,
 };

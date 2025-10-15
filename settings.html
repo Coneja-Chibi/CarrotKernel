@@ -284,6 +284,40 @@
                             </div>
                         </div>
 
+                        <!-- Embedding Provider Change Warning -->
+                        <div id="carrot_rag_provider_warning" style="
+                            display: none;
+                            grid-column: 1 / -1;
+                            background: color-mix(in srgb, #dc2626 10%, transparent);
+                            border: 2px solid #dc2626;
+                            border-radius: 8px;
+                            padding: 16px;
+                            margin-bottom: 12px;
+                            animation: warningPulse 2s ease-in-out infinite;
+                        ">
+                            <div style="display: flex; align-items: start; gap: 12px;">
+                                <i class="fa-solid fa-triangle-exclamation" style="color: #dc2626; font-size: 1.5em; flex-shrink: 0; margin-top: 2px;"></i>
+                                <div style="flex: 1;">
+                                    <h4 style="margin: 0 0 8px 0; color: #dc2626; font-size: 1em; font-weight: 600;">
+                                        Embedding Provider Changed
+                                    </h4>
+                                    <p style="margin: 0 0 12px 0; color: var(--SmartThemeEmColor, white); font-size: 0.95em; line-height: 1.5;">
+                                        Your embedding provider has changed from <strong id="carrot_rag_old_provider">Unknown</strong> to <strong id="carrot_rag_new_provider">Unknown</strong>.
+                                        Embeddings from different providers are incompatible and cannot be used together.
+                                        You must re-vectorize all collections to use the new provider.
+                                    </p>
+                                    <button id="carrot_rag_revectorize_btn" class="carrot-primary-btn" style="
+                                        background: #dc2626;
+                                        border-color: #dc2626;
+                                        padding: 8px 16px;
+                                        font-weight: 600;
+                                    ">
+                                        <i class="fa-solid fa-rotate"></i> Re-vectorize All Collections
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="carrot-setting-item">
                             <label class="carrot-toggle">
                                 <input type="checkbox" id="carrot_rag_enabled">
@@ -811,9 +845,16 @@
                     </header>
                     <div class="chunk-modal__toolbar flex-container alignitemscenter">
                         <input type="text" id="carrot-rag-chunk-search" class="text_pole textarea_compact chunk-search-input" placeholder="Search chunks...">
+                        <button id="carrot-rag-add-chunk" class="menu_button" type="button" title="Add new chunk" style="padding: 4px 8px; font-size: 0.9em;">
+                            <i class="fa-solid fa-plus"></i>
+                        </button>
                         <button id="carrot-rag-format-toggle" class="menu_button chunk-format-toggle" type="button" title="Toggle formatted text display">
                             <i class="fa-solid fa-align-left"></i>
                             <span class="chunk-format-label">Plain</span>
+                        </button>
+                        <button id="carrot-rag-case-toggle" class="menu_button chunk-case-toggle" type="button" title="Toggle case-sensitive keyword matching">
+                            <i class="fa-solid fa-font"></i>
+                            <span class="chunk-case-label">Case: Ignore</span>
                         </button>
                         <div id="carrot-rag-chunk-stats" class="chunk-stat-list flex-container alignitemscenter" aria-live="polite"></div>
                     </div>

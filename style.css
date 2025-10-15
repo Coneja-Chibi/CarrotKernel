@@ -5843,6 +5843,12 @@
     background: var(--black10a, rgba(0, 0, 0, 0.2));
 }
 
+.chunk-modal__title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
 .chunk-modal__heading {
     margin: 0;
     font-size: 1.4em;
@@ -5851,6 +5857,9 @@
     align-items: center;
     gap: 10px;
     letter-spacing: 0.01em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .chunk-modal__subtitle {
@@ -5859,6 +5868,9 @@
     opacity: 0.7;
     font-weight: 400;
     letter-spacing: 0.01em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .chunk-modal__close {
@@ -6047,21 +6059,57 @@
     margin-left: 12px;
 }
 
-/* Keywords preview - subtle text in collapsed state */
+/* Keywords preview - badge-style display in collapsed state */
 .chunk-keywords-preview {
-    font-size: 0.9em;
-    color: var(--SmartThemeEmColor);
-    opacity: 0.75;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 200px;
-    font-weight: 400;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    max-width: 300px;
 }
 
 .chunk-keywords-preview.empty {
     opacity: 0.5;
     font-style: italic;
+    font-size: 0.9em;
+}
+
+/* Mini keyword badges in header (collapsed state) */
+.chunk-keyword-mini-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    background: var(--black30a, rgba(0, 0, 0, 0.3));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.15));
+    border-radius: 3px;
+    font-size: 0.75em;
+    color: var(--SmartThemeEmColor, #fff);
+    white-space: nowrap;
+    gap: 2px;
+}
+
+.chunk-keyword-mini-badge sup {
+    font-size: 0.8em;
+    opacity: 0.7;
+    font-weight: 600;
+    margin-left: 2px;
+}
+
+.chunk-keyword-more-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    background: var(--SmartThemeQuoteColor, #10b981);
+    border-radius: 3px;
+    font-size: 0.75em;
+    font-weight: 600;
+    color: #000;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.chunk-keyword-more-badge:hover {
+    opacity: 0.8;
 }
 
 /* Metadata badges - clean, minimal design like ST's Position/Depth/Order badges */
@@ -6143,24 +6191,91 @@
     }
 }
 
+/* Container improvements - match ST lorebook background */
+#carrot-rag-chunks-container {
+    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.3));
+    padding: 12px;
+    border-radius: 8px;
+}
+
+/* Entry cards - exact ST styling */
+#carrot-rag-chunks-container .world_entry {
+    margin-bottom: 8px;
+    background: var(--black30a, rgba(0, 0, 0, 0.3));
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+#carrot-rag-chunks-container .world_entry:hover {
+    background: var(--black30a, rgba(0, 0, 0, 0.4));
+    border-color: var(--SmartThemeQuoteColor, #10b981);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Header styling - clean and minimal */
+#carrot-rag-chunks-container .inline-drawer-header {
+    padding: 10px 12px;
+    background: transparent;
+    border-radius: 6px 6px 0 0;
+}
+
+/* Title field styling - match ST exactly */
+#carrot-rag-chunks-container .chunk-title-field {
+    background: transparent;
+    border: none;
+    color: var(--SmartThemeEmColor, #fff);
+    font-weight: 500;
+    padding: 2px 4px;
+    transition: background 0.2s ease;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+#carrot-rag-chunks-container .chunk-title-field:focus,
+#carrot-rag-chunks-container .chunk-title-field:hover {
+    background: var(--black30a, rgba(0, 0, 0, 0.2));
+    border-radius: 3px;
+}
+
 /* Drag handle refinement */
 #carrot-rag-chunks-container .drag-handle {
-    opacity: 0.4;
+    opacity: 0.3;
     transition: opacity 0.15s ease;
-    font-size: 1em;
+    font-size: 0.95em;
+    color: var(--grey70, #94a3b8);
 }
 
 #carrot-rag-chunks-container .world_entry:hover .drag-handle {
-    opacity: 0.7;
+    opacity: 0.6;
 }
 
 /* Chevron refinement */
 #carrot-rag-chunks-container .inline-drawer-toggle {
-    transition: transform 0.2s ease, opacity 0.15s ease;
+    transition: transform 0.2s ease, opacity 0.15s ease, color 0.2s ease;
+    color: var(--SmartThemeQuoteColor, #10b981);
 }
 
 #carrot-rag-chunks-container .inline-drawer-toggle:hover {
     opacity: 1;
+    transform: scale(1.1);
+}
+
+/* Content area styling */
+#carrot-rag-chunks-container .inline-drawer-content {
+    padding: 12px;
+    background: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.2));
+    border-top: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.05));
+}
+
+/* Header right side - keywords and badges */
+.chunk-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
     transform: scale(1.1);
 }
 
@@ -6275,4 +6390,17 @@
     color: var(--SmartThemeEmColor);
     border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 40%, transparent);
     padding-bottom: 4px;
+}
+
+/* ============================================================================
+   RAG PROVIDER WARNING ANIMATION
+   ============================================================================ */
+
+@keyframes warningPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 20px 5px rgba(220, 38, 38, 0.6);
+    }
 }
