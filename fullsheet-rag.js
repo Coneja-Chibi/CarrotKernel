@@ -2413,7 +2413,7 @@ function detectFullsheetInMessage(messageText) {
     const result = {
         characterName,
         content: messageText,
-        sectionCount: sectionMatches.length
+        sectionCount: sectionMatches?.length || 0
     };
 
     console.log('✅ [detectFullsheetInMessage] Fullsheet detected!', result);

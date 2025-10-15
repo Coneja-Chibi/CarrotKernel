@@ -6218,6 +6218,17 @@
     padding: 10px 12px;
     background: transparent;
     border-radius: 6px 6px 0 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+}
+
+/* Ensure thin controls container can shrink */
+#carrot-rag-chunks-container .world_entry_thin_controls {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
 }
 
 /* Title field styling - match ST exactly */
@@ -6275,6 +6286,9 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
 }
     transform: scale(1.1);
 }
@@ -6295,6 +6309,8 @@
 #carrot-rag-chunks-container .carrot-chunk-delete-btn {
     opacity: 0.6;
     transition: all 0.15s ease;
+    flex-shrink: 0;
+    margin-left: 8px;
 }
 
 #carrot-rag-chunks-container .carrot-chunk-delete-btn:hover {

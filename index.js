@@ -10,6 +10,10 @@ import { CarrotWorldBookTracker } from './worldbook-tracker.js';
 let fullsheetAPI = {};
 let fullsheetRAGLoaded = false;
 
+// Chunk visualizer state (module-level so accessible from all functions)
+let currentEditingCollection = null;
+let modifiedChunks = {};
+
 async function loadFullsheetRAG() {
     if (fullsheetRAGLoaded) {
         return fullsheetAPI;
@@ -22080,8 +22084,7 @@ Most common categories:<br/>
 // Close the main CarrotKernel object
 
     // Chunk Visualizer Modal Functions
-    let currentEditingCollection = null;
-    let modifiedChunks = {};
+    // NOTE: currentEditingCollection and modifiedChunks are now at module level (top of file)
     let chunkFormattingEnabled = false; // Toggle for formatted text display
 
     const CUSTOM_KEYWORD_PRIORITY = 140;
