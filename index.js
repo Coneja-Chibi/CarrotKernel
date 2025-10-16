@@ -22207,6 +22207,64 @@ Most common categories:<br/>
         return formatted;
     }
 
+    /**
+     * Handle weight badge click in chunk viewer
+     */
+    function handleWeightBadgeClickInViewer($badge, chunk, hash) {
+        const keyword = $badge.attr('data-keyword');
+        if (!chunk) return;
+
+        const normalized = normalizeKeywordClient(keyword);
+        const systemKeywords = ensureArrayValue(chunk.systemKeywords);
+        const customKeywords = ensureArrayValue(chunk.customKeywords);
+        const customKeywordSet = new Set(customKeywords.map(normalizeKeywordClient));
+        const currentWeight = chunk.customWeights?.[normalized] ||
+            (customKeywordSet.has(normalized) ? CUSTOM_KEYWORD_PRIORITY : 20);
+
+        // Create inline input
+        const $input = $('<input>')
+            .attr('type', 'number')
+            .attr('min', '1')
+            .attr('max', '200')
+            .val(currentWeight)
+            .css({
+                'width': '60px',
+                'padding': '2px 4px',
+                'font-size': '0.85em',
+                'font-family': 'monospace',
+                'background': 'var(--SmartThemeUserMesBlurTintColor)',
+                'border': '1px solid var(--SmartThemeBorderColor)',
+                'border-radius': '3px',
+                'color': 'inherit'
+            })
+            .addClass('keyword-weight-input');
+
+        // Replace badge with input
+        $badge.replaceWith($input);
+        $input.focus().select();
+
+        // Save on blur or enter
+        $input.on('blur keydown', function(e) {
+            if (e.type === 'keydown' && e.key !== 'Enter') return;
+
+            const newWeight = parseInt($(this).val()) || currentWeight;
+
+            // Clamp between 1-200
+            const clampedWeight = Math.max(1, Math.min(200, newWeight));
+
+            // Save to chunk
+            if (!chunk.customWeights) chunk.customWeights = {};
+            chunk.customWeights[normalized] = clampedWeight;
+
+            // Re-render to update display
+            renderChunks(modifiedChunks, getSearchTerm());
+        });
+
+        $input.on('click', function(e) {
+            e.stopPropagation();
+        });
+    }
+
     function normalizeKeywordClient(word) {
         if (!word) {
             return '';
@@ -23005,11 +23063,67 @@ Most common categories:<br/>
                     const keyword = item.text;
                     const isRegex = isValidRegex(keyword);
 
-                    // Regex items - use ST's highlighting
+                    // Regex items - use ST's highlighting with weight badge
                     if (isRegex) {
+                        const normalized = normalizeKeywordClient(keyword);
+                        const weight = getWeight(keyword, normalized);
+
                         const $regexTag = $('<span>').addClass('item').addClass('regex_item').attr('title', `${keyword}\n\nClick to edit`);
                         $regexTag.prepend($('<span>').addClass('regex_icon').text('•*').attr('title', 'Regex'));
                         $regexTag.append(' ').append($(highlightRegex(keyword)));
+
+                        // Weight badge - clickable to edit (using contenteditable)
+                        const $weight = $('<span>')
+                            .addClass('keyword-weight-badge')
+                            .attr('data-keyword', keyword)
+                            .attr('data-hash', hash)
+                            .attr('contenteditable', 'true')
+                            .attr('spellcheck', 'false')
+                            .attr('title', 'Click to edit weight')
+                            .text(weight)
+                            .css({
+                                'opacity': '0.85',
+                                'font-size': '0.85em',
+                                'margin-left': '4px',
+                                'cursor': 'text',
+                                'padding': '1px 4px',
+                                'border-radius': '3px',
+                                'background': 'rgba(255,255,255,0.1)',
+                                'font-family': 'monospace',
+                                'min-width': '20px',
+                                'display': 'inline-block',
+                                'text-align': 'center'
+                            })
+                            .on('mousedown', function(e) {
+                                e.stopPropagation();
+                            })
+                            .on('click', function(e) {
+                                e.stopPropagation();
+                                $(this).select();
+                            })
+                            .on('keydown', function(e) {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    $(this).blur();
+                                }
+                                // Allow only numbers
+                                if (!/^\d$/.test(e.key) && !['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.key)) {
+                                    e.preventDefault();
+                                }
+                            })
+                            .on('blur', function() {
+                                const newWeight = parseInt($(this).text()) || weight;
+                                const clampedWeight = Math.max(1, Math.min(200, newWeight));
+
+                                $(this).text(clampedWeight);
+
+                                const normalized = normalizeKeywordClient(keyword);
+                                if (!chunk.customWeights) chunk.customWeights = {};
+                                chunk.customWeights[normalized] = clampedWeight;
+                            });
+
+                        const $weightWrapper = $('<span>').css('margin-left', '2px').text('[').append($weight).append(']');
+                        $regexTag.append($weightWrapper);
                         return $regexTag;
                     }
 
@@ -23024,25 +23138,58 @@ Most common categories:<br/>
                     // Keyword text
                     const $text = $('<span>').addClass('keyword-text').text(keyword);
 
-                    // Weight badge - clickable to edit
+                    // Weight badge - clickable to edit (using contenteditable)
                     const $weight = $('<span>')
                         .addClass('keyword-weight-badge')
                         .attr('data-keyword', keyword)
                         .attr('data-hash', hash)
+                        .attr('contenteditable', 'true')
+                        .attr('spellcheck', 'false')
                         .attr('title', 'Click to edit weight')
-                        .text(`[${weight}]`)
+                        .text(weight)
                         .css({
                             'opacity': '0.85',
                             'font-size': '0.85em',
                             'margin-left': '4px',
-                            'cursor': 'pointer',
+                            'cursor': 'text',
                             'padding': '1px 4px',
                             'border-radius': '3px',
                             'background': 'rgba(255,255,255,0.1)',
-                            'font-family': 'monospace'
+                            'font-family': 'monospace',
+                            'min-width': '20px',
+                            'display': 'inline-block',
+                            'text-align': 'center'
+                        })
+                        .on('mousedown', function(e) {
+                            e.stopPropagation();
+                        })
+                        .on('click', function(e) {
+                            e.stopPropagation();
+                            $(this).select();
+                        })
+                        .on('keydown', function(e) {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                $(this).blur();
+                            }
+                            // Allow only numbers
+                            if (!/^\d$/.test(e.key) && !['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.key)) {
+                                e.preventDefault();
+                            }
+                        })
+                        .on('blur', function() {
+                            const newWeight = parseInt($(this).text()) || weight;
+                            const clampedWeight = Math.max(1, Math.min(200, newWeight));
+
+                            $(this).text(clampedWeight);
+
+                            const normalized = normalizeKeywordClient(keyword);
+                            if (!chunk.customWeights) chunk.customWeights = {};
+                            chunk.customWeights[normalized] = clampedWeight;
                         });
 
-                    $tag.append($text).append($weight);
+                    const $weightWrapper = $('<span>').css('margin-left', '2px').text('[').append($weight).append(']');
+                    $tag.append($text).append($weightWrapper);
 
                     if (isCustom) {
                         $tag.css('color', 'var(--SmartThemeQuoteColor)');
@@ -23098,28 +23245,72 @@ Most common categories:<br/>
                     e.stopImmediatePropagation();
                 });
 
+                // Handle weight badge clicks within select2
                 $select.next('.select2-container').on('click mousedown', function(e) {
                     e.stopPropagation();
                     e.stopImmediatePropagation();
+
+                    // Check if click is on a weight badge
+                    const $target = $(e.target);
+                    if ($target.hasClass('keyword-weight-badge')) {
+                        e.preventDefault();
+                        const keyword = $target.attr('data-keyword');
+                        const hash = $target.attr('data-hash');
+                        const chunk = modifiedChunks[hash];
+                        if (chunk) {
+                            handleWeightBadgeClickInViewer($target, chunk, hash);
+                        }
+                    }
                 });
 
                 $select.show();
                 $textarea.hide();
             } else {
-                // PLAINTEXT MODE: Initialize textarea
-                const keywordsText = allKeywords.join(', ');
+                // PLAINTEXT MODE: Initialize textarea with keyword:weight format
+                const keywordsText = allKeywords.map(k => {
+                    const normalized = normalizeKeywordClient(k);
+                    const weight = getWeight(k, normalized);
+                    return `${k}:${weight}`;
+                }).join(', ');
                 $textarea.val(keywordsText);
 
                 $textarea.on('change input', function() {
-                    const value = $(this).val();
-                    const newKeywords = value.split(',').map(k => k.trim()).filter(k => k.length > 0);
+                    const text = $(this).val() || '';
+                    const newKeywords = [];
+
+                    // Parse comma-separated entries
+                    text.split(',').forEach(entry => {
+                        const trimmed = entry.trim();
+                        if (!trimmed) return;
+
+                        // Check if entry has weight format (keyword:weight)
+                        const colonIndex = trimmed.lastIndexOf(':');
+                        if (colonIndex > 0) {
+                            const keyword = trimmed.substring(0, colonIndex).trim();
+                            const weightStr = trimmed.substring(colonIndex + 1).trim();
+                            const weight = parseInt(weightStr);
+
+                            if (keyword && !isNaN(weight) && weight >= 1 && weight <= 200) {
+                                newKeywords.push(keyword);
+                                const normalized = normalizeKeywordClient(keyword);
+                                if (!chunk.customWeights) chunk.customWeights = {};
+                                chunk.customWeights[normalized] = weight;
+                            } else if (keyword) {
+                                // Invalid or missing weight, use keyword without weight
+                                newKeywords.push(keyword);
+                            }
+                        } else {
+                            // No weight specified, just keyword
+                            newKeywords.push(trimmed);
+                        }
+                    });
 
                     // Update all keyword arrays
                     chunk.keywords = newKeywords;
                     chunk.systemKeywords = systemKeywords.filter(k => newKeywords.includes(k));
                     chunk.customKeywords = newKeywords.filter(k => !systemKeywords.includes(k));
 
-                    // Set default weight for new custom keywords
+                    // Set default weight for new custom keywords without explicit weight
                     newKeywords.forEach(keyword => {
                         const normalized = normalizeKeywordClient(keyword);
                         if (!systemKeywords.includes(keyword) && chunk.customWeights[normalized] === undefined) {

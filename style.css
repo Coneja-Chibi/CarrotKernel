@@ -1733,6 +1733,15 @@
     touch-action: manipulation; /* Enable touch events on mobile */
 }
 
+/* Ensure select2 dropdowns appear above the modal */
+.select2-container--open {
+    z-index: 999999 !important;
+}
+
+.select2-dropdown {
+    z-index: 999999 !important;
+}
+
 .carrot-popup-overlay.active {
     opacity: 1;
     pointer-events: auto;

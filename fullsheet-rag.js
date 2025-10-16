@@ -1195,9 +1195,14 @@ function convertKeywordsToRegex(keywords) {
             // Create suffixes from the common root
             const suffixes = words.map(w => w.slice(commonRoot.length)).filter(s => s);
 
-            // Use word boundaries for precision: /\bpsych(?:e|ology|ological)?\b/i
+            // Check if the bare root (common root without suffix) is in the family
+            const hasBareRoot = words.some(w => w === commonRoot);
+
+            // Use word boundaries for precision
+            // If bare root exists: /\bpsych(?:e|ology|ological)?\b/i (? makes suffixes optional)
+            // If no bare root: /\bpsych(?:e|ology|ological)\b/i (no ?, must have suffix)
             const pattern = suffixes.length > 0
-                ? `\\b${commonRoot}(?:${suffixes.join('|')})?\\b`
+                ? `\\b${commonRoot}(?:${suffixes.join('|')})${hasBareRoot ? '?' : ''}\\b`
                 : `\\b${baseWord}\\b`;
 
             regexPatterns.push({
@@ -1207,7 +1212,7 @@ function convertKeywordsToRegex(keywords) {
                 source: 'word-family',
             });
 
-            console.log(`🔍 Created word family regex: /${pattern}/i from:`, words);
+            console.log(`🔍 Created word family regex: /${pattern}/i from:`, words, `(bare root: ${hasBareRoot})`);
         }
     }
 
@@ -2746,7 +2751,7 @@ function detectFullsheetInMessage(messageText) {
     console.log('✅ [detectFullsheetInMessage] Fullsheet structure detected!');
 
     // Try to extract character name from the FIRST tag - LANGUAGE-AGNOSTIC
-    console.log('🔍 [detectFullsheetInMessage] Extracting character name...');
+    console.log('🔍 [detectFullsheetInMessage] Extracting character name as suggestion...');
 
     // Universal name extraction: Find the first tag in the document (usually the name tag)
     // Works for ANY language: <NAME:John>, <名前:太郎>, <NOMBRE:Juan>, <ИМЯ:Иван>, etc.
@@ -2755,7 +2760,7 @@ function detectFullsheetInMessage(messageText) {
     console.log(`   First tag match:`, firstTagMatch);
 
     const characterName = firstTagMatch ? firstTagMatch[1].trim().replace(/_/g, ' ') : 'Unknown';
-    console.log(`   Extracted name: "${characterName}"`);
+    console.log(`   Extracted name suggestion: "${characterName}" (user can override this)`);
 
     const result = {
         characterName,
@@ -2859,17 +2864,29 @@ function addRAGButtonToMessage(messageId) {
  */
 async function handleRAGButtonClick(messageId, fullsheetInfo) {
     const button = $(`.${RAG_BUTTON_CLASS}[data-message-id="${messageId}"]`);
-    const originalHTML = button.html();
-
-    button.html('<i class="fa-solid fa-spinner fa-spin"></i> Vectorizing...')
-          .css('pointer-events', 'none');
 
     try {
-        debugLog(`Vectorizing fullsheet for ${fullsheetInfo.characterName}`);
+        // Prompt user for character name
+        const characterName = prompt(
+            'Enter character name for this fullsheet:',
+            fullsheetInfo.characterName || ''
+        );
 
-        // Vectorize the fullsheet
+        if (!characterName || characterName.trim() === '') {
+            toastr.info('Vectorization cancelled');
+            return;
+        }
+
+        const trimmedName = characterName.trim();
+
+        button.html('<i class="fa-solid fa-spinner fa-spin"></i> Vectorizing...')
+              .css('pointer-events', 'none');
+
+        debugLog(`Vectorizing fullsheet for ${trimmedName}`);
+
+        // Vectorize the fullsheet with user-provided name
         const success = await vectorizeFullsheetFromMessage(
-            fullsheetInfo.characterName,
+            trimmedName,
             fullsheetInfo.content
         );
 
@@ -2885,7 +2902,7 @@ async function handleRAGButtonClick(messageId, fullsheetInfo) {
 
             // Show success toast
             if (typeof toastr !== 'undefined') {
-                toastr.success(`✅ ${fullsheetInfo.characterName} fullsheet vectorized!`);
+                toastr.success(`✅ ${trimmedName} fullsheet vectorized!`);
             }
         } else {
             throw new Error('Vectorization failed');
@@ -2893,6 +2910,7 @@ async function handleRAGButtonClick(messageId, fullsheetInfo) {
 
     } catch (error) {
         console.error('RAG vectorization error:', error);
+        const originalHTML = button.html();
         button.html('<i class="fa-solid fa-xmark"></i> Failed')
               .css('background', 'linear-gradient(135deg, #ef4444, #dc2626)');
 
