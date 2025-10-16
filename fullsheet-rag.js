@@ -74,7 +74,11 @@ function getCurrentContextLevel() {
 }
 
 function ensureRagState() {
+    // CRITICAL: Never overwrite extension_settings[extensionName] completely
+    // This would destroy all user settings on page refresh
     if (!extension_settings[extensionName]) {
+        // Only initialize if it truly doesn't exist (first-time setup)
+        console.warn('⚠️ RAG: extension_settings[extensionName] does not exist - initializing empty object. This should only happen on first load.');
         extension_settings[extensionName] = {};
     }
     if (!extension_settings[extensionName].rag) {
@@ -861,73 +865,83 @@ function getKeywordPriority(keyword) {
  * 3. Semantic mapping for English enhancement
  */
 function extractKeywords(text, sectionTitle = '', topic = '') {
-    const keywords = new Set();
+    // Case-insensitive keyword map for deduplication
+    const keywordMap = new Map(); // lowercase -> original word
 
     // STEP 1: Extract words from title/topic (language-agnostic, high priority)
     const titleText = (sectionTitle + ' ' + topic)
-        .toLowerCase()
         .replace(/[^\p{L}\s]/gu, ' ') // Keep all letters (Unicode), remove punctuation
         .split(/\s+/)
-        .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+        .filter(w => w.length >= 3 && !STOP_WORDS.has(w.toLowerCase()));
 
-    titleText.forEach(word => keywords.add(word));
+    titleText.forEach(word => {
+        const lower = word.toLowerCase();
+        if (!keywordMap.has(lower)) {
+            keywordMap.set(lower, word.toLowerCase());
+        }
+    });
 
     // STEP 2: Frequency analysis from text (language-agnostic)
     const tokens = text
-        .toLowerCase()
         .replace(/[<>]/g, ' ')
         .match(/[\p{L}]{3,}/gu) || []; // Match 3+ letter words (any language)
 
     const frequency = new Map();
     tokens.forEach(word => {
-        if (!STOP_WORDS.has(word)) {
-            frequency.set(word, (frequency.get(word) || 0) + 1);
+        const lower = word.toLowerCase();
+        if (!STOP_WORDS.has(lower)) {
+            frequency.set(lower, (frequency.get(lower) || 0) + 1);
         }
     });
 
-    // Add words that appear 2+ times
+    // Add words that appear 2+ times (balanced threshold)
     for (const [word, count] of frequency.entries()) {
-        if (count >= 2) {
-            keywords.add(word);
+        if (count >= 2 && !keywordMap.has(word)) {
+            keywordMap.set(word, word);
         }
     }
 
-    // STEP 3: English semantic enhancement (optional, only if title is English)
+    // STEP 3: Only add title-specific semantic keywords if they ACTUALLY appear in the text
     const TITLE_KEYWORD_MAP = {
-        'aesthetic': ['style', 'aesthetic', 'appearance', 'visual'],
-        'expression': ['expression', 'communication', 'voice'],
-        'style': ['style', 'manner', 'approach'],
-        'philosophy': ['philosophy', 'belief', 'worldview'],
-        'origin': ['origin', 'history', 'past', 'background'],
-        'history': ['history', 'past', 'backstory'],
-        'psyche': ['psyche', 'mind', 'mental', 'psychology'],
-        'behavioral': ['behavior', 'action', 'manner'],
-        'relational': ['relationship', 'social', 'dynamic'],
-        'linguistic': ['speech', 'language', 'communication'],
-        'physical': ['physical', 'body', 'appearance'],
-        'identity': ['identity', 'self', 'essence'],
-        'emotional': ['emotion', 'feeling', 'mood'],
-        'trauma': ['trauma', 'wound', 'pain'],
+        'aesthetic': ['aesthetic', 'style'],
+        'expression': ['expression'],
+        'philosophy': ['philosophy'],
+        'origin': ['origin'],
+        'history': ['history'],
+        'psyche': ['psyche'],
+        'behavioral': ['behavior'],
+        'relational': ['relationship'],
+        'linguistic': ['linguistic'],
+        'physical': ['physical'],
+        'identity': ['identity'],
+        'emotional': ['emotion'],
+        'arousal': ['arousal'],
+        'trauma': ['trauma'],
     };
 
-    // Only apply semantic mapping if title contains English words
-    const hasEnglishTitle = titleText.some(w => TITLE_KEYWORD_MAP[w]);
-    if (hasEnglishTitle) {
-        for (const titleWord of titleText) {
-            if (TITLE_KEYWORD_MAP[titleWord]) {
-                TITLE_KEYWORD_MAP[titleWord].forEach(kw => keywords.add(kw));
+    const lowerText = text.toLowerCase();
+    const lowerTitle = (sectionTitle + ' ' + topic).toLowerCase();
+
+    for (const [titleKey, semanticWords] of Object.entries(TITLE_KEYWORD_MAP)) {
+        // Only add semantic keywords if the title contains the key AND the text contains related terms
+        if (lowerTitle.includes(titleKey)) {
+            for (const semanticWord of semanticWords) {
+                // Only add if it actually appears in THIS chunk's text
+                if (lowerText.includes(semanticWord) && !keywordMap.has(semanticWord)) {
+                    keywordMap.set(semanticWord, semanticWord);
+                }
             }
         }
     }
 
-    // Sort by frequency and limit to 15
-    const sortedKeywords = Array.from(keywords).sort((a, b) => {
+    // Sort by frequency and limit to 12 keywords (increased from 8)
+    const sortedKeywords = Array.from(keywordMap.values()).sort((a, b) => {
         const freqA = frequency.get(a) || 0;
         const freqB = frequency.get(b) || 0;
         return freqB - freqA;
     });
 
-    return sortedKeywords.slice(0, 15);
+    return sortedKeywords.slice(0, 12);
 }
 
 const EMOJI_HEADER_REGEX = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}]/u;
@@ -985,22 +999,22 @@ function buildKeywordSetsFromGroups(groups, keywordsSet, regexSet) {
         const group = KEYWORD_GROUPS[groupKey];
         if (!group) continue;
 
-        // Limit keywords per group to top 5 to prevent explosion
+        // Limit keywords per group to top 3 to prevent explosion (reduced from 5)
         if (Array.isArray(group.keywords)) {
-            const limitedKeywords = group.keywords.slice(0, 5);
+            const limitedKeywords = group.keywords.slice(0, 3);
             for (const keyword of limitedKeywords) {
                 keywordsSet.add(keyword);
             }
         }
 
-        // Add all regexes (these are important for matching)
+        // Add all regexes with weighting support
         if (Array.isArray(group.regexes)) {
             for (const regexEntry of group.regexes) {
                 regexSet.add(JSON.stringify({
                     pattern: regexEntry.pattern,
                     flags: regexEntry.flags || 'i',
                     group: groupKey,
-                    priority: group.priority ?? 20,
+                    priority: regexEntry.priority ?? group.priority ?? 20,
                     source: 'preset',
                 }));
             }
@@ -1059,34 +1073,22 @@ function buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags) {
         }
     }
 
-    const lowerChunk = chunkText.toLowerCase();
-    for (const rule of KEYWORD_REGEX_LOOKUP) {
-        try {
-            const regex = new RegExp(rule.pattern, rule.flags || 'i');
-            if (regex.test(lowerChunk)) {
-                detectedGroups.add(rule.group);
-                regexSet.add(JSON.stringify({
-                    pattern: rule.pattern,
-                    flags: rule.flags || 'i',
-                    priority: rule.priority ?? 20,
-                    source: 'preset',
-                }));
-            }
-        } catch {
-            // ignore malformed regex
-        }
-    }
+    // REMOVED: Don't scan entire chunk text for keyword groups
+    // This was causing keyword bleeding between sections
+    // Only detect groups based on section title and tags, not full text
 
-    // Manual heuristics for important phrases - but require actual presence in text
-    // Only add groups if the keywords actually appear, not just pattern matches
-    const lowerText = chunkText.toLowerCase();
-    if (lowerText.includes('boundar') || lowerText.includes('consent')) detectedGroups.add('boundaries');
-    if (lowerText.includes('trauma') || lowerText.includes('trigger')) detectedGroups.add('trauma');
-    if (lowerText.includes('flirt') || lowerText.includes('seduc')) detectedGroups.add('flirting');
-    if (lowerText.includes('arous') || lowerText.includes('lust')) detectedGroups.add('arousal');
-    if (lowerText.includes('jealous') || lowerText.includes('possessive')) detectedGroups.add('jealousy');
-    if (lowerText.includes('attachment') || lowerText.includes('avoidant')) detectedGroups.add('attachment');
+    // Only build keyword groups if they match the section title/topic SPECIFICALLY
+    const lowerSection = (sanitizedSection + ' ' + sanitizedTopic).toLowerCase();
 
+    // Manual heuristics - ONLY check section title, not entire chunk text
+    if (lowerSection.includes('boundar') || lowerSection.includes('consent')) detectedGroups.add('boundaries');
+    if (lowerSection.includes('trauma') || lowerSection.includes('trigger') || lowerSection.includes('ptsd')) detectedGroups.add('trauma');
+    if (lowerSection.includes('flirt') || lowerSection.includes('seduc')) detectedGroups.add('flirting');
+    if (lowerSection.includes('arous') || lowerSection.includes('lust') || lowerSection.includes('desire')) detectedGroups.add('arousal');
+    if (lowerSection.includes('jealous') || lowerSection.includes('possessive')) detectedGroups.add('jealousy');
+    if (lowerSection.includes('attachment') || lowerSection.includes('avoidant')) detectedGroups.add('attachment');
+
+    // Limit keywords per group to prevent explosion (reduced from 5 to 3)
     buildKeywordSetsFromGroups(detectedGroups, keywordsSet, regexSet);
 
     return {
@@ -1096,19 +1098,249 @@ function buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags) {
     };
 }
 
-function buildChunkMetadata(sectionTitle, topic, chunkText, tags) {
+/**
+ * Get the stem/root of a word by stripping common suffixes
+ * Examples: "psychological" -> "psych", "psychology" -> "psych", "psyche" -> "psych"
+ */
+function getWordStem(word) {
+    const lower = word.toLowerCase();
+
+    // Strip common suffixes to find root (order matters - longest first)
+    const suffixes = [
+        'ological', 'ology', 'ical', 'ation', 'ness', 'ment', 'ship', 'able', 'ible',
+        'ing', 'ed', 'ies', 'es', 's', 'ly', 'al', 'ic', 'y', 'e'
+    ];
+
+    for (const suffix of suffixes) {
+        if (lower.endsWith(suffix) && lower.length > suffix.length + 2) {
+            return lower.slice(0, -suffix.length);
+        }
+    }
+
+    return lower;
+}
+
+/**
+ * Convert keywords to regex patterns ONLY when we find actual related words
+ * Strategy:
+ * 1. Find words in the list that share a common prefix (function + functionally -> /\bfunction(?:ally)?\b/i)
+ * 2. Find phrase overlaps (interdimensional + interdimensional being)
+ * 3. Convert multi-word keywords to regex with word boundaries
+ * 4. Leave simple keywords as plain keywords (NO unintelligent suffix guessing)
+ */
+function convertKeywordsToRegex(keywords) {
+    console.log('🔍 [convertKeywordsToRegex] Input:', { count: keywords.length, keywords: keywords });
+
+    const regexPatterns = [];
+    const used = new Set();
+    const sorted = [...keywords].sort((a, b) => b.length - a.length); // Longest first
+
+    // PASS 1: Find ACTUAL word families by looking at what keywords we HAVE
+    // If we have both "function" and "functionally", group them
+    // If we only have "species", DON'T add made-up suffixes
+    for (let i = 0; i < sorted.length; i++) {
+        if (used.has(i)) continue;
+
+        const word1 = sorted[i].toLowerCase();
+        if (word1.includes(' ')) continue; // Skip multi-word for this pass
+
+        const family = [{ word: word1, idx: i }];
+
+        // Find other keywords that share a common root with this word
+        for (let j = 0; j < sorted.length; j++) {
+            if (i === j || used.has(j)) continue;
+            const word2 = sorted[j].toLowerCase();
+            if (word2.includes(' ')) continue;
+
+            // Check if they share a common root (at least 4 characters)
+            let commonRoot = '';
+            const minLen = Math.min(word1.length, word2.length);
+            for (let k = 0; k < minLen; k++) {
+                if (word1[k] === word2[k]) {
+                    commonRoot += word1[k];
+                } else {
+                    break;
+                }
+            }
+
+            // If they share a meaningful root (4+ chars), they're likely related
+            // psyche (5), psychology (10), psychological (13) -> common root "psych" (5 chars)
+            if (commonRoot.length >= 4) {
+                family.push({ word: word2, idx: j });
+            }
+        }
+
+        // If we found a real family (2+ members from our ACTUAL keywords), create regex
+        if (family.length >= 2) {
+            family.forEach(f => used.add(f.idx));
+
+            // Sort by length to get base word first
+            const words = family.map(f => f.word).sort((a, b) => a.length - b.length);
+            const baseWord = words[0];
+
+            // Find the common root among ALL words in the family
+            let commonRoot = baseWord;
+            for (const word of words) {
+                let newRoot = '';
+                for (let k = 0; k < Math.min(commonRoot.length, word.length); k++) {
+                    if (commonRoot[k] === word[k]) {
+                        newRoot += commonRoot[k];
+                    } else {
+                        break;
+                    }
+                }
+                commonRoot = newRoot;
+            }
+
+            // Create suffixes from the common root
+            const suffixes = words.map(w => w.slice(commonRoot.length)).filter(s => s);
+
+            // Use word boundaries for precision: /\bpsych(?:e|ology|ological)?\b/i
+            const pattern = suffixes.length > 0
+                ? `\\b${commonRoot}(?:${suffixes.join('|')})?\\b`
+                : `\\b${baseWord}\\b`;
+
+            regexPatterns.push({
+                pattern,
+                flags: 'i',
+                priority: 30,
+                source: 'word-family',
+            });
+
+            console.log(`🔍 Created word family regex: /${pattern}/i from:`, words);
+        }
+    }
+
+    // PASS 2: Find phrase-based overlaps (interdimensional + interdimensional being)
+    for (let i = 0; i < sorted.length; i++) {
+        if (used.has(i)) continue;
+
+        const base = sorted[i].toLowerCase();
+        const baseWords = base.split(/\s+/);
+        const variants = [];
+
+        // Find all keywords that extend this base phrase
+        for (let j = 0; j < sorted.length; j++) {
+            if (i === j || used.has(j)) continue;
+            const candidate = sorted[j].toLowerCase();
+
+            if (candidate.startsWith(base + ' ')) {
+                const suffix = candidate.slice(base.length).trim();
+                variants.push(suffix);
+                used.add(j);
+            }
+        }
+
+        // Create regex for phrase variants
+        if (variants.length > 0) {
+            const escapedBase = base.replace(/\s+/g, '\\s+');
+            const escapedVariants = variants.map(v => v.replace(/\s+/g, '\\s+'));
+            const pattern = `\\b${escapedBase}(?:\\s+(?:${escapedVariants.join('|')}))?\\b`;
+            regexPatterns.push({
+                pattern,
+                flags: 'i',
+                priority: 25,
+                source: 'phrase-family',
+            });
+            used.add(i);
+        } else if (baseWords.length > 1) {
+            // Multi-word keyword: add word boundaries
+            const escapedBase = base.replace(/\s+/g, '\\s+');
+            regexPatterns.push({
+                pattern: `\\b${escapedBase}\\b`,
+                flags: 'i',
+                priority: 20,
+                source: 'multiword',
+            });
+            used.add(i);
+        }
+        // REMOVED: The unintelligent single-word suffix additions (no more speciesed/genreing!)
+    }
+
+    // PASS 3: Keep remaining keywords as-is (lowercase, no regex conversion)
+    const remainingKeywords = sorted
+        .filter((_, i) => !used.has(i))
+        .map(kw => kw.toLowerCase());
+
+    console.log('🔍 [convertKeywordsToRegex] Output:', {
+        regexCount: regexPatterns.length,
+        regexes: regexPatterns.map(r => `/${r.pattern}/${r.flags} (${r.source})`),
+        remainingCount: remainingKeywords.length,
+        remaining: remainingKeywords,
+        conversionRate: `${Math.round((regexPatterns.length / keywords.length) * 100)}%`
+    });
+
+    return {
+        keywords: remainingKeywords,
+        regexes: regexPatterns
+    };
+}
+
+function buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName = null) {
     const autoKeywords = extractKeywords(chunkText, sectionTitle, topic);
     const keywordMeta = buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags);
-    const systemKeywordsSet = new Set([...autoKeywords, ...keywordMeta.keywords]);
-    const systemKeywords = Array.from(systemKeywordsSet);
-    const keywordRegex = keywordMeta.regex.map(entry => ({ ...entry }));
+
+    // Create filter set for unwanted keywords
+    const filterSet = new Set();
+    if (characterName) {
+        // Filter out character name and its variations
+        filterSet.add(characterName.toLowerCase());
+        // Also filter out parts of the name (e.g., "Atsu" from "Atsu Ibn Oba Al-Masri")
+        characterName.split(/\s+/).forEach(part => {
+            if (part.length >= 3) {
+                filterSet.add(part.toLowerCase());
+            }
+        });
+    }
+
+    // Merge and deduplicate (case-insensitive) - store as lowercase
+    const keywordMap = new Map();
+    [...autoKeywords, ...keywordMeta.keywords].forEach(kw => {
+        const lower = kw.toLowerCase();
+        // Skip if it's the character name or a common word
+        if (!keywordMap.has(lower) && !filterSet.has(lower)) {
+            keywordMap.set(lower, lower); // Store lowercase version
+        }
+    });
+
+    const allKeywords = Array.from(keywordMap.values());
+
+    // Convert keywords to regex patterns for flexible matching
+    const { keywords: remainingKeywords, regexes: autoRegexes } = convertKeywordsToRegex(allKeywords);
+
+    console.log('🔍 [buildChunkMetadata] Keyword conversion results:', {
+        totalInputKeywords: allKeywords.length,
+        inputKeywords: allKeywords,
+        remainingKeywords: remainingKeywords,
+        autoRegexesCount: autoRegexes.length,
+        autoRegexes: autoRegexes.map(r => ({ pattern: r.pattern, flags: r.flags, source: r.source }))
+    });
+
+    // Format regex patterns as strings for display in UI: /pattern/flags
+    const regexStrings = autoRegexes.map(r => `/${r.pattern}/${r.flags || 'i'}`);
+
+    console.log('🔍 [buildChunkMetadata] Formatted regex strings:', regexStrings);
+
+    // Combine: Plain keywords + regex patterns (formatted as /pattern/flags)
+    const systemKeywords = [
+        ...remainingKeywords,  // Keywords that weren't converted to regex
+        ...regexStrings         // Regex patterns as /pattern/flags strings
+    ];
+
+    console.log('🔍 [buildChunkMetadata] Final systemKeywords:', systemKeywords);
+
+    // Store regex objects separately for programmatic access
+    const keywordRegex = [
+        ...keywordMeta.regex.map(entry => ({ ...entry })),
+        ...autoRegexes,
+    ];
 
     return {
         section: sectionTitle,
         topic: topic ?? null,
         tags,
-        keywords: [...systemKeywords],
-        systemKeywords,
+        keywords: [...systemKeywords], // All keywords (lowercase)
+        systemKeywords, // All keywords (lowercase)
         defaultSystemKeywords: [...systemKeywords],
         keywordGroups: keywordMeta.groups,
         defaultKeywordGroups: [...keywordMeta.groups],
@@ -1333,7 +1565,7 @@ function chunkFullsheetSimple(content, characterName) {
         const tags = collectTags(section.content);
         const chunkText = `[${section.title}]\n${section.content}`;
         const hash = getStringHash(`${characterName}|${section.title}|${chunkIndex}|${chunkText}`);
-        const metadata = buildChunkMetadata(section.title, null, chunkText, tags);
+        const metadata = buildChunkMetadata(section.title, null, chunkText, tags, characterName);
 
         chunks.push({
             text: chunkText,
@@ -1408,7 +1640,8 @@ function chunkFullsheetMathBased(content, characterName, targetChunkSize = 1000,
             `Chunk ${idx + 1}/${fragments.length}`,
             null,
             chunkText,
-            tags
+            tags,
+            characterName
         );
 
         chunks.push({
@@ -1588,7 +1821,7 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
                     const chunkText = `[${section.fullTitle} > ${subsection.title}]\n${subsection.content}`;
                     const hash = getStringHash(`${characterName}|${section.fullTitle}|${subsection.title}|${chunkIndex}|${chunkText}`);
                     const tags = collectTags(subsection.content);
-                    const metadata = buildChunkMetadata(section.fullTitle, subsection.title, chunkText, tags);
+                    const metadata = buildChunkMetadata(section.fullTitle, subsection.title, chunkText, tags, characterName);
 
                     chunks.push({
                         text: chunkText,
@@ -1601,7 +1834,7 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
                 // No subsections found, treat as single chunk
                 const chunkText = `[${section.fullTitle}]\n${section.content}`;
                 const hash = getStringHash(`${characterName}|${section.fullTitle}|${chunkIndex}|${chunkText}`);
-                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags);
+                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags, characterName);
 
                 chunks.push({
                     text: chunkText,
@@ -1616,7 +1849,7 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
                 // Small enough to keep as single chunk
                 const chunkText = `[${section.fullTitle}]\n${section.content}`;
                 const hash = getStringHash(`${characterName}|${section.fullTitle}|${chunkIndex}|${chunkText}`);
-                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags);
+                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags, characterName);
 
                 chunks.push({
                     text: chunkText,
@@ -1631,7 +1864,7 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
                 const chunkText = `[${section.fullTitle}${fragments.length > 1 ? ` (Part ${fragIdx + 1}/${fragments.length})` : ''}]\n${fragment}`;
                 const hash = getStringHash(`${characterName}|${section.fullTitle}|${fragIdx}|${chunkIndex}|${chunkText}`);
                 const tags = collectTags(fragment);
-                const metadata = buildChunkMetadata(section.fullTitle, fragments.length > 1 ? `Part ${fragIdx + 1}/${fragments.length}` : null, chunkText, tags);
+                const metadata = buildChunkMetadata(section.fullTitle, fragments.length > 1 ? `Part ${fragIdx + 1}/${fragments.length}` : null, chunkText, tags, characterName);
 
                 chunks.push({
                     text: chunkText,
@@ -1968,6 +2201,71 @@ async function queryRAG(characterName, queryText) {
 
     const queryKeywords = extractKeywords(queryText);
 
+    // ============================================================================
+    // COLLECTION ACTIVATION SYSTEM
+    // Determines WHICH collections to query based on activation triggers
+    // (Similar to how lorebook entries activate based on triggers)
+    // ============================================================================
+
+    // Detect which collections should be activated based on triggers
+    const queryLower = queryText.toLowerCase();
+    const queryWords = queryLower.split(/\s+/); // Split into words for whole-word matching
+
+    // Get collection metadata (contains activation triggers)
+    ensureRagState();
+    const ragState = extension_settings[extensionName].rag;
+    const collectionMetadata = ragState.collectionMetadata || {};
+
+    const activatedCollections = new Set();
+    const allCollectionNames = [];
+
+    for (const [, library] of Object.entries(allLibraries)) {
+        if (library && typeof library === 'object') {
+            allCollectionNames.push(...Object.keys(library));
+        }
+    }
+
+    // Check each collection to see if it should be activated
+    for (const collectionId of allCollectionNames) {
+        const metadata = collectionMetadata[collectionId];
+
+        // Legacy collections without metadata won't activate (user needs to set triggers)
+        if (!metadata) {
+            continue;
+        }
+
+        // Check if collection is always active (ignores triggers)
+        if (metadata.alwaysActive) {
+            activatedCollections.add(collectionId);
+            continue;
+        }
+
+        // Check if any activation triggers match (case-insensitive)
+        const triggers = metadata.keywords || []; // NOTE: Still called 'keywords' in data for backwards compatibility
+
+        // No triggers = collection won't activate (user must explicitly set triggers or enable "Always Active")
+        if (triggers.length === 0) {
+            continue;
+        }
+
+        // Check if any trigger appears in query
+        for (const trigger of triggers) {
+            const triggerLower = trigger.toLowerCase().trim();
+            // Support both substring and whole-word matching
+            if (queryLower.includes(triggerLower)) {
+                activatedCollections.add(collectionId);
+                break;
+            }
+        }
+    }
+
+    debugLog(`Collection activation based on triggers:`, {
+        queryText: queryText,
+        totalCollections: allCollectionNames.length,
+        activatedCollections: activatedCollections.size,
+        activatedList: Array.from(activatedCollections)
+    });
+
     // Build parallel queries for each library that has this collection
     const libraryQueries = [];
     const libraryNames = [];
@@ -1978,8 +2276,10 @@ async function queryRAG(characterName, queryText) {
             continue;
         }
 
-        // Query ALL collections in this library, not just the current character's
-        const collectionsInLibrary = Object.keys(library);
+        // Filter to only activated collections (based on keywords/alwaysActive)
+        let collectionsInLibrary = Object.keys(library).filter(collectionId => {
+            return activatedCollections.has(collectionId);
+        });
         debugLog(`Checking ${libName} library:`, {
             hasLibrary: true,
             collectionsCount: collectionsInLibrary.length,
@@ -2004,18 +2304,46 @@ async function queryRAG(characterName, queryText) {
                         }
 
                         const response = await apiQueryCollection(currentCollectionId, queryText, settings.topK, settings.scoreThreshold);
+
+                        // Debug: Log raw response to see what we're actually getting
+                        console.log('🔍 RAG SCORE DEBUG: Raw vector DB response:', {
+                            collectionId: currentCollectionId,
+                            response: response,
+                            hasScores: response?.scores ? 'YES' : 'NO',
+                            hasSimilarities: response?.similarities ? 'YES' : 'NO',
+                            hasMetadata: response?.metadata ? 'YES' : 'NO',
+                            responseKeys: Object.keys(response || {})
+                        });
+
                         const metadata = Array.isArray(response?.metadata) ? response.metadata : [];
                         const hashes = Array.isArray(response?.hashes) ? response.hashes : [];
+                        const scores = Array.isArray(response?.scores) ? response.scores : (Array.isArray(response?.similarities) ? response.similarities : []);
 
                         const chunks = [];
-                        for (let i = 0; i < Math.max(metadata.length, hashes.length); i++) {
+                        for (let i = 0; i < Math.max(metadata.length, hashes.length, scores.length); i++) {
                             const meta = metadata[i] || {};
                             const hash = Number(hashes[i] ?? meta.hash);
                             if (Number.isNaN(hash)) continue;
 
+                            // Score can come from: metadata[i].score, scores array, or similarities array
+                            const score = meta.score ?? scores[i] ?? null;
+
+                            console.log(`🔍 RAG SCORE DEBUG: Chunk ${i} score=${score}, meta.score=${meta.score}, scores[${i}]=${scores[i]}`);
+
+                            // ⚠️ CRITICAL: Enforce scoreThreshold client-side
+                            // If score is null/0, we can't filter properly - warn but allow through
+                            if (score !== null && score < settings.scoreThreshold) {
+                                console.log(`🔍 RAG SCORE DEBUG: Filtered out chunk ${i} - score ${score} below threshold ${settings.scoreThreshold}`);
+                                continue;
+                            }
+
+                            if (score === null || score === 0) {
+                                console.warn(`⚠️ RAG WARNING: Chunk ${i} has null/zero score - cannot filter by threshold. Check vector DB configuration.`);
+                            }
+
                             const entry = libraryEntryToChunk(hash, library[currentCollectionId][hash], {
                                 reason: {
-                                    score: meta.score ?? null,
+                                    score: score,
                                     rank: i,
                                     source: `${libName}:${currentCollectionId}`,
                                 },
@@ -2194,6 +2522,24 @@ async function queryRAG(characterName, queryText) {
             }
         }
 
+        // ⚠️ CRITICAL: Enforce topK limit on final combined results
+        // This is separate from the per-collection topK sent to the vector DB
+        // We need to limit the TOTAL number of chunks returned across all collections
+        let finalResults = filteredByInclusion;
+
+        // Sort by score (highest first) before limiting
+        finalResults.sort((a, b) => {
+            const scoreA = a.reason?.score ?? 0;
+            const scoreB = b.reason?.score ?? 0;
+            return scoreB - scoreA;
+        });
+
+        // Apply global topK limit if we have too many results
+        if (finalResults.length > settings.topK) {
+            console.log(`🔍 RAG LIMITING: Trimming ${finalResults.length} results down to topK=${settings.topK}`);
+            finalResults = finalResults.slice(0, settings.topK);
+        }
+
         debugLog(`Multi-library query results for ${characterName}`, {
             libraries: libraryNames.join(', '),
             totalPrimary,
@@ -2202,11 +2548,12 @@ async function queryRAG(characterName, queryText) {
             linkedChunks: linkedChunks.length,
             beforeInclusion: combined.length,
             afterInclusion: filteredByInclusion.length,
-            delivered: filteredByInclusion.length,
+            afterTopKLimit: finalResults.length,
+            delivered: finalResults.length,
             fallback: fallbackCount,
         });
 
-        return filteredByInclusion;
+        return finalResults;
     } catch (error) {
         console.error(`Failed to query RAG for ${characterName}:`, error);
         return [];
@@ -2653,14 +3000,35 @@ async function vectorizeFullsheetFromMessage(characterName, content) {
         console.log(`   Updated library with ${chunks.length} chunks`);
         console.log(`   Library now has ${Object.keys(library[collectionId]).length} total entries for this collection`);
 
+        // Initialize collection metadata if it doesn't exist
+        ensureRagState();
+        const ragState = extension_settings[extensionName].rag;
+        if (!ragState.collectionMetadata) {
+            ragState.collectionMetadata = {};
+        }
+        if (!ragState.collectionMetadata[collectionId]) {
+            // Initialize with character name as default trigger (user can edit/remove it)
+            const defaultTriggers = characterName ? [characterName] : [];
+
+            ragState.collectionMetadata[collectionId] = {
+                keywords: defaultTriggers, // Activation triggers (determines IF collection activates - like lorebook triggers)
+                alwaysActive: false, // If true, ignores triggers and always queries this collection
+                characterName: characterName,
+                createdAt: Date.now(),
+                lastModified: Date.now()
+            };
+        } else {
+            // Update lastModified timestamp
+            ragState.collectionMetadata[collectionId].lastModified = Date.now();
+        }
+
         saveSettingsDebounced();
         console.log(`✅ STEP 5 COMPLETE: Local library updated and saved`);
 
         // Step 6: Track current embedding provider
         console.log('\n🏷️  STEP 6: Tracking embedding provider...');
         const vectorSettings = getVectorSettings();
-        ensureRagState();
-        const ragState = extension_settings[extensionName].rag;
+        // ragState already declared above, just reuse it
         ragState.lastEmbeddingSource = vectorSettings.source;
         ragState.lastEmbeddingModel = vectorSettings.model || null;
         saveSettingsDebounced();
@@ -2955,6 +3323,10 @@ export {
     getAllContextualLibraries,
     getKeywordPriority,
     normalizeKeyword,
+    getRAGSettings,
+    chunkFullsheet,
+    generateCollectionId,
+    buildChunkMetadata,
 };
 
 

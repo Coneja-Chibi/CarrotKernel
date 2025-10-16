@@ -1,9 +1,10 @@
 import { eventSource, event_types, chat, saveSettingsDebounced, chat_metadata, addOneMessage } from '../../../../script.js';
 import { getTokenCountAsync } from '../../../../scripts/tokenizers.js';
 import { extension_settings, getContext, writeExtensionField, saveMetadataDebounced } from '../../../extensions.js';
-import { loadWorldInfo, world_names, createNewWorldInfo, createWorldInfoEntry, saveWorldInfo, updateWorldInfoList, selected_world_info, world_info, METADATA_KEY } from '../../../world-info.js';
+import { loadWorldInfo, world_names, createNewWorldInfo, createWorldInfoEntry, saveWorldInfo, updateWorldInfoList, selected_world_info, world_info, METADATA_KEY, parseRegexFromString } from '../../../world-info.js';
 import { executeSlashCommandsWithOptions } from '../../../slash-commands.js';
 import { getMessageTimeStamp } from '../../../RossAscends-mods.js';
+import { highlightRegex } from '../../../utils.js';
 import { CarrotWorldBookTracker } from './worldbook-tracker.js';
 
 // Import fullsheet-rag.js dynamically
@@ -428,15 +429,18 @@ async function processSheetCommand(sheetData) {
     if (injectionTemplate) {
         // Use custom template - no character name needed since ST handles the targeting
         injectionText = injectionTemplate.content;
-        
+
         // Use template-specific depth and role settings
-        depth = injectionTemplate.settings?.inject_depth || injectionTemplate.depth || 4;
+        // CRITICAL: Template depth property takes priority over legacy settings.inject_depth
+        depth = injectionTemplate.depth !== undefined ? injectionTemplate.depth : (injectionTemplate.settings?.inject_depth || 4);
         role = injectionTemplate.role || 'system';
-        
+
         console.log('🥕 SHEET COMMAND DEBUG: Using template settings:', {
             templateName: injectionTemplate.name,
             depth: depth,
-            role: role
+            role: role,
+            templateDepth: injectionTemplate.depth,
+            legacyDepth: injectionTemplate.settings?.inject_depth
         });
     } else {
         // Fallback to default fancy format and global settings
@@ -961,7 +965,9 @@ const CarrotTemplateManager = {
     },
 
     setPrimaryTemplate(id) {
+        // CRITICAL: Never overwrite extension_settings completely - use optional chaining
         if (!extension_settings[extensionName]) {
+            console.warn('⚠️ TEMPLATES: extension_settings not initialized - this should not happen');
             extension_settings[extensionName] = {};
         }
         extension_settings[extensionName].primaryTemplate = id;
@@ -971,7 +977,9 @@ const CarrotTemplateManager = {
 
     // Template operations
     saveTemplate(template) {
+        // CRITICAL: Never overwrite extension_settings completely
         if (!extension_settings[extensionName]) {
+            console.warn('⚠️ TEMPLATES: extension_settings not initialized - this should not happen');
             extension_settings[extensionName] = {};
         }
         if (!extension_settings[extensionName].templates) {
@@ -981,7 +989,7 @@ const CarrotTemplateManager = {
         template.metadata = template.metadata || {};
         template.metadata.modified = Date.now();
         template.metadata.usage_count = template.metadata.usage_count || 0;
-        
+
         extension_settings[extensionName].templates[template.id] = template;
         this.saveSettings(true); // Force immediate save for template creation
         CarrotDebug.ui(`Template '${template.name}' saved successfully`);
@@ -1032,7 +1040,9 @@ const CarrotTemplateManager = {
     },
 
     updateTemplate(id, updatedTemplate) {
+        // CRITICAL: Never overwrite extension_settings completely
         if (!extension_settings[extensionName]) {
+            console.warn('⚠️ TEMPLATES: extension_settings not initialized - this should not happen');
             extension_settings[extensionName] = {};
         }
         if (!extension_settings[extensionName].templates) {
@@ -1614,7 +1624,9 @@ class CarrotGitHubBrowser {
     
     // Save installed pack tracking to extension settings
     saveInstalledPacks() {
+        // CRITICAL: Never overwrite extension_settings completely
         if (!extension_settings[extensionName]) {
+            console.warn('⚠️ PACK MANAGER: extension_settings not initialized - this should not happen');
             extension_settings[extensionName] = {};
         }
         extension_settings[extensionName].installedBunnyMoPacks = this.installedPacks;
@@ -2347,11 +2359,15 @@ class CarrotPackManager {
             if (!saveResponse.ok) {
                 throw new Error(`Failed to save lorebook: ${saveResponse.status}`);
             }
-            
+
             // Track installation
-            if (!extension_settings[extensionName]) extension_settings[extensionName] = {};
+            // CRITICAL: Never overwrite extension_settings completely
+            if (!extension_settings[extensionName]) {
+                console.warn('⚠️ PACK MANAGER: extension_settings not initialized - this should not happen');
+                extension_settings[extensionName] = {};
+            }
             if (!extension_settings[extensionName].installedPacks) extension_settings[extensionName].installedPacks = {};
-            
+
             extension_settings[extensionName].installedPacks[packId] = {
                 displayName: packInfo.displayName,
                 filename: filename,
@@ -2566,13 +2582,15 @@ class CarrotPackManager {
             }
             
             // Track installation in our metadata
+            // CRITICAL: Never overwrite extension_settings completely
             if (!extension_settings[extensionName]) {
+                console.warn('⚠️ PACK MANAGER: extension_settings not initialized - this should not happen');
                 extension_settings[extensionName] = {};
             }
             if (!extension_settings[extensionName].installedPacks) {
                 extension_settings[extensionName].installedPacks = {};
             }
-            
+
             extension_settings[extensionName].installedPacks[packName] = {
                 displayName: packInfo.displayName,
                 theme: packInfo.theme,
@@ -3300,13 +3318,22 @@ function logSeq(message) {
 
 // Initialize extension settings
 function initializeSettings() {
-    if (!extension_settings[extensionName]) {
+    // CRITICAL: Check if settings exist and are valid
+    // Use strict checks to handle edge cases (null, undefined, etc.)
+    const settingsExist = extension_settings.hasOwnProperty(extensionName) &&
+                          extension_settings[extensionName] !== null &&
+                          typeof extension_settings[extensionName] === 'object';
+
+    if (!settingsExist) {
+        console.log('🥕 CarrotKernel: Initializing settings for the first time');
         extension_settings[extensionName] = { ...defaultSettings };
+    } else {
+        console.log('🥕 CarrotKernel: Loading existing settings from storage');
     }
-    
+
     // Note: We no longer auto-reset templates to preserve user modifications
-    
-    // Ensure all default properties exist
+
+    // Ensure all default properties exist (safe merge - preserves user values)
     Object.keys(defaultSettings).forEach(key => {
         if (extension_settings[extensionName][key] === undefined) {
             extension_settings[extensionName][key] = defaultSettings[key];
@@ -3747,17 +3774,21 @@ async function injectCharacterData(activeCharacters) {
         injectionSize: injectionText.length,
         preview: injectionText.substring(0, 200) + '...'
     });
-    
-    // Use GuidedGenerations' exact injection pattern for perfect adherence
-    const depth = settings.injectionDepth;
-    const role = settings.injectionRole;
+
+    // Use template-specific depth and role if available, otherwise fall back to global settings
+    // CRITICAL: Template settings should override global settings for depth and role
+    const depth = currentTemplate?.depth !== undefined ? currentTemplate.depth : settings.injectionDepth;
+    const role = currentTemplate?.role || settings.injectionRole;
     const injectionCommand = `/inject id=carrot-consistency position=chat ephemeral=true scan=true depth=${depth} role=${role} ${injectionText}`;
-    
+
     CarrotDebug.inject('Executing injection command', {
         command: injectionCommand.substring(0, 100) + '...',
         fullCommand: injectionCommand,
         depth: depth,
         role: role,
+        templateDepth: currentTemplate?.depth,
+        globalDepth: settings.injectionDepth,
+        usingTemplateDepth: currentTemplate?.depth !== undefined,
         ephemeral: true,
         position: 'chat',
         scan: true
@@ -7984,10 +8015,29 @@ jQuery(async () => {
                 totalBlocks: extractedData.bunnymoTags.length + extractedData.linguistics.length
             });
 
-            if (extractedData.bunnymoTags.length === 0 && extractedData.linguistics.length === 0) {
-                console.log('🐰 BABY BUNNY DEBUG: No BunnymoTags or Linguistics blocks found');
+            // Check for BunnymoTags/Linguistics OR detect other sheet formats
+            const hasBunnymoData = extractedData.bunnymoTags.length > 0 || extractedData.linguistics.length > 0;
+
+            // Detect tagsheets (lines starting with < > tags without BunnymoTags wrapper)
+            const hasTagLines = /^<[A-Z_]+:[^>]+>/gim.test(messageText);
+
+            // Detect quicksheets (character descriptions, typically 200-2000 chars with name mentions)
+            const isQuicksheet = messageText.length >= 200 && messageText.length < 2000;
+
+            // Detect fullsheets (section headers)
+            const hasFullsheetStructure = /^#{1,6}\s+\S+\s+\d+\s*\/\s*\d+/gim.test(messageText);
+
+            if (!hasBunnymoData && !hasTagLines && !isQuicksheet && !hasFullsheetStructure) {
+                console.log('🐰 BABY BUNNY DEBUG: No recognizable sheet format detected');
                 return;
             }
+
+            console.log('🐰 BABY BUNNY DEBUG: Sheet format detected', {
+                hasBunnymoData,
+                hasTagLines,
+                isQuicksheet,
+                hasFullsheetStructure
+            });
 
             CarrotDebug.ui('🐰 Baby Bunny Mode: Detected completed sheet data', {
                 messageId: messageId,
@@ -8019,6 +8069,41 @@ jQuery(async () => {
                 if (characterInfo) {
                     characterData.push(characterInfo);
                 }
+            }
+
+            // If NO BunnymoTags or Linguistics but we detected a sheet format, create generic character data
+            if (characterData.length === 0 && (hasTagLines || isQuicksheet || hasFullsheetStructure)) {
+                console.log('🐰 BABY BUNNY DEBUG: No BunnymoTags/Linguistics, creating generic character from detected sheet format');
+
+                // Try to extract character name from common patterns
+                let characterName = 'Unknown Character';
+
+                // Pattern 1: <NAME:CharName> or <Name:CharName> (remove underscores, handle multi-word names)
+                const nameMatch = messageText.match(/<(?:NAME|Name|name):\s*([^>]+)>/i);
+                if (nameMatch) {
+                    characterName = nameMatch[1].trim().replace(/_/g, ' ');
+                }
+
+                // Pattern 2: If no NAME tag, try to find it from first line or use "Unnamed Character"
+                if (characterName === 'Unknown Character') {
+                    const firstLineMatch = messageText.match(/^([A-Z][a-zA-Z\s]+)/);
+                    if (firstLineMatch) {
+                        characterName = firstLineMatch[1].trim();
+                    }
+                }
+
+                console.log('🐰 BABY BUNNY DEBUG: Extracted character name:', characterName);
+
+                // Create generic character data
+                const characterInfo = {
+                    name: characterName,
+                    tags: messageText, // Use full message as tags
+                    linguistics: [],
+                    fullText: messageText
+                };
+
+                characterData.push(characterInfo);
+                console.log('🐰 BABY BUNNY DEBUG: Created generic character with full data');
             }
 
             if (characterData.length > 0) {
@@ -9724,28 +9809,35 @@ jQuery(async () => {
                         setLoadingState();
 
                         try {
-                            const fullsheetInfo = await detectFullsheetInMessage(sourceText);
-                            if (!fullsheetInfo) {
-                                toastr.warning('Fullsheet format not detected. Ensure the sheet includes SECTION headers.');
-                                restoreButton();
-                                return;
+                            // Try to detect as fullsheet first
+                            let fullsheetInfo = await detectFullsheetInMessage(sourceText);
+                            let characterName = characterData.name || 'Unknown Character';
+                            let content = sourceText;
+
+                            // If fullsheet detection succeeded, use that data
+                            if (fullsheetInfo) {
+                                characterName = fullsheetInfo.characterName;
+                                content = fullsheetInfo.content;
+                                console.log('✅ Detected as fullsheet format');
+                            } else {
+                                // Not a fullsheet - use sheet as-is for chunking
+                                console.log('ℹ️ Not a fullsheet format - chunking as raw sheet content');
                             }
 
                             CarrotDebug.ui('Baby Bunny Mode: Skip to chunking triggered', {
-                                character: fullsheetInfo.characterName,
-                                sections: fullsheetInfo.sectionCount,
-                                contentLength: fullsheetInfo.content.length
+                                character: characterName,
+                                isFullsheet: !!fullsheetInfo,
+                                contentLength: content.length
                             });
 
                             overlay.remove();
+                            restoreButton();
 
-                            // vectorizeFullsheetFromMessage handles its own toastrs for success/error/already-exists
-                            const success = await vectorizeFullsheetFromMessage(
-                                fullsheetInfo.characterName,
-                                fullsheetInfo.content
-                            );
+                            // Open Baby Bunny Chunking modal
+                            const { openBabyBunnyChunking } = await import('./baby-bunny-chunking.js');
+                            await openBabyBunnyChunking(characterName, content);
 
-                            resolve(success);
+                            resolve(true);
                         } catch (error) {
                             console.error('BABY BUNNY ERROR: Skip to chunking failed', error);
                             // Only show toastr for unexpected errors not already handled by vectorizeFullsheetFromMessage
@@ -10232,8 +10324,10 @@ jQuery(async () => {
         // Sheet commands are now detected via WORLD_INFO_ACTIVATED entries - much simpler!
 
         // Hook into SillyTavern's lorebook activation system (exactly like BunnyMoTags)
-        eventSource.on(event_types.WORLD_INFO_ACTIVATED, async (entryList) => {
-            const settings = extension_settings[extensionName];
+        // Only register once to prevent duplicate executions
+        if (!window.CARROT_WORLDINFO_LISTENER_REGISTERED) {
+            eventSource.on(event_types.WORLD_INFO_ACTIVATED, async (entryList) => {
+                const settings = extension_settings[extensionName];
             
             // Log this event only when debug mode is enabled
             if (extension_settings[extensionName]?.debugMode) {
@@ -10339,7 +10433,9 @@ jQuery(async () => {
             } catch (error) {
                 CarrotDebug.error('❌ Error in processActivatedLorebookEntries:', error);
             }
-        });
+            });
+            window.CARROT_WORLDINFO_LISTENER_REGISTERED = true;
+        }
 
         // Show conflict resolution dialog when lorebook name already exists
         async function showLorebookConflictDialog(lorebookName) {
@@ -10418,8 +10514,10 @@ jQuery(async () => {
         }
 
         // Hook into CHARACTER_MESSAGE_RENDERED to display thinking blocks and add persistent tags
-        eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
-            const settings = extension_settings[extensionName];
+        // Only register once to prevent duplicate Baby Bunny Mode executions
+        if (!window.CARROT_MESSAGE_LISTENER_REGISTERED) {
+            eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
+                const settings = extension_settings[extensionName];
             
             // CHARACTER_MESSAGE_RENDERED fires for AI messages, but we only want to show cards
             // when we have pending data from a previous user message that triggered WORLD_INFO_ACTIVATED
@@ -10548,7 +10646,9 @@ jQuery(async () => {
             } else {
                 console.log('🐰 BABY BUNNY DEBUG: Not triggering - either disabled or user message');
             }
-        });
+            });
+            window.CARROT_MESSAGE_LISTENER_REGISTERED = true;
+        }
 
         // Hook into CHAT_CHANGED to restore thinking blocks after page refresh/chat switch
         // Only register once to prevent memory leaks
@@ -11816,47 +11916,6 @@ function bindSettingsEvents() {
             renderChunks(modifiedChunks, getSearchTerm());
         });
 
-        // Delete button handler - use event delegation for dynamically rendered chunks
-        $(document).on('click', '.carrot-chunk-delete-btn', async function(e) {
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) return;
-
-            const confirmed = confirm(`Delete chunk "${chunk.metadata?.section || 'Chunk'}"? This cannot be undone.`);
-            if (!confirmed) return;
-
-            // Remove from modifiedChunks (affects UI)
-            delete modifiedChunks[hash];
-
-            // Remove from the actual library
-            const collectionId = currentEditingCollection;
-            if (collectionId) {
-                const library = getContextualLibrary();
-                if (library[collectionId] && library[collectionId][hash]) {
-                    delete library[collectionId][hash];
-
-                    // Also delete from vector DB if it exists
-                    try {
-                        if (fullsheetRAGLoaded && fullsheetAPI.purgeOrphanedVectors) {
-                            await fullsheetAPI.purgeOrphanedVectors(collectionId, [hash]);
-                            console.log(`✅ Deleted chunk ${hash} from vector DB`);
-                        }
-                    } catch (error) {
-                        console.warn(`⚠️ Failed to delete from vector DB (chunk may not be vectorized):`, error);
-                    }
-
-                    // Save extension settings to persist the deletion
-                    await saveSettingsDebounced();
-                    console.log(`🗑️ Deleted chunk: ${chunk.metadata?.section || hash}`);
-                }
-            }
-
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
-
         // Chunk text edit handler
         $('.carrot-chunk-text-edit').on('input', function() {
             const hash = $(this).data('hash');
@@ -12181,11 +12240,11 @@ function bindSettingsEvents() {
                                 <div style="font-weight: 600; font-size: 1.1em; color: #10b981;">
                                     ${characterName}
                                 </div>
-                                <button class="menu_button carrot-rename-collection-btn" data-collection="${collectionId}" style="padding: 4px 8px; font-size: 0.85em; opacity: 0.7;" title="Rename collection">
+                                <button class="menu_button carrot-rename-collection-btn" data-collection="${collectionId}" style="padding: 4px 8px; font-size: 0.85em; opacity: 0.7;" title="Change display name (internal ID stays the same)">
                                     <i class="fa-solid fa-pencil"></i>
                                 </button>
                             </div>
-                            <div style="font-size: 0.85em; color: #94a3b8; font-family: monospace;">
+                            <div style="font-size: 0.7em; color: #94a3b8; font-family: monospace; opacity: 0.4; cursor: help;" title="Internal database identifier - cannot be changed">
                                 ${collectionId}
                             </div>
                         </div>
@@ -12773,17 +12832,21 @@ function bindSettingsEvents() {
     });
 
     // Hook into message rendering events to ensure buttons appear on new messages (only if enabled)
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
-        if (extension_settings[extensionName]?.babyBunnyMode) {
-            add_baby_bunny_button_to_message(messageId);
-        }
-    });
+    // Only register once to prevent duplicate button additions
+    if (!window.CARROT_BUTTON_LISTENERS_REGISTERED) {
+        eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
+            if (extension_settings[extensionName]?.babyBunnyMode) {
+                add_baby_bunny_button_to_message(messageId);
+            }
+        });
 
-    eventSource.on(event_types.USER_MESSAGE_RENDERED, (messageId) => {
-        if (extension_settings[extensionName]?.babyBunnyMode) {
-            add_baby_bunny_button_to_message(messageId);
-        }
-    });
+        eventSource.on(event_types.USER_MESSAGE_RENDERED, (messageId) => {
+            if (extension_settings[extensionName]?.babyBunnyMode) {
+                add_baby_bunny_button_to_message(messageId);
+            }
+        });
+        window.CARROT_BUTTON_LISTENERS_REGISTERED = true;
+    }
 
     // Mobile touch support for clickable status panels
     // Add touch event handlers to ensure modals open on mobile devices
@@ -17081,13 +17144,15 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
             }
             
             // Track the installation in our settings
+            // CRITICAL: Never overwrite extension_settings completely
             if (!extension_settings[extensionName]) {
+                console.warn('⚠️ PACK MANAGER: extension_settings not initialized - this should not happen');
                 extension_settings[extensionName] = {};
             }
             if (!extension_settings[extensionName].installedPacks) {
                 extension_settings[extensionName].installedPacks = {};
             }
-            
+
             // Use the actual filename as the key (what the counting logic expects)
             extension_settings[extensionName].installedPacks[filename] = {
                 displayName: filename.replace('.json', ''),
@@ -17161,7 +17226,9 @@ Character uses <LING:COMMANDING> as his primary mode of speech, asserting author
             const { world_names } = await import('../../../world-info.js');
             const existingBooks = world_names || [];
 
+            // CRITICAL: Never overwrite extension_settings completely
             if (!extension_settings[extensionName]) {
+                console.warn('⚠️ PACK MANAGER: extension_settings not initialized - this should not happen');
                 extension_settings[extensionName] = {};
             }
             if (!extension_settings[extensionName].installedPacks) {
@@ -22094,14 +22161,14 @@ Most common categories:<br/>
     }
 
     /**
-     * Check if a string is a regex pattern
+     * Check if a string is a valid regex pattern (using ST's official validator)
      * @param {string} str - String to check
      * @returns {boolean}
      */
     function isValidRegex(str) {
         if (!str) return false;
-        // Check for regex-like patterns (contains special regex chars or slash notation)
-        return /^\/.*\/[gimsuvy]*$/.test(str) || /[\[\](){}.*+?^$|\\]/.test(str);
+        // Use ST's official regex parser/validator
+        return parseRegexFromString(str) !== null;
     }
 
     /**
@@ -22270,6 +22337,180 @@ Most common categories:<br/>
         return String(value ?? '').replace(/[&<>"']/g, (char) => map[char]);
     };
 
+    function renderCollectionKeywords(collectionId) {
+        const ragState = extension_settings[extensionName].rag;
+        const collectionMetadata = ragState.collectionMetadata || {};
+        const metadata = collectionMetadata[collectionId] || {
+            keywords: [],
+            alwaysActive: false
+        };
+
+        // Create or update the keywords container
+        let $container = $('#carrot-collection-keywords-container');
+        if ($container.length === 0) {
+            // Create container after subtitle
+            $('#carrot-rag-modal-subtitle').after(`
+                <div id="carrot-collection-keywords-container" style="margin-top: 16px;"></div>
+            `);
+            $container = $('#carrot-collection-keywords-container');
+        }
+
+        const triggersDisplay = metadata.keywords.length > 0
+            ? metadata.keywords.map(kw => `<span class="chunk-keyword-chip" style="background: var(--SmartThemeQuoteColor, #8b5cf6); color: #000; padding: 4px 10px; border-radius: 12px; margin-right: 6px; font-size: 0.85em;">${escapeHtml(kw)}</span>`).join('')
+            : `<span style="opacity: 0.6; font-style: italic;">No activation triggers (collection won't activate)</span>`;
+
+        const alwaysActiveHtml = metadata.alwaysActive
+            ? `<span style="background: var(--SmartThemeQuoteColor, #8b5cf6); color: #000; padding: 4px 10px; border-radius: 12px; margin-left: 8px; font-size: 0.85em; font-weight: 600;"><i class="fa-solid fa-check"></i> Always Active</span>`
+            : '';
+
+        $container.html(`
+            <div style="padding: 16px; background: var(--black20a, rgba(0, 0, 0, 0.2)); border-radius: 8px; border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <i class="fa-solid fa-bolt" style="color: var(--SmartThemeQuoteColor);"></i>
+                        <strong>Activation Triggers</strong>
+                        <small style="opacity: 0.6; font-style: italic; margin-left: 4px;">(like lorebook triggers)</small>
+                        ${alwaysActiveHtml}
+                    </div>
+                    <button id="carrot-edit-collection-keywords-btn" class="menu_button" style="padding: 6px 12px; font-size: 0.9em;">
+                        <i class="fa-solid fa-edit"></i> Edit Triggers
+                    </button>
+                </div>
+                <div style="min-height: 30px; display: flex; align-items: center; flex-wrap: wrap;">
+                    ${triggersDisplay}
+                </div>
+                <small style="display: block; margin-top: 8px; opacity: 0.7;">
+                    <strong>Activation triggers</strong> determine IF this collection activates. <strong>Chunk keywords</strong> (below) determine scoring/ranking AFTER activation.
+                </small>
+            </div>
+        `);
+
+        // Attach edit handler
+        $('#carrot-edit-collection-keywords-btn').off('click').on('click', () => {
+            showEditKeywordsDialog(collectionId);
+        });
+    }
+
+    async function showEditKeywordsDialog(collectionId) {
+        const ragState = extension_settings[extensionName].rag;
+        if (!ragState.collectionMetadata) {
+            ragState.collectionMetadata = {};
+        }
+        if (!ragState.collectionMetadata[collectionId]) {
+            ragState.collectionMetadata[collectionId] = {
+                keywords: [],
+                alwaysActive: false,
+                characterName: getCharacterNameFromCollectionId(collectionId),
+                createdAt: Date.now(),
+                lastModified: Date.now()
+            };
+        }
+
+        const metadata = ragState.collectionMetadata[collectionId];
+        const currentKeywords = metadata.keywords.join(', ');
+        const currentAlwaysActive = metadata.alwaysActive || false;
+
+        const overlay = $(`
+            <div class="baby-bunny-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 999999; display: flex; align-items: center; justify-content: center;"></div>
+        `);
+
+        const popup = $(`
+            <div class="carrot-popup-container" style="max-width: 600px; width: 90%;">
+                <div class="carrot-card">
+                    <div class="carrot-card-header">
+                        <h3><i class="fa-solid fa-bolt"></i> Edit Activation Triggers</h3>
+                        <p class="carrot-card-subtitle">Configure when this collection activates (like lorebook triggers)</p>
+                    </div>
+                    <div class="carrot-card-body">
+                        <div style="margin-bottom: 20px;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; background: var(--black20a, rgba(0, 0, 0, 0.2)); border-radius: 6px;">
+                                <input type="checkbox" id="carrot-keywords-always-active" ${currentAlwaysActive ? 'checked' : ''} style="width: 18px; height: 18px;">
+                                <div>
+                                    <strong>Always Active</strong>
+                                    <small style="display: block; opacity: 0.7;">Collection activates on every query, ignoring triggers</small>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div style="margin-bottom: 12px;">
+                            <label><strong>Activation Triggers</strong> <small style="opacity: 0.7;">(comma-separated)</small></label>
+                            <textarea id="carrot-keywords-input" rows="4" class="text_pole" placeholder="e.g., Kael, knight, swordsman" style="width: 100%; margin-top: 8px;">${escapeHtml(currentKeywords)}</textarea>
+                            <small style="display: block; margin-top: 6px; opacity: 0.7;">
+                                This collection will activate when any of these triggers appear in the query.
+                            </small>
+                        </div>
+
+                        <div style="padding: 12px; background: var(--black30a, rgba(0, 0, 0, 0.3)); border-radius: 6px; border-left: 3px solid var(--SmartThemeQuoteColor);">
+                            <strong style="display: block; margin-bottom: 6px;">📌 How This Works:</strong>
+                            <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
+                                <li style="margin-bottom: 4px;"><strong>Activation Triggers</strong> = WHEN collection activates (like lorebook)</li>
+                                <li style="margin-bottom: 4px;"><strong>Chunk Keywords</strong> = HOW chunks are scored/ranked (weighted)</li>
+                                <li>Both systems work together for best results!</li>
+                            </ul>
+                        </div>
+
+                        <div class="carrot-action-bar" style="display: flex; gap: 12px; margin-top: 20px;">
+                            <button id="carrot-keywords-cancel" class="carrot-secondary-btn" style="flex: 1;">
+                                <i class="fa-solid fa-xmark"></i> Cancel
+                            </button>
+                            <button id="carrot-keywords-save" class="carrot-primary-btn" style="flex: 1;">
+                                <i class="fa-solid fa-check"></i> Save
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `);
+
+        overlay.append(popup);
+        $('body').append(overlay);
+
+        // Toggle keyword input based on always-active checkbox
+        const $alwaysActive = popup.find('#carrot-keywords-always-active');
+        const $keywordsInput = popup.find('#carrot-keywords-input');
+
+        $alwaysActive.on('change', function() {
+            if (this.checked) {
+                $keywordsInput.prop('disabled', true).css('opacity', '0.5');
+            } else {
+                $keywordsInput.prop('disabled', false).css('opacity', '1');
+            }
+        });
+
+        // Initialize state
+        if (currentAlwaysActive) {
+            $keywordsInput.prop('disabled', true).css('opacity', '0.5');
+        }
+
+        popup.find('#carrot-keywords-cancel').on('click', () => {
+            overlay.remove();
+        });
+
+        popup.find('#carrot-keywords-save').on('click', () => {
+            const alwaysActive = $alwaysActive.is(':checked');
+            const keywordsText = $keywordsInput.val().trim();
+            const keywords = keywordsText
+                ? keywordsText.split(',').map(k => k.trim()).filter(k => k.length > 0)
+                : [];
+
+            metadata.keywords = keywords;
+            metadata.alwaysActive = alwaysActive;
+            metadata.lastModified = Date.now();
+
+            saveSettingsDebounced();
+            overlay.remove();
+            renderCollectionKeywords(collectionId);
+            toastr.success('Activation triggers updated!');
+        });
+
+        // Close on backdrop click
+        overlay.on('click', function(e) {
+            if (e.target === this) {
+                overlay.remove();
+            }
+        });
+    }
+
     function openChunkVisualizer(collectionId) {
         const contextLevel = getCurrentContextLevel();
         const library = getContextualLibrary();
@@ -22291,7 +22532,10 @@ Most common categories:<br/>
         $('#carrot-rag-modal-title').html(
             `<i class="fa-solid fa-cube"></i> ${escapeHtml(characterName)} <span style="font-size: 0.7em; color: #8b5cf6; text-transform: uppercase;">[${contextLevel}]</span>`,
         );
-        $('#carrot-rag-modal-subtitle').text(`${collectionId} - ${Object.keys(chunks).length} chunks`);
+        $('#carrot-rag-modal-subtitle').text(`${Object.keys(chunks).length} chunks`);
+
+        // Show collection activation keywords
+        renderCollectionKeywords(collectionId);
 
         renderChunks(modifiedChunks);
 
@@ -22520,7 +22764,9 @@ Most common categories:<br/>
                     <div class="flex-container wide100p alignitemscenter">
                         <div class="world_entry_form_control keyprimary flex1">
                             <small class="textAlignCenter">Primary Keywords</small>
-                            <select class="keyprimaryselect keyselect carrot-chunk-keywords" name="key" data-hash="${chunkHashAttr}" placeholder="Keywords or Regexes" multiple="multiple"></select>
+                            <select class="keyprimaryselect keyselect carrot-chunk-keywords" name="key" data-hash="${chunkHashAttr}" placeholder="Keywords or Regexes" multiple="multiple" style="display: none;"></select>
+                            <textarea class="text_pole carrot-chunk-keywords-plaintext" name="key" data-hash="${chunkHashAttr}" rows="2" placeholder="Comma separated list" style="display: none;"></textarea>
+                            <button type="button" class="carrot-switch-input-type-icon" data-hash="${chunkHashAttr}" tabindex="-1" title="Switch to plaintext mode" data-icon-on="✨" data-icon-off="⌨️" data-tooltip-on="Switch to fancy mode" data-tooltip-off="Switch to plaintext mode">⌨️</button>
                         </div>
                     </div>
 
@@ -22671,6 +22917,7 @@ Most common categories:<br/>
                                         </div>
                                     </div>
                                 </div>
+                                <i class="menu_button fa-solid fa-arrows-rotate carrot-chunk-refresh-btn" data-hash="${chunkHashAttr}" title="Regenerate keywords from current content" style="margin-right: 8px;"></i>
                                 <i class="menu_button fa-solid fa-trash-can carrot-chunk-delete-btn" data-hash="${chunkHashAttr}" title="Delete chunk"></i>
                             </div>
                             <div class="${bodyClasses.join(' ')}" ${bodyStyle}>
@@ -22684,11 +22931,23 @@ Most common categories:<br/>
 
         container.html(html);
 
+        // Initialize keyword input mode setting
+        if (typeof extension_settings[extensionName] === 'undefined') {
+            extension_settings[extensionName] = {};
+        }
+        if (typeof extension_settings[extensionName].keyword_input_plaintext === 'undefined') {
+            extension_settings[extensionName].keyword_input_plaintext = false; // Default to fancy mode
+        }
+
         // Initialize select2 on all keyword selects - copy ST's exact implementation
         filtered.forEach(chunk => {
             const hash = chunk.hash;
             const $select = $(`.carrot-chunk-keywords[data-hash="${hash}"]`);
+            const $textarea = $(`.carrot-chunk-keywords-plaintext[data-hash="${hash}"]`);
+            const $switchBtn = $(`.carrot-switch-input-type-icon[data-hash="${hash}"]`);
             if (!$select.length) return;
+
+            const isPlaintext = extension_settings[extensionName].keyword_input_plaintext;
 
             // Get current keywords for this chunk
             const systemKeywords = ensureArrayValue(chunk.systemKeywords);
@@ -22714,21 +22973,34 @@ Most common categories:<br/>
                     : (customKeywordSet.has(normalized) ? CUSTOM_KEYWORD_PRIORITY : defaultPriority);
             };
 
-            // Initialize select2 FIRST
-            $select.select2({
+            // Initialize fancy mode (select2) or plaintext mode (textarea)
+            if (!isPlaintext) {
+                // FANCY MODE: Initialize select2
+                $select.select2({
                 tags: true,
                 tokenSeparators: [','],
                 placeholder: $select.attr('placeholder'),
                 width: '100%',
+                templateResult: function(item) {
+                    // Template for dropdown results
+                    const content = $('<span>').addClass('item').text(item.text).attr('title', `${item.text}\n\nClick to edit`);
+                    const isRegex = isValidRegex(item.text);
+                    if (isRegex) {
+                        content.html(highlightRegex(item.text));
+                        content.addClass('regex_item').prepend($('<span>').addClass('regex_icon').text('•*').attr('title', 'Regex'));
+                    }
+                    return content;
+                },
                 templateSelection: function(item) {
+                    // Template for selected items
                     const keyword = item.text;
                     const isRegex = isValidRegex(keyword);
 
-                    // Regex items - special styling
+                    // Regex items - use ST's highlighting
                     if (isRegex) {
-                        const $regexTag = $('<span>').addClass('regex_item');
-                        $regexTag.append($('<span>').addClass('regex_icon'));
-                        $regexTag.append(document.createTextNode(` ${keyword}`));
+                        const $regexTag = $('<span>').addClass('item').addClass('regex_item').attr('title', `${keyword}\n\nClick to edit`);
+                        $regexTag.prepend($('<span>').addClass('regex_icon').text('•*').attr('title', 'Regex'));
+                        $regexTag.append(' ').append($(highlightRegex(keyword)));
                         return $regexTag;
                     }
 
@@ -22811,16 +23083,54 @@ Most common categories:<br/>
                 });
             });
 
-            // Stop propagation to prevent drawer closing
-            $select.on('click focus', function(e) {
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-            });
+                // Stop propagation to prevent drawer closing
+                $select.on('click focus', function(e) {
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                });
 
-            $select.next('.select2-container').on('click mousedown', function(e) {
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-            });
+                $select.next('.select2-container').on('click mousedown', function(e) {
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                });
+
+                $select.show();
+                $textarea.hide();
+            } else {
+                // PLAINTEXT MODE: Initialize textarea
+                const keywordsText = allKeywords.join(', ');
+                $textarea.val(keywordsText);
+
+                $textarea.on('change input', function() {
+                    const value = $(this).val();
+                    const newKeywords = value.split(',').map(k => k.trim()).filter(k => k.length > 0);
+
+                    // Update all keyword arrays
+                    chunk.keywords = newKeywords;
+                    chunk.systemKeywords = systemKeywords.filter(k => newKeywords.includes(k));
+                    chunk.customKeywords = newKeywords.filter(k => !systemKeywords.includes(k));
+
+                    // Set default weight for new custom keywords
+                    newKeywords.forEach(keyword => {
+                        const normalized = normalizeKeywordClient(keyword);
+                        if (!systemKeywords.includes(keyword) && chunk.customWeights[normalized] === undefined) {
+                            chunk.customWeights[normalized] = CUSTOM_KEYWORD_PRIORITY;
+                        }
+                    });
+                });
+
+                $textarea.on('click focus', function(e) {
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                });
+
+                $select.hide();
+                $textarea.show();
+            }
+
+            // Update switch button appearance
+            $switchBtn.attr('title', $switchBtn.data(isPlaintext ? 'tooltip-on' : 'tooltip-off'));
+            $switchBtn.text($switchBtn.data(isPlaintext ? 'icon-on' : 'icon-off'));
 
             // Stop propagation on all input fields to prevent drawer close
             const $card = $(`.world_entry[data-hash="${hash}"]`);
@@ -22863,6 +23173,19 @@ Most common categories:<br/>
                 // Fallback to character count if getTokenCountAsync not available
                 $tokenCounter.text(`${(chunk.text || '').length} tokens`);
             }
+        });
+
+        // Switch button handler - toggle between fancy and plaintext mode
+        $(document).off('click', '.carrot-switch-input-type-icon').on('click', '.carrot-switch-input-type-icon', function(e) {
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            // Toggle the setting
+            extension_settings[extensionName].keyword_input_plaintext = !extension_settings[extensionName].keyword_input_plaintext;
+            saveSettingsDebounced();
+
+            // Re-render chunks to apply the new mode
+            renderChunks(modifiedChunks, getSearchTerm());
         });
 
         // Weight editing handler - delegated to handle dynamically rendered badges
@@ -22987,6 +23310,133 @@ Most common categories:<br/>
                 .addClass('fa-circle-chevron-up up');
         }
     });
+
+    // Delete button handler - use event delegation for dynamically rendered chunks
+    $(document).on('click', '.carrot-chunk-delete-btn', async function(e) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        const hash = $(this).data('hash');
+        const chunk = modifiedChunks[hash];
+        if (!chunk) return;
+
+        const confirmed = confirm(`Delete chunk "${chunk.metadata?.section || chunk.section || 'Chunk'}"? This cannot be undone.`);
+        if (!confirmed) return;
+
+        // Remove from modifiedChunks (affects UI)
+        delete modifiedChunks[hash];
+
+        // Remove from the actual library
+        const collectionId = currentEditingCollection;
+        if (collectionId) {
+            const library = getContextualLibrary();
+            if (library[collectionId] && library[collectionId][hash]) {
+                delete library[collectionId][hash];
+
+                // Also delete from vector DB if it exists
+                try {
+                    if (fullsheetRAGLoaded && fullsheetAPI.purgeOrphanedVectors) {
+                        await fullsheetAPI.purgeOrphanedVectors(collectionId, [hash]);
+                        console.log(`✅ Deleted chunk ${hash} from vector DB`);
+                    }
+                } catch (error) {
+                    console.warn(`⚠️ Failed to delete from vector DB (chunk may not be vectorized):`, error);
+                }
+
+                // Save extension settings to persist the deletion
+                await saveSettingsDebounced();
+                console.log(`🗑️ Deleted chunk: ${chunk.metadata?.section || chunk.section || hash}`);
+            }
+        }
+
+        renderChunks(modifiedChunks, getSearchTerm());
+        toastr.success('Chunk deleted');
+    });
+
+    // Refresh keywords button handler - regenerate keywords from current chunk content
+    $(document).on('click', '.carrot-chunk-refresh-btn', async function(e) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        const hash = $(this).data('hash');
+        const chunk = modifiedChunks[hash];
+        if (!chunk) return;
+
+        const confirmed = confirm(`Regenerate keywords for "${chunk.metadata?.section || chunk.section || 'this chunk'}"?\n\nThis will:\n• Re-analyze the current chunk text\n• Generate new keywords based on content\n• Keep your custom keywords\n• Reset keyword weights to defaults`);
+        if (!confirmed) return;
+
+        try {
+            // Read CURRENT chunk text from the textarea/formatted display
+            let chunkText = '';
+            const $textArea = $(`.carrot-chunk-text-edit[data-hash="${hash}"]`);
+            const $formattedDisplay = $(`.chunk-formatted-display[data-hash="${hash}"]`);
+
+            if ($textArea.length) {
+                // Read from textarea
+                chunkText = $textArea.val() || '';
+            } else if ($formattedDisplay.length) {
+                // Read from formatted display (convert HTML back to text)
+                chunkText = $formattedDisplay.text() || '';
+            } else {
+                // Fallback to stored text
+                chunkText = chunk.text || '';
+            }
+
+            const sectionTitle = chunk.metadata?.section || chunk.section || '';
+            const topic = chunk.metadata?.topic || chunk.topic || null;
+
+            // Extract character name from collection ID
+            const collectionId = currentEditingCollection;
+            let characterName = null;
+            if (collectionId) {
+                // Collection ID format: "carrotkernel_char_CharacterName" or "carrotkernel_global_CharacterName"
+                const match = collectionId.match(/^carrotkernel_(?:char|global|chat)_(.+)$/);
+                if (match) {
+                    characterName = match[1].replace(/_/g, ' ');
+                }
+            }
+
+            // Call the fullsheet-rag keyword generation function
+            if (typeof fullsheetAPI !== 'undefined' && fullsheetAPI.buildChunkMetadata) {
+                const tags = chunk.tags || [];
+                const newMetadata = fullsheetAPI.buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName);
+
+                // Update chunk with new keywords, but preserve custom keywords
+                const oldCustomKeywords = ensureArrayValue(chunk.customKeywords);
+
+                // Update the stored chunk text with current edited content
+                chunk.text = chunkText;
+
+                chunk.systemKeywords = newMetadata.systemKeywords || [];
+                chunk.defaultSystemKeywords = newMetadata.defaultSystemKeywords || [];
+                chunk.keywords = [...chunk.systemKeywords, ...oldCustomKeywords];
+                chunk.keywordGroups = newMetadata.keywordGroups || [];
+                chunk.defaultKeywordGroups = newMetadata.defaultKeywordGroups || [];
+                chunk.keywordRegex = newMetadata.keywordRegex || [];
+                chunk.defaultKeywordRegex = newMetadata.defaultKeywordRegex || [];
+
+                // Reset custom weights
+                chunk.customWeights = {};
+
+                console.log(`🔄 Refreshed keywords for chunk ${hash}:`, {
+                    chunkTextLength: chunkText.length,
+                    oldKeywords: chunk.keywords?.length || 0,
+                    newKeywords: chunk.systemKeywords?.length || 0,
+                    customKept: oldCustomKeywords.length,
+                    regexPatterns: chunk.keywordRegex?.length || 0
+                });
+
+                renderChunks(modifiedChunks, getSearchTerm());
+                toastr.success('Keywords regenerated!');
+            } else {
+                toastr.error('Keyword generation API not available');
+            }
+        } catch (error) {
+            console.error('Failed to refresh keywords:', error);
+            toastr.error('Failed to regenerate keywords: ' + error.message);
+        }
+    });
+
 // BABY BUNNY MODE MESSAGE BUTTON (following qvink_memory pattern)
 // =============================================================================
 
@@ -23046,7 +23496,11 @@ function initialize_baby_bunny_message_button() {
         // Manually trigger the Baby Bunny Mode processing
         await checkForCompletedSheets(targetMessage, message_id);
 
-        // Check if this is also a fullsheet and offer to vectorize
+        // Baby Bunny Mode handles everything - no need for separate RAG confirmation
+        console.log('✅ Baby Bunny Mode completed - skipping RAG confirmation (handled via Skip to Chunking button)');
+        return;
+
+        // Check if this is also a fullsheet and offer to vectorize (DISABLED - now handled by Baby Bunny Mode)
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🔬 CHECKING FOR FULLSHEET VECTORIZATION OPPORTUNITY');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
