@@ -8019,10 +8019,19 @@ jQuery(async () => {
             const hasBunnymoData = extractedData.bunnymoTags.length > 0 || extractedData.linguistics.length > 0;
 
             // Detect tagsheets (lines starting with < > tags without BunnymoTags wrapper)
-            const hasTagLines = /^<[A-Z_]+:[^>]+>/gim.test(messageText);
+            // Must have multiple tag lines to avoid false positives
+            const tagLineMatches = messageText.match(/^<[A-Z_]+:[^>]+>/gim);
+            const hasTagLines = tagLineMatches && tagLineMatches.length >= 3;
 
             // Detect quicksheets (character descriptions, typically 200-2000 chars with name mentions)
-            const isQuicksheet = messageText.length >= 200 && messageText.length < 2000;
+            // MUST have BOTH:
+            // 1. Multiple structured tags (3+ tags in <TAG:value> format)
+            // 2. High tag density (tags make up significant portion of content)
+            const allTagMatches = messageText.match(/<[A-Z_]+:[^>]+>/gi);
+            const tagCount = allTagMatches ? allTagMatches.length : 0;
+            const tagDensity = tagCount > 0 ? (allTagMatches.join('').length / messageText.length) : 0;
+            const hasSignificantTags = tagCount >= 3 && tagDensity > 0.15; // 15%+ of message is tags
+            const isQuicksheet = messageText.length >= 200 && messageText.length < 2000 && hasSignificantTags;
 
             // Detect fullsheets (section headers)
             const hasFullsheetStructure = /^#{1,6}\s+\S+\s+\d+\s*\/\s*\d+/gim.test(messageText);
