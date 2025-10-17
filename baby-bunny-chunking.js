@@ -495,14 +495,14 @@ function renderChunkPreviews() {
                             }
                         })
                         .on('blur', function() {
-                            const newWeight = parseInt($(this).text()) || weight;
+                            const newWeight = parseInt($(this).text()) || getWeight(keyword);
                             const clampedWeight = Math.max(1, Math.min(200, newWeight));
-
-                            $(this).text(clampedWeight);
 
                             const normalized = normalizeKeyword(keyword);
                             if (!chunk.customWeights) chunk.customWeights = {};
                             chunk.customWeights[normalized] = clampedWeight;
+
+                            console.log(`✅ Regex weight saved for "${keyword}": ${clampedWeight}`);
                         });
 
                     const $weightWrapper = $('<span>').css('margin-left', '2px').text('[').append($weight).append(']');
@@ -561,14 +561,14 @@ function renderChunkPreviews() {
                         }
                     })
                     .on('blur', function() {
-                        const newWeight = parseInt($(this).text()) || weight;
+                        const newWeight = parseInt($(this).text()) || getWeight(keyword);
                         const clampedWeight = Math.max(1, Math.min(200, newWeight));
-
-                        $(this).text(clampedWeight);
 
                         const normalized = normalizeKeyword(keyword);
                         if (!chunk.customWeights) chunk.customWeights = {};
                         chunk.customWeights[normalized] = clampedWeight;
+
+                        console.log(`✅ Weight saved for "${keyword}": ${clampedWeight}`);
                     });
 
                 const $weightWrapper = $('<span>').css('margin-left', '2px').text('[').append($weight).append(']');

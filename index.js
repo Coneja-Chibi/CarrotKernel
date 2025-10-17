@@ -14,6 +14,7 @@ let fullsheetRAGLoaded = false;
 // Chunk visualizer state (module-level so accessible from all functions)
 let currentEditingCollection = null;
 let modifiedChunks = {};
+let hasUnsavedChanges = false;
 
 async function loadFullsheetRAG() {
     if (fullsheetRAGLoaded) {
@@ -12010,6 +12011,7 @@ function bindSettingsEvents() {
             chunk.chunkLinks = chunk.chunkLinks.filter(link => link.targetHash !== targetHash);
         }
 
+        hasUnsavedChanges = true;
         renderChunks(modifiedChunks, getSearchTerm());
     });
 
@@ -12025,14 +12027,15 @@ function bindSettingsEvents() {
             link.mode = newMode;
         });
 
+        hasUnsavedChanges = true;
         renderChunks(modifiedChunks, getSearchTerm());
     });
 
     // Inline drawer toggle for linked chunks section - Let ST's native handler manage this
     // No custom handler needed since we're using ST's standard inline-drawer structure
 
-    // Modal close handlers
-    $('#carrot-rag-modal-close, #carrot-rag-modal-cancel').on('click', function() {
+    // Helper function to actually close the modal
+    function closeVisualizerModal() {
         // Clean up only our specific event handlers
         $(document).off('click', '.carrot-chunk-toggle-drawer');
         // DO NOT remove .world_entry_thin_controls handlers - that breaks ST's native lorebook!
@@ -12047,6 +12050,34 @@ function bindSettingsEvents() {
         $('body').css('overflow', '');
         currentEditingCollection = null;
         modifiedChunks = {};
+        hasUnsavedChanges = false;
+    }
+
+    // Modal close handlers
+    $('#carrot-rag-modal-close, #carrot-rag-modal-cancel').on('click', async function() {
+        // Check for unsaved changes
+        if (hasUnsavedChanges) {
+            const stContext = getContext();
+            const result = await stContext.callGenericPopup(
+                'You have unsaved changes. What would you like to do?',
+                'confirm',
+                '',
+                { okButton: 'Save', cancelButton: 'Discard' }
+            );
+
+            if (result) {
+                // User clicked "Save" - trigger save (which will close modal)
+                $('#carrot-rag-modal-save').click();
+                return;
+            } else {
+                // User clicked "Discard" - close without saving
+                closeVisualizerModal();
+                return;
+            }
+            // If user clicked X to close popup, do nothing (stay in visualizer)
+        }
+
+        closeVisualizerModal();
     });
 
     // Save changes
@@ -12066,8 +12097,18 @@ function bindSettingsEvents() {
         // Save to contextual library
         const library = getContextualLibrary();
         const originalChunks = library[currentEditingCollection] || {};
+
+        // Log chunks with custom weights before saving
+        console.log('💾 Saving chunks to library...');
+        Object.entries(modifiedChunks).forEach(([hash, chunk]) => {
+            if (chunk.customWeights && Object.keys(chunk.customWeights).length > 0) {
+                console.log(`💾 Saving chunk ${hash} with custom weights:`, chunk.customWeights);
+            }
+        });
+
         library[currentEditingCollection] = modifiedChunks;
         saveSettingsDebounced();
+        console.log('💾 Save complete!');
 
         // Sync vector database - delete orphaned embeddings
         try {
@@ -12085,6 +12126,7 @@ function bindSettingsEvents() {
         }
 
         toastr.success('Chunks saved!');
+        hasUnsavedChanges = false; // Reset flag after successful save
         $('#carrot-rag-visualizer-modal').fadeOut(200, function () {
             $(this).removeClass('is-visible').css('display', 'none');
         });
@@ -20716,7 +20758,7 @@ class CarrotTemplatePromptEditInterface {
                 </label>
                 <label class="bmt-depth-selector" title="Injection depth - how many messages back to inject this template">
                     <span>📍 Depth:</span>
-                    <input type="number" id="template_depth" class="bmt-depth-input" min="0" max="100" value="4" />
+                    <input type="number" id="template_depth" class="bmt-depth-input" min="0" max="100" value="0" />
                     <span class="bmt-depth-help">0 = after last message</span>
                 </label>
                 <label class="bmt-scan-toggle" title="Enable scanning of message history for keywords">
@@ -22591,7 +22633,13 @@ Most common categories:<br/>
 
         currentEditingCollection = collectionId;
         modifiedChunks = JSON.parse(JSON.stringify(chunks));
-        Object.entries(modifiedChunks).forEach(([, chunk]) => {
+        hasUnsavedChanges = false; // Reset flag when opening modal
+
+        console.log('🔍 Loading chunks for editing:', Object.keys(modifiedChunks).length, 'chunks');
+        Object.entries(modifiedChunks).forEach(([hash, chunk]) => {
+            if (chunk.customWeights && Object.keys(chunk.customWeights).length > 0) {
+                console.log(`📊 Chunk ${hash} has custom weights:`, chunk.customWeights);
+            }
             initializeChunkKeywordMetadata(chunk);
             chunk._editing = false; // Explicitly set all chunks to collapsed initially
         });
@@ -23112,14 +23160,17 @@ Most common categories:<br/>
                                 }
                             })
                             .on('blur', function() {
-                                const newWeight = parseInt($(this).text()) || weight;
+                                const newWeight = parseInt($(this).text()) || getWeight(keyword);
                                 const clampedWeight = Math.max(1, Math.min(200, newWeight));
 
-                                $(this).text(clampedWeight);
-
                                 const normalized = normalizeKeywordClient(keyword);
-                                if (!chunk.customWeights) chunk.customWeights = {};
-                                chunk.customWeights[normalized] = clampedWeight;
+                                // IMPORTANT: Modify modifiedChunks directly, not the closure variable
+                                if (!modifiedChunks[hash].customWeights) modifiedChunks[hash].customWeights = {};
+                                modifiedChunks[hash].customWeights[normalized] = clampedWeight;
+                                hasUnsavedChanges = true; // Mark as having unsaved changes
+
+                                console.log(`✅ Regex weight saved for "${keyword}": ${clampedWeight}`, modifiedChunks[hash].customWeights);
+                                toastr.info(`Weight for "${keyword}" saved: ${clampedWeight}`);
                             });
 
                         const $weightWrapper = $('<span>').css('margin-left', '2px').text('[').append($weight).append(']');
@@ -23178,14 +23229,17 @@ Most common categories:<br/>
                             }
                         })
                         .on('blur', function() {
-                            const newWeight = parseInt($(this).text()) || weight;
+                            const newWeight = parseInt($(this).text()) || getWeight(keyword);
                             const clampedWeight = Math.max(1, Math.min(200, newWeight));
 
-                            $(this).text(clampedWeight);
-
                             const normalized = normalizeKeywordClient(keyword);
-                            if (!chunk.customWeights) chunk.customWeights = {};
-                            chunk.customWeights[normalized] = clampedWeight;
+                            // IMPORTANT: Modify modifiedChunks directly, not the closure variable
+                            if (!modifiedChunks[hash].customWeights) modifiedChunks[hash].customWeights = {};
+                            modifiedChunks[hash].customWeights[normalized] = clampedWeight;
+                            hasUnsavedChanges = true; // Mark as having unsaved changes
+
+                            console.log(`✅ Weight saved for "${keyword}": ${clampedWeight}`, modifiedChunks[hash].customWeights);
+                            toastr.info(`Weight for "${keyword}" saved: ${clampedWeight}`);
                         });
 
                     const $weightWrapper = $('<span>').css('margin-left', '2px').text('[').append($weight).append(']');
@@ -23237,6 +23291,8 @@ Most common categories:<br/>
                         chunk.customWeights[normalized] = CUSTOM_KEYWORD_PRIORITY;
                     }
                 });
+
+                hasUnsavedChanges = true;
             });
 
                 // Stop propagation to prevent drawer closing
@@ -23317,6 +23373,8 @@ Most common categories:<br/>
                             chunk.customWeights[normalized] = CUSTOM_KEYWORD_PRIORITY;
                         }
                     });
+
+                    hasUnsavedChanges = true;
                 });
 
                 $textarea.on('click focus', function(e) {
@@ -23353,11 +23411,13 @@ Most common categories:<br/>
             // Save textarea changes to chunk object
             $card.find('.carrot-chunk-text-edit').on('change input', function() {
                 chunk.text = $(this).val();
+                hasUnsavedChanges = true;
             });
 
             // Save title changes
             $card.find('.carrot-chunk-title-edit').on('change input', function() {
                 chunk.comment = $(this).val();
+                hasUnsavedChanges = true;
             });
 
             // Calculate and display token count
@@ -23463,6 +23523,7 @@ Most common categories:<br/>
 
         // Toggle disabled state
         chunk.disabled = !chunk.disabled;
+        hasUnsavedChanges = true;
 
         // Re-render to update toggle icon and color
         renderChunks(modifiedChunks, getSearchTerm());
@@ -23525,6 +23586,7 @@ Most common categories:<br/>
 
         // Remove from modifiedChunks (affects UI)
         delete modifiedChunks[hash];
+        hasUnsavedChanges = true;
 
         // Remove from the actual library
         const collectionId = currentEditingCollection;
@@ -23626,6 +23688,7 @@ Most common categories:<br/>
                     regexPatterns: chunk.keywordRegex?.length || 0
                 });
 
+                hasUnsavedChanges = true;
                 renderChunks(modifiedChunks, getSearchTerm());
                 toastr.success('Keywords regenerated!');
             } else {
