@@ -36,6 +36,7 @@ async function loadFullsheetRAG() {
             getKeywordPriority: module.getKeywordPriority || ((keyword) => 20),
             normalizeKeyword: module.normalizeKeyword || ((word) => (word || '').toLowerCase().trim()),
             regenerateChunkKeywords: module.regenerateChunkKeywords || (() => Promise.resolve()),
+            applyAutomaticLinks: module.applyAutomaticLinks || (() => {}),
         };
         return fullsheetAPI;
     } catch (error) {
@@ -3319,7 +3320,8 @@ const defaultSettings = {
     babyBunnyMode: false,     // 🐰 Baby Bunny Mode - guided automation for sheet processing
     worldBookTrackerEnabled: true,  // WorldBook Tracker toggle
     autoRescanOnChatLoad: true,  // Auto-rescan character repos on chat switch
-    bunnymoTagWrapping: false  // Wrap worldbook entries with <BunnymoTags:Entry_Name> when triggered
+    bunnymoTagWrapping: false,  // Wrap worldbook entries with <BunnymoTags:Entry_Name> when triggered
+    excludeTagSynthesis: false  // Exclude TAG SYNTHESIS / BunnymoTags block at end of fullsheet from chunking
 };
 
 // Debug logging function - now uses centralized CarrotDebug module
@@ -10351,19 +10353,29 @@ jQuery(async () => {
 
             // 🏷️ BunnymoTags Wrapping - wrap entries before they're sent to AI
             if (settings.bunnymoTagWrapping && entryList && entryList.length > 0) {
-                entryList.forEach(entry => {
+                console.log(`🏷️ [BunnymoTags] Wrapping enabled, processing ${entryList.length} entries`);
+                entryList.forEach((entry, index) => {
+                    console.log(`🏷️ [BunnymoTags] Entry ${index}:`, {
+                        hasContent: !!entry.content,
+                        comment: entry.comment,
+                        title: entry.title,
+                        key: entry.key,
+                        keys: entry.keys,
+                        allProps: Object.keys(entry)
+                    });
+
                     // Only wrap if entry has content and a title/comment
                     if (entry.content && (entry.comment || entry.title)) {
                         const entryName = (entry.comment || entry.title || 'Entry').replace(/[<>]/g, ''); // Remove any existing angle brackets
                         const originalContent = entry.content;
                         entry.content = `<BunnymoTags:${entryName}>\n${originalContent}\n</BunnymoTags:${entryName}>`;
 
-                        if (settings.debugMode) {
-                            console.log(`🏷️ [BunnymoTags] Wrapped entry "${entryName}"`, {
-                                before: originalContent.substring(0, 100),
-                                after: entry.content.substring(0, 150)
-                            });
-                        }
+                        console.log(`🏷️ [BunnymoTags] Wrapped entry "${entryName}"`, {
+                            before: originalContent.substring(0, 100),
+                            after: entry.content.substring(0, 150)
+                        });
+                    } else {
+                        console.log(`🏷️ [BunnymoTags] Skipped entry ${index} - missing content or title/comment`);
                     }
                 });
             }
@@ -11043,6 +11055,19 @@ function bindSettingsEvents() {
             toastr.info('🏷️ BunnymoTags Wrapping enabled - worldbook entries will be wrapped with tags');
         } else {
             toastr.info('🏷️ BunnymoTags Wrapping disabled');
+        }
+    });
+
+    // TAG SYNTHESIS Exclusion toggle
+    $('#carrot_exclude_tag_synthesis').prop('checked', settings.excludeTagSynthesis).on('change', async function() {
+        const newValue = Boolean($(this).prop('checked'));
+        extension_settings[extensionName].excludeTagSynthesis = newValue;
+        saveSettingsDebounced();
+
+        if (newValue) {
+            toastr.info('🚫 TAG SYNTHESIS section will be excluded from chunking');
+        } else {
+            toastr.info('TAG SYNTHESIS section will be included in chunking');
         }
     });
 
@@ -23698,6 +23723,12 @@ Most common categories:<br/>
             () => {
                 // On success callback
                 hasUnsavedChanges = true;
+
+                // Recalculate automatic links for all chunks
+                const chunksArray = Object.values(modifiedChunks);
+                fullsheetAPI.applyAutomaticLinks(chunksArray);
+                console.log('🔗 [regenerateChunkKeywords] Recalculated automatic links after keyword regeneration');
+
                 renderChunks(modifiedChunks, getSearchTerm());
             },
             null // No special error handling needed (shared function already shows toast)

@@ -866,23 +866,59 @@ function getKeywordPriority(keyword) {
  * 3. Semantic mapping for English enhancement
  */
 function extractKeywords(text, sectionTitle = '', topic = '') {
-    // Case-insensitive keyword map for deduplication
-    const keywordMap = new Map(); // lowercase -> original word
+    // Language-agnostic keyword extraction with weighted frequency analysis
+    const weightedKeywords = new Map(); // lowercase -> { word, weight, sources }
 
-    // STEP 1: Extract words from title/topic (language-agnostic, high priority)
+    // STEP 1: Extract section title/header words BUT ONLY if they appear in the text
+    // This prevents headers from becoming keywords in unrelated sections
     const titleText = (sectionTitle + ' ' + topic)
         .replace(/[^\p{L}\s]/gu, ' ') // Keep all letters (Unicode), remove punctuation
         .split(/\s+/)
         .filter(w => w.length >= 3 && !STOP_WORDS.has(w.toLowerCase()));
 
+    const lowerText = text.toLowerCase();
+
     titleText.forEach(word => {
         const lower = word.toLowerCase();
-        if (!keywordMap.has(lower)) {
-            keywordMap.set(lower, word.toLowerCase());
+        // CRITICAL: Only add header word if it actually appears in THIS section's text
+        if (lowerText.includes(lower)) {
+            if (!weightedKeywords.has(lower)) {
+                weightedKeywords.set(lower, {
+                    word: lower,
+                    weight: 10.0, // HIGH base weight for section header (only when present in text)
+                    sources: ['header']
+                });
+            } else {
+                const entry = weightedKeywords.get(lower);
+                entry.weight += 10.0;
+                entry.sources.push('header');
+            }
         }
     });
 
-    // STEP 2: Frequency analysis from text (language-agnostic)
+    // STEP 2: Extract quoted words (HIGH WEIGHT - user explicitly quoted them)
+    const quotedMatches = text.matchAll(/["'"`]([\p{L}\s]{3,}?)["'"`]/gu);
+    for (const match of quotedMatches) {
+        const quotedPhrase = match[1].trim();
+        const words = quotedPhrase.split(/\s+/).filter(w => w.length >= 3 && !STOP_WORDS.has(w.toLowerCase()));
+
+        words.forEach(word => {
+            const lower = word.toLowerCase();
+            if (!weightedKeywords.has(lower)) {
+                weightedKeywords.set(lower, {
+                    word: lower,
+                    weight: 5.0, // HIGH weight for quoted words
+                    sources: ['quoted']
+                });
+            } else {
+                const entry = weightedKeywords.get(lower);
+                entry.weight += 5.0;
+                if (!entry.sources.includes('quoted')) entry.sources.push('quoted');
+            }
+        });
+    }
+
+    // STEP 3: Frequency analysis from text (weight increases per mention)
     const tokens = text
         .replace(/[<>]/g, ' ')
         .match(/[\p{L}]{3,}/gu) || []; // Match 3+ letter words (any language)
@@ -895,68 +931,425 @@ function extractKeywords(text, sectionTitle = '', topic = '') {
         }
     });
 
-    // For short queries (like chat messages), extract ALL meaningful words
-    // For long content (like fullsheets), use frequency threshold
-    const isShortQuery = text.length < 100; // Short query = less than 100 chars
-
-    if (isShortQuery) {
-        // Short query: add ALL non-stopwords (no frequency requirement)
-        for (const [word] of frequency.entries()) {
-            if (!keywordMap.has(word)) {
-                keywordMap.set(word, word);
-            }
-        }
-    } else {
-        // Long content: add words that appear 2+ times (balanced threshold)
-        for (const [word, count] of frequency.entries()) {
-            if (count >= 2 && !keywordMap.has(word)) {
-                keywordMap.set(word, word);
-            }
+    // Add frequency-based weights
+    for (const [word, count] of frequency.entries()) {
+        if (!weightedKeywords.has(word)) {
+            // New word - weight based on frequency
+            // 1 mention = 0.5, 2 mentions = 1.0, 3 mentions = 1.5, etc.
+            weightedKeywords.set(word, {
+                word: word,
+                weight: count * 0.5,
+                sources: ['frequency']
+            });
+        } else {
+            // Existing word from header/quotes - boost weight by frequency
+            const entry = weightedKeywords.get(word);
+            entry.weight += count * 0.5;
+            if (!entry.sources.includes('frequency')) entry.sources.push('frequency');
         }
     }
 
-    // STEP 3: Only add title-specific semantic keywords if they ACTUALLY appear in the text
-    const TITLE_KEYWORD_MAP = {
-        'aesthetic': ['aesthetic', 'style'],
-        'expression': ['expression'],
-        'philosophy': ['philosophy'],
-        'origin': ['origin'],
-        'history': ['history'],
-        'psyche': ['psyche'],
-        'behavioral': ['behavior'],
-        'relational': ['relationship'],
-        'linguistic': ['linguistic'],
-        'physical': ['physical'],
-        'identity': ['identity'],
-        'emotional': ['emotion'],
-        'arousal': ['arousal'],
-        'trauma': ['trauma'],
-    };
+    // STEP 4: Filter out very low-weight keywords (< 1.0 weight)
+    // This means words must appear 2+ times OR be in header/quotes to be included
+    const filteredKeywords = Array.from(weightedKeywords.entries())
+        .filter(([_, data]) => data.weight >= 1.0)
+        .map(([_, data]) => ({ ...data }));
 
-    const lowerText = text.toLowerCase();
-    const lowerTitle = (sectionTitle + ' ' + topic).toLowerCase();
+    // STEP 5: Sort by weight (descending) and return top keywords
+    const sortedKeywords = filteredKeywords
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, 12) // Limit to top 12
+        .map(k => k.word);
 
-    for (const [titleKey, semanticWords] of Object.entries(TITLE_KEYWORD_MAP)) {
-        // Only add semantic keywords if the title contains the key AND the text contains related terms
-        if (lowerTitle.includes(titleKey)) {
-            for (const semanticWord of semanticWords) {
-                // Only add if it actually appears in THIS chunk's text
-                if (lowerText.includes(semanticWord) && !keywordMap.has(semanticWord)) {
-                    keywordMap.set(semanticWord, semanticWord);
-                }
-            }
-        }
-    }
-
-    // Sort by frequency and limit to 12 keywords (increased from 8)
-    const sortedKeywords = Array.from(keywordMap.values()).sort((a, b) => {
-        const freqA = frequency.get(a) || 0;
-        const freqB = frequency.get(b) || 0;
-        return freqB - freqA;
+    console.log('🔍 [extractKeywords] Keyword extraction:', {
+        section: sectionTitle,
+        totalCandidates: weightedKeywords.size,
+        afterFiltering: filteredKeywords.length,
+        topKeywords: sortedKeywords,
+        topWeights: filteredKeywords.slice(0, 12).map(k => `${k.word}(${k.weight.toFixed(1)})`)
     });
 
-    return sortedKeywords.slice(0, 12);
+    return sortedKeywords;
 }
+
+// English Language Bank for Section-Specific Keywords
+// Automatically adds weighted keywords AND regex patterns when English language is detected
+const ENGLISH_SECTION_KEYWORDS = {
+    // Section 1: Core Identity & Context
+    'core identity': {
+        keywords: ['identity', 'name', 'species', 'role', 'occupation', 'gender', 'pronouns', 'context', 'core', 'tags', 'genre', 'character', 'being', 'type', 'position', 'profession', 'background'],
+        regexes: [
+            { pattern: '\\b(?:core|primary|central)\\s+identity\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:species|race|type)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:role|occupation|profession|position)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:gender|pronouns?)\\s+(?:identity)?\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:genre|tags?)\\b', flags: 'i', priority: 60 }
+        ],
+        weight: 60
+    },
+    'identity': {
+        keywords: ['identity', 'name', 'species', 'role', 'occupation', 'gender', 'pronouns', 'context', 'core', 'tags', 'genre', 'character', 'being', 'type', 'position', 'profession', 'background'],
+        regexes: [
+            { pattern: '\\bidentit(?:y|ies)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:character|being)\\s+(?:type|archetype)\\b', flags: 'i', priority: 65 }
+        ],
+        weight: 60
+    },
+    'context': {
+        keywords: ['identity', 'name', 'species', 'role', 'occupation', 'gender', 'pronouns', 'context', 'core', 'tags', 'genre', 'character', 'being', 'type', 'position', 'profession', 'background'],
+        regexes: [
+            { pattern: '\\bcontexts?\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:background|setting)\\s+context\\b', flags: 'i', priority: 70 }
+        ],
+        weight: 60
+    },
+
+    // Section 2: Physical Manifestation
+    'physical': {
+        keywords: ['physical', 'body', 'appearance', 'build', 'hair', 'eyes', 'skin', 'height', 'features', 'aesthetic', 'style', 'clothing', 'looks', 'physique', 'form', 'figure', 'face', 'hands', 'muscular', 'lean', 'tall', 'short'],
+        regexes: [
+            { pattern: '\\bphysical(?:\\s+(?:manifestation|appearance|form|body))?\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:body|physique)\\s+(?:build|type|form)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:hair|eyes|skin)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:tall|short|lean|muscular|built|slender|lithe)\\b', flags: 'i', priority: 63 },
+            { pattern: '\\b(?:distinguishing|striking)\\s+features?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\baura\\s+(?:and|&)?\\s+presence\\b', flags: 'i', priority: 65 }
+        ],
+        weight: 60
+    },
+    'manifestation': {
+        keywords: ['physical', 'body', 'appearance', 'build', 'hair', 'eyes', 'skin', 'height', 'features', 'aesthetic', 'style', 'clothing', 'looks', 'physique', 'form', 'figure', 'face', 'hands'],
+        regexes: [
+            { pattern: '\\bmanifestations?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:appearance|looks|presentation)\\b', flags: 'i', priority: 65 }
+        ],
+        weight: 60
+    },
+
+    // Section 3: Psyche & Behavioral Matrix
+    'psyche': {
+        keywords: ['psyche', 'psychology', 'personality', 'behavior', 'mind', 'thoughts', 'motivation', 'morals', 'values', 'fears', 'strengths', 'weaknesses', 'habits', 'mental', 'emotional', 'thinking', 'traits', 'patterns', 'desires', 'aversions'],
+        regexes: [
+            { pattern: '\\bpsyche\\b', flags: 'i', priority: 70 },
+            { pattern: '\\bpsycholog(?:y|ical)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\bpersonalit(?:y|ies)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:core\\s+)?personality\\s+architecture\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:motivational?|drivers?)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:moral|ethical)\\s+compass\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:value|belief)\\s+system\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:passionate\\s+)?(?:attractions?|aversions?)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:strengths?|weaknesses?|vulnerabilit(?:y|ies))\\b', flags: 'i', priority: 63 },
+            { pattern: '\\b(?:habitual\\s+)?patterns?\\b', flags: 'i', priority: 60 },
+            { pattern: '\\bcrisis\\s+response\\b', flags: 'i', priority: 65 }
+        ],
+        weight: 60
+    },
+    'behavioral': {
+        keywords: ['behavior', 'habits', 'patterns', 'response', 'actions', 'conduct', 'manner', 'personality', 'traits'],
+        regexes: [
+            { pattern: '\\bbehavio(?:r|ral|rs?)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:habitual\\s+)?(?:habits?|patterns?)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\btraits?\\b', flags: 'i', priority: 63 }
+        ],
+        weight: 60
+    },
+    'matrix': {
+        keywords: ['psyche', 'psychology', 'personality', 'behavior', 'mind', 'thoughts', 'motivation', 'morals', 'values', 'fears', 'strengths', 'weaknesses', 'habits'],
+        regexes: [
+            { pattern: '\\bmatri(?:x|ces)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:psychological|behavioral)\\s+matrix\\b', flags: 'i', priority: 72 }
+        ],
+        weight: 60
+    },
+
+    // Section 4: Relational Dynamics & Social Architecture
+    'relational': {
+        keywords: ['relationship', 'relational', 'social', 'bonds', 'dynamics', 'connections', 'family', 'friends', 'lover', 'partner', 'trust', 'loyalty', 'interaction', 'interpersonal', 'ties', 'network', 'alliance', 'rivalry'],
+        regexes: [
+            { pattern: '\\brelational(?:\\s+dynamics)?\\b', flags: 'i', priority: 70 },
+            { pattern: '\\brelationships?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:social|interpersonal)\\s+(?:bonds?|dynamics?|ties?)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:family|friends?|lover|partner|ally|allies|rival)\\b', flags: 'i', priority: 63 },
+            { pattern: '\\b(?:trust|loyalty|devotion)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\bleadership\\s+style\\b', flags: 'i', priority: 68 }
+        ],
+        weight: 60
+    },
+    'dynamics': {
+        keywords: ['relationship', 'relational', 'social', 'bonds', 'dynamics', 'connections', 'family', 'friends', 'lover', 'partner', 'trust', 'loyalty'],
+        regexes: [
+            { pattern: '\\bdynamics?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:power|relationship)\\s+dynamics?\\b', flags: 'i', priority: 72 }
+        ],
+        weight: 60
+    },
+    'social': {
+        keywords: ['social', 'relationship', 'bonds', 'connections', 'interaction', 'interpersonal', 'network', 'companionship'],
+        regexes: [
+            { pattern: '\\bsocial\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:social\\s+)?(?:architecture|network|structure)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\binterpersonal\\b', flags: 'i', priority: 65 }
+        ],
+        weight: 60
+    },
+    'architecture': {
+        keywords: ['structure', 'framework', 'system', 'organization', 'dynamics'],
+        regexes: [
+            { pattern: '\\barchitectures?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:social|relational)\\s+architecture\\b', flags: 'i', priority: 72 }
+        ],
+        weight: 50
+    },
+
+    // Section 5: Linguistic Signature & Communication DNA
+    'linguistic': {
+        keywords: ['linguistic', 'language', 'speech', 'voice', 'communication', 'words', 'tone', 'expression', 'dialogue', 'speaking', 'verbal', 'talking', 'conversation', 'accent', 'vocabulary', 'rhetoric'],
+        regexes: [
+            { pattern: '\\blinguistic(?:\\s+(?:signature|style|DNA))?\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:speech|voice|vocal)\\s+(?:pattern|style|identity)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\blanguage\\s+architecture\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bcommunication\\s+(?:style|mode|DNA)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:signature|characteristic)\\s+expressions?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:emotional\\s+)?communication\\s+modes?\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:conversational|dialogue|verbal)\\s+(?:flow|style)\\b', flags: 'i', priority: 65 }
+        ],
+        weight: 60
+    },
+    'signature': {
+        keywords: ['signature', 'style', 'pattern', 'characteristic', 'distinctive', 'unique'],
+        regexes: [
+            { pattern: '\\bsignatures?\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:linguistic|verbal)\\s+signature\\b', flags: 'i', priority: 72 }
+        ],
+        weight: 50
+    },
+    'communication': {
+        keywords: ['communication', 'speech', 'voice', 'language', 'words', 'tone', 'expression', 'dialogue', 'speaking', 'verbal', 'talking', 'conversation'],
+        regexes: [
+            { pattern: '\\bcommunications?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:speech|speaking|verbal)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:tone|accent|vocabulary)\\b', flags: 'i', priority: 63 }
+        ],
+        weight: 60
+    },
+
+    // Section 6: Origin Story & Historical Tapestry
+    'origin': {
+        keywords: ['origin', 'history', 'past', 'background', 'story', 'childhood', 'upbringing', 'formative', 'events', 'legacy', 'backstory', 'youth', 'born', 'raised', 'heritage', 'ancestry', 'memories'],
+        regexes: [
+            { pattern: '\\borigins?(?:\\s+story)?\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:formative|crucible)\\s+(?:events?|experiences?|moments?)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:backstory|background)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:childhood|youth|upbringing)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:born|raised|grew\\s+up)\\b', flags: 'i', priority: 63 },
+            { pattern: '\\b(?:legacy|heritage|ancestry)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:life\\s+)?narrative\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:character\\s+)?metamorphosis\\b', flags: 'i', priority: 68 }
+        ],
+        weight: 60
+    },
+    'historical': {
+        keywords: ['history', 'past', 'historical', 'background', 'story', 'events', 'legacy', 'heritage', 'ancestry'],
+        regexes: [
+            { pattern: '\\bhistor(?:y|ical)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:historical\\s+)?tapestry\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bpasts?\\b', flags: 'i', priority: 63 }
+        ],
+        weight: 60
+    },
+    'tapestry': {
+        keywords: ['history', 'story', 'narrative', 'tale', 'background', 'past'],
+        regexes: [
+            { pattern: '\\btapestr(?:y|ies)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:historical|life)\\s+tapestry\\b', flags: 'i', priority: 72 }
+        ],
+        weight: 50
+    },
+
+    // Section 7: Aesthetic Expression & Style Philosophy
+    'aesthetic': {
+        keywords: ['aesthetic', 'style', 'fashion', 'clothing', 'outfit', 'ensemble', 'wardrobe', 'dress', 'appearance', 'attire', 'garments', 'wear', 'formal', 'casual', 'comfort', 'presentation'],
+        regexes: [
+            { pattern: '\\baesthetics?(?:\\s+(?:expression|philosophy|style))?\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:fashion|clothing|attire|wardrobe)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:outfit|ensemble|garments?)\\b', flags: 'i', priority: 63 },
+            { pattern: '\\b(?:formal|casual|intimate)\\s+(?:wear|presentation|attire|ensemble)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:style\\s+)?(?:evolution|philosophy)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:seductive\\s+)?arsenal\\b', flags: 'i', priority: 65 }
+        ],
+        weight: 60
+    },
+    'expression': {
+        keywords: ['expression', 'style', 'aesthetic', 'presentation', 'appearance'],
+        regexes: [
+            { pattern: '\\bexpressions?\\b', flags: 'i', priority: 65 },
+            { pattern: '\\baesthetic\\s+expression\\b', flags: 'i', priority: 72 }
+        ],
+        weight: 50
+    },
+    'style': {
+        keywords: ['style', 'aesthetic', 'fashion', 'clothing', 'outfit', 'dress', 'appearance', 'attire'],
+        regexes: [
+            { pattern: '\\bstyles?\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:fashion|clothing)\\s+style\\b', flags: 'i', priority: 70 }
+        ],
+        weight: 60
+    },
+    'philosophy': {
+        keywords: ['philosophy', 'belief', 'principle', 'values', 'approach', 'mindset'],
+        regexes: [
+            { pattern: '\\bphilosoph(?:y|ies)\\b', flags: 'i', priority: 65 },
+            { pattern: '\\b(?:style|aesthetic)\\s+philosophy\\b', flags: 'i', priority: 72 }
+        ],
+        weight: 50
+    },
+
+    // Section 8: Psychological Analysis Modules (broken into subsections)
+    'dere': {
+        keywords: ['dere', 'archetype', 'love', 'expression', 'romantic', 'affection', 'tsundere', 'yandere', 'kuudere', 'dandere', 'sadodere', 'oujidere'],
+        regexes: [
+            { pattern: '\\b(?:express(?:es|ing)?|show(?:s|ing)?|manifest(?:s|ing)?|hide(?:s|ing)?)\\s+(?:love|affection|feelings?|emotions?)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:love|romantic|affection(?:ate)?)\\s+(?:expression|manifestation|display|behavior)\\b', flags: 'i', priority: 73 },
+            { pattern: '\\b(?:romantic|loving|affectionate)\\s+(?:behavioral\\s+)?(?:patterns?|gestures?|actions?)\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:cold|distant|aloof|detached)\\s+(?:but|yet|while|though).{0,30}(?:caring|loving|protective|devoted)\\b', flags: 'i', priority: 74 },
+            { pattern: '\\b(?:cruel|sadistic|possessive|obsessive|controlling).{0,30}(?:love|affection|devotion)\\b', flags: 'i', priority: 74 },
+            { pattern: '\\b(?:hid(?:es?|ing|den)|conceal(?:s|ing|ed)|mask(?:s|ing|ed)|suppres(?:s|sing|sed))\\s+(?:his|her|their).{0,20}(?:feelings?|affection|love|emotions?)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:struggles?|difficult|hard)\\s+(?:to\\s+)?(?:express|show|admit|acknowledge).{0,20}(?:feelings?|affection|love|emotions?)\\b', flags: 'i', priority: 74 },
+            { pattern: '\\b(?:tsun|yan|kuu|dan|sado|ouji|hime)dere\\b', flags: 'i', priority: 70 }
+        ],
+        weight: 70
+    },
+    'attachment': {
+        keywords: ['attachment', 'bonding', 'style', 'connection', 'relationship', 'trust', 'intimacy', 'avoidant', 'anxious', 'secure', 'fearful'],
+        regexes: [
+            { pattern: '\\battachments?\\s+(?:style|profile|pattern|theory)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:fearful[-\\s]?avoidant|dismissive[-\\s]?avoidant|anxious|secure)\\s+attachment\\b', flags: 'i', priority: 78 },
+            { pattern: '\\bbonding\\s+(?:architecture|style|pattern)\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:trust|intimacy)\\s+construction\\b', flags: 'i', priority: 70 },
+            { pattern: '\\brelationship\\s+navigation\\b', flags: 'i', priority: 70 }
+        ],
+        weight: 70
+    },
+    'chemistry': {
+        keywords: ['chemistry', 'compatibility', 'attraction', 'connection', 'spark', 'resonance', 'magnetism', 'tension', 'synergy', 'harmony'],
+        regexes: [
+            { pattern: '\\bchemistr(?:y|ies)\\s+(?:analysis|matrix|monitor)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:volatile|magnetic|toxic|strong)\\s+chemistry\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:compatibility|attraction|connection)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:intellectual|emotional|physical|sexual)\\s+(?:spark|resonance|magnetism|synergy)\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bintimate\\s+synergy\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:overall\\s+)?chemistry\\s*:\\s*\\d+%\\b', flags: 'i', priority: 75 }
+        ],
+        weight: 70
+    },
+    'trauma': {
+        keywords: ['trauma', 'traumatic', 'wound', 'wounds', 'psychological', 'trigger', 'triggers', 'triggered', 'response', 'healing', 'resilience', 'coping', 'ptsd'],
+        regexes: [
+            { pattern: '\\btrauma(?:tic|tized)?\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:psychological|emotional|childhood)\\s+(?:trauma|wounds?)\\b', flags: 'i', priority: 78 },
+            { pattern: '\\btrauma\\s+(?:response|profile|system)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:triggers?|triggered|triggering)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:fight|flight|freeze|fawn)\\s+response\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bPTSD\\b', flags: 'i', priority: 73 },
+            { pattern: '\\b(?:healing|coping)\\s+mechanisms?\\b', flags: 'i', priority: 70 }
+        ],
+        weight: 70
+    },
+    'resilience': {
+        keywords: ['resilience', 'recovery', 'healing', 'coping', 'strength', 'endurance'],
+        regexes: [
+            { pattern: '\\bresilience\\s+profile\\b', flags: 'i', priority: 75 },
+            { pattern: '\\bresilient?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:recovery|healing)\\s+(?:process|mechanisms?)\\b', flags: 'i', priority: 70 }
+        ],
+        weight: 60
+    },
+    'flirtation': {
+        keywords: ['flirtation', 'flirting', 'seduction', 'charm', 'attraction', 'courtship', 'wooing', 'romantic', 'tease', 'teasing'],
+        regexes: [
+            { pattern: '\\bflirt(?:ation|ing|atiousness)\\s+(?:signature|style|pattern)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\bseduction\\s+(?:style|tactics?)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:aggressive|dominant|playful|subtle)\\s+(?:flirting|teasing)\\b', flags: 'i', priority: 72 },
+            { pattern: '\\battraction\\s+tactics?\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:courtship|wooing)\\b', flags: 'i', priority: 68 },
+            { pattern: '\\b(?:physical\\s+)?magnetism\\b', flags: 'i', priority: 68 },
+            { pattern: '\\bverbal\\s+artistry\\b', flags: 'i', priority: 70 }
+        ],
+        weight: 70
+    },
+    'arousal': {
+        keywords: ['arousal', 'aroused', 'desire', 'attraction', 'attracted', 'intimate', 'intimacy', 'sexual', 'erotic', 'sensual', 'lust', 'passion'],
+        regexes: [
+            { pattern: '\\barousal\\s+(?:architecture|pattern|profile)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:aroused?|arousing)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\bdesire\\s+patterns?\\b', flags: 'i', priority: 75 },
+            { pattern: '\\berotic\\s+landscape\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:physical|mental|emotional)\\s+(?:triggers?|catalysts?|aphrodisiacs?)\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bsituational\\s+amplifiers?\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:sexual|erotic|sensual|intimate)\\b', flags: 'i', priority: 68 }
+        ],
+        weight: 70
+    },
+    'jealousy': {
+        keywords: ['jealousy', 'jealous', 'envy', 'envious', 'possessive', 'possessiveness', 'territorial', 'rivalry', 'competition'],
+        regexes: [
+            { pattern: '\\bjealous(?:y|ies)\\s+(?:dynamics?|profile|pattern)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:jealous|envious)\\b', flags: 'i', priority: 70 },
+            { pattern: '\\benvy\\s+expression\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:possessive|possessiveness|territorial)\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bpossessive\\s+patterns?\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:destructive|competitive)\\s+jealousy\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:activation\\s+)?triggers?\\b', flags: 'i', priority: 68 }
+        ],
+        weight: 70
+    },
+    'conflict': {
+        keywords: ['conflict', 'resolution', 'dispute', 'argument', 'disagreement', 'confrontation', 'negotiation', 'compromise', 'debate'],
+        regexes: [
+            { pattern: '\\bconflict(?:s)?\\s+(?:resolution|matrix|style|navigation)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\bdispute\\s+navigation\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:competing|collaborative|avoiding|compromising|accommodating)\\s+(?:style|approach)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\bbattle\\s+strategy\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bescalation\\s+patterns?\\b', flags: 'i', priority: 70 },
+            { pattern: '\\bresolution\\s+tactics?\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:confrontation|negotiation|compromise|debate|argument)\\b', flags: 'i', priority: 68 }
+        ],
+        weight: 70
+    },
+    'boundaries': {
+        keywords: ['boundaries', 'boundary', 'limits', 'personal', 'space', 'privacy', 'consent', 'respect', 'autonomy'],
+        regexes: [
+            { pattern: '\\bboundar(?:y|ies)\\s+(?:architecture|profile|framework)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:rigid|flexible|porous|healthy)\\s+boundaries\\b', flags: 'i', priority: 75 },
+            { pattern: '\\bprotective\\s+framework\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bboundary\\s+(?:territories|enforcement|violation)\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:personal|physical|emotional|temporal)\\s+(?:space|perimeter|boundaries)\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:consent|privacy|autonomy|limits)\\b', flags: 'i', priority: 68 }
+        ],
+        weight: 70
+    },
+    'hidden': {
+        keywords: ['hidden', 'secret', 'concealed', 'buried', 'private', 'vulnerability', 'vulnerable', 'mask', 'facade', 'truth'],
+        regexes: [
+            { pattern: '\\bhidden\\s+(?:depths?|desires?|fears?|truths?|chapters?)\\b', flags: 'i', priority: 75 },
+            { pattern: '\\bsecret\\s+architecture\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:concealed|buried|hidden)\\s+truths?\\b', flags: 'i', priority: 72 },
+            { pattern: '\\b(?:mask|facade)\\s+vs\\.?\\s+reality\\b', flags: 'i', priority: 72 },
+            { pattern: '\\bvulnerab(?:le|ility)\\s+spots?\\b', flags: 'i', priority: 70 },
+            { pattern: '\\b(?:private|buried)\\s+(?:fears?|shame|desires?)\\b', flags: 'i', priority: 70 }
+        ],
+        weight: 60
+    },
+    'depths': {
+        keywords: ['depths', 'hidden', 'deep', 'inner', 'secret', 'private', 'vulnerability'],
+        regexes: [
+            { pattern: '\\bdepths?\\b', flags: 'i', priority: 68 },
+            { pattern: '\\bhidden\\s+depths?\\b', flags: 'i', priority: 75 },
+            { pattern: '\\b(?:deep|inner|secret)\\b', flags: 'i', priority: 65 }
+        ],
+        weight: 60
+    },
+};
 
 const EMOJI_HEADER_REGEX = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}]/u;
 const UPPERCASE_HEADER_REGEX = /^[A-Z0-9][A-Z0-9\s&'\/:,-]{4,}$/;
@@ -1040,9 +1433,48 @@ function buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags) {
     const keywordsSet = new Set();
     const regexSet = new Set();
     const detectedGroups = new Set();
+    const customWeights = {}; // For English language bank keyword weights
 
     const sanitizedSection = sanitizeDescriptor(sectionTitle);
     const sanitizedTopic = sanitizeDescriptor(topic);
+
+    // English Language Bank Integration
+    // Check if content is primarily English by testing for common English words
+    const isEnglish = /\b(the|and|or|is|are|was|were|been|have|has|had|do|does|did|will|would|should|could|may|might|can)\b/i.test(chunkText);
+    let matchedEnglishSection = null;
+
+    if (isEnglish) {
+        // Match section title against English keyword bank
+        // Check both the sanitized section title AND topic for matches
+        const lowerTitle = (sanitizedSection + ' ' + (sanitizedTopic || '')).toLowerCase();
+
+        for (const [sectionKey, data] of Object.entries(ENGLISH_SECTION_KEYWORDS)) {
+            // Match against the section key (e.g., 'core identity', 'dere', 'attachment')
+            if (lowerTitle.includes(sectionKey)) {
+                // Add all keywords for THIS section with their weight
+                data.keywords.forEach(keyword => {
+                    keywordsSet.add(keyword);
+                    customWeights[keyword] = data.weight;
+                });
+
+                // Add all regex patterns for THIS section with their priorities
+                if (data.regexes && Array.isArray(data.regexes)) {
+                    data.regexes.forEach(regexEntry => {
+                        regexSet.add(JSON.stringify({
+                            pattern: regexEntry.pattern,
+                            flags: regexEntry.flags || 'i',
+                            priority: regexEntry.priority || data.weight,
+                            source: 'english-bank',
+                        }));
+                    });
+                }
+
+                matchedEnglishSection = sectionKey;
+                console.log(`📚 [English Bank] Matched "${sectionKey}" in section "${sectionTitle}" (topic: ${topic}) - added ${data.keywords.length} keywords + ${data.regexes?.length || 0} regexes at weight ${data.weight}`);
+                break; // Only match one section
+            }
+        }
+    }
 
     for (const preset of KEYWORD_PRESETS) {
         if (preset.match && (preset.match.test(sanitizedSection) || preset.match.test(sanitizedTopic))) {
@@ -1109,6 +1541,8 @@ function buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags) {
         keywords: Array.from(keywordsSet),
         regex: Array.from(regexSet).map(entry => JSON.parse(entry)),
         groups: Array.from(detectedGroups),
+        customWeights, // Return English bank keyword weights
+        matchedEnglishSection, // Which English section was matched (for cross-section filtering)
     };
 }
 
@@ -1295,7 +1729,7 @@ function convertKeywordsToRegex(keywords) {
     };
 }
 
-function buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName = null) {
+function buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName = null, allSectionTitles = []) {
     const autoKeywords = extractKeywords(chunkText, sectionTitle, topic);
     const keywordMeta = buildDefaultKeywordMetadata(sectionTitle, topic, chunkText, tags);
 
@@ -1310,6 +1744,72 @@ function buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName 
                 filterSet.add(part.toLowerCase());
             }
         });
+    }
+
+    // Track cross-section keyword mentions for automatic linking
+    const crossSectionMentions = {}; // { sectionTitle: mentionCount }
+
+    // Filter out OTHER section titles (not this section's title)
+    // AND count how many times this section mentions keywords from other sections
+    // ALSO filter out English bank keywords from other sections
+    allSectionTitles.forEach(title => {
+        if (title && title !== sectionTitle) {
+            // Extract words from the other section's title
+            const titleWords = title
+                .replace(/[^\p{L}\s]/gu, ' ')
+                .split(/\s+/)
+                .filter(w => w.length >= 3);
+
+            // Count mentions of this other section's keywords in current text
+            const lowerText = chunkText.toLowerCase();
+            let mentionCount = 0;
+
+            titleWords.forEach(word => {
+                const lower = word.toLowerCase();
+                filterSet.add(lower); // Still filter it out from keywords
+
+                // Count how many times this word appears in the text
+                const regex = new RegExp(`\\b${lower}\\b`, 'gi');
+                const matches = lowerText.match(regex);
+                if (matches) {
+                    mentionCount += matches.length;
+                }
+            });
+
+            if (mentionCount > 0) {
+                crossSectionMentions[title] = mentionCount;
+            }
+        }
+    });
+
+    // Also filter out English bank keywords from OTHER sections
+    if (keywordMeta.matchedEnglishSection) {
+        const lowerText = chunkText.toLowerCase();
+
+        for (const [sectionKey, data] of Object.entries(ENGLISH_SECTION_KEYWORDS)) {
+            // Skip if this is OUR matched section
+            if (sectionKey === keywordMeta.matchedEnglishSection) continue;
+
+            // Count mentions of keywords from other English sections
+            let sectionMentionCount = 0;
+
+            data.keywords.forEach(keyword => {
+                const lower = keyword.toLowerCase();
+                filterSet.add(lower); // Filter out from keywords
+
+                // Count mentions for automatic linking
+                const regex = new RegExp(`\\b${lower}\\b`, 'gi');
+                const matches = lowerText.match(regex);
+                if (matches) {
+                    sectionMentionCount += matches.length;
+                }
+            });
+
+            if (sectionMentionCount > 0) {
+                // Use the sectionKey as the "title" for English bank sections
+                crossSectionMentions[sectionKey] = (crossSectionMentions[sectionKey] || 0) + sectionMentionCount;
+            }
+        }
     }
 
     // Merge and deduplicate (case-insensitive) - store as lowercase
@@ -1364,9 +1864,59 @@ function buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName 
         keywordRegex,
         defaultKeywordRegex: keywordRegex.map(entry => ({ ...entry })),
         customKeywords: [],
+        customWeights: keywordMeta.customWeights || {}, // English bank keyword weights (1-200 scale)
         customRegex: [],
         disabledKeywords: [],
+        crossSectionMentions, // For automatic linking: { sectionTitle: mentionCount }
     };
+}
+
+/**
+ * Apply automatic cross-section linking based on keyword frequency thresholds
+ * @param {Array} chunks - Array of chunks to process
+ */
+function applyAutomaticLinks(chunks) {
+    // Thresholds for automatic linking
+    const SOFT_LINK_THRESHOLD = 3;  // 3+ mentions → soft link
+    const FORCE_LINK_THRESHOLD = 7; // 7+ mentions → force link
+
+    // Build a map of section title → chunk hash for quick lookup
+    const sectionToHash = new Map();
+    chunks.forEach(chunk => {
+        if (chunk.metadata && chunk.metadata.section) {
+            sectionToHash.set(chunk.metadata.section, chunk.hash);
+        }
+    });
+
+    // Process each chunk's cross-section mentions
+    chunks.forEach(chunk => {
+        if (!chunk.metadata || !chunk.metadata.crossSectionMentions) return;
+
+        const mentions = chunk.metadata.crossSectionMentions;
+        const links = [];
+
+        for (const [mentionedSection, count] of Object.entries(mentions)) {
+            const targetHash = sectionToHash.get(mentionedSection);
+            if (!targetHash) continue; // Target section not found
+
+            // Determine link mode based on frequency
+            if (count >= FORCE_LINK_THRESHOLD) {
+                links.push({ targetHash, mode: 'force' });
+                console.log(`🔗 [AutoLink] FORCE link: ${chunk.metadata.section} → ${mentionedSection} (${count} mentions)`);
+            } else if (count >= SOFT_LINK_THRESHOLD) {
+                links.push({ targetHash, mode: 'soft' });
+                console.log(`🔗 [AutoLink] SOFT link: ${chunk.metadata.section} → ${mentionedSection} (${count} mentions)`);
+            }
+        }
+
+        // Add links to chunk (or merge with existing)
+        if (links.length > 0) {
+            if (!chunk.chunkLinks) {
+                chunk.chunkLinks = [];
+            }
+            chunk.chunkLinks.push(...links);
+        }
+    });
 }
 
 function looksLikeBulletBlock(block) {
@@ -1490,6 +2040,12 @@ function buildChunkText(section, topic, tags, body) {
  * @returns {string}
  */
 function stripTagSynthesis(content) {
+    // Check if TAG SYNTHESIS exclusion is enabled
+    const settings = getRAGSettings();
+    if (!settings.excludeTagSynthesis) {
+        return content; // Don't strip if setting is disabled
+    }
+
     // Remove TAG SYNTHESIS section (# 🎯**TAG SYNTHESIS**🎯 and everything after it until next main section or end)
     // Language-agnostic: look for the emoji pattern, not English text
     const tagSynthesisRegex = /^#\s*🎯\*\*[^*]+\*\*🎯.*?(?=^##\s+\S+\s+\d+\/\d+:|^##\s+[🤫💕🔗⚗️🌊😘🔥💚⚖️🚧]|\s*$)/gims;
@@ -1499,6 +2055,7 @@ function stripTagSynthesis(content) {
     const subsectionTagSynthesisRegex = /^##\s*🎯\*\*[^*]+\*\*🎯.*?(?=^##\s+|^#\s+|\s*$)/gims;
     cleaned = cleaned.replace(subsectionTagSynthesisRegex, '');
 
+    console.log('🚫 [stripTagSynthesis] Excluded TAG SYNTHESIS section from chunking');
     return cleaned;
 }
 
@@ -1577,12 +2134,15 @@ function chunkFullsheetSimple(content, characterName) {
 
     debugLog(`Simple chunking: Found ${sections.length} sections, captured ${capturedLength}/${totalContentLength} chars`);
 
+    // Collect all section titles for filtering
+    const allSectionTitles = sections.map(s => s.title);
+
     // Create one chunk per section - NEVER skip sections
     sections.forEach(section => {
         const tags = collectTags(section.content);
         const chunkText = `[${section.title}]\n${section.content}`;
         const hash = getStringHash(`${characterName}|${section.title}|${chunkIndex}|${chunkText}`);
-        const metadata = buildChunkMetadata(section.title, null, chunkText, tags, characterName);
+        const metadata = buildChunkMetadata(section.title, null, chunkText, tags, characterName, allSectionTitles);
 
         chunks.push({
             text: chunkText,
@@ -1597,6 +2157,9 @@ function chunkFullsheetSimple(content, characterName) {
         averageSize: chunks.length ? Math.round(chunks.reduce((sum, c) => sum + c.text.length, 0) / chunks.length) : 0,
         sections: sections.map(s => ({ title: s.title, length: s.content.length })),
     });
+
+    // Apply automatic cross-section linking based on keyword frequency
+    applyAutomaticLinks(chunks);
 
     return chunks;
 }
@@ -1757,6 +2320,9 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
 
     debugLog(`Found ${sections.length} main sections in fullsheet`);
 
+    // Collect all section titles for keyword filtering
+    const allSectionTitles = sections.map(s => s.title).concat(sections.map(s => s.fullTitle)).filter(Boolean);
+
     // Filter function to check if content should be chunked
     function shouldChunkContent(content, title) {
         const trimmed = content.trim();
@@ -1838,7 +2404,7 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
                     const chunkText = `[${section.fullTitle} > ${subsection.title}]\n${subsection.content}`;
                     const hash = getStringHash(`${characterName}|${section.fullTitle}|${subsection.title}|${chunkIndex}|${chunkText}`);
                     const tags = collectTags(subsection.content);
-                    const metadata = buildChunkMetadata(section.fullTitle, subsection.title, chunkText, tags, characterName);
+                    const metadata = buildChunkMetadata(section.fullTitle, subsection.title, chunkText, tags, characterName, allSectionTitles);
 
                     chunks.push({
                         text: chunkText,
@@ -1851,7 +2417,7 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
                 // No subsections found, treat as single chunk
                 const chunkText = `[${section.fullTitle}]\n${section.content}`;
                 const hash = getStringHash(`${characterName}|${section.fullTitle}|${chunkIndex}|${chunkText}`);
-                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags, characterName);
+                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags, characterName, allSectionTitles);
 
                 chunks.push({
                     text: chunkText,
@@ -1866,7 +2432,7 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
                 // Small enough to keep as single chunk
                 const chunkText = `[${section.fullTitle}]\n${section.content}`;
                 const hash = getStringHash(`${characterName}|${section.fullTitle}|${chunkIndex}|${chunkText}`);
-                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags, characterName);
+                const metadata = buildChunkMetadata(section.fullTitle, null, chunkText, tags, characterName, allSectionTitles);
 
                 chunks.push({
                     text: chunkText,
@@ -1881,7 +2447,7 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
                 const chunkText = `[${section.fullTitle}${fragments.length > 1 ? ` (Part ${fragIdx + 1}/${fragments.length})` : ''}]\n${fragment}`;
                 const hash = getStringHash(`${characterName}|${section.fullTitle}|${fragIdx}|${chunkIndex}|${chunkText}`);
                 const tags = collectTags(fragment);
-                const metadata = buildChunkMetadata(section.fullTitle, fragments.length > 1 ? `Part ${fragIdx + 1}/${fragments.length}` : null, chunkText, tags, characterName);
+                const metadata = buildChunkMetadata(section.fullTitle, fragments.length > 1 ? `Part ${fragIdx + 1}/${fragments.length}` : null, chunkText, tags, characterName, allSectionTitles);
 
                 chunks.push({
                     text: chunkText,
@@ -1899,6 +2465,9 @@ function chunkFullsheetSectionBased(content, characterName, targetChunkSize = 10
         averageSize: chunks.length ? Math.round(chunks.reduce((sum, c) => sum + c.text.length, 0) / chunks.length) : 0,
         mainSections: sections.length,
     });
+
+    // Apply automatic cross-section linking based on keyword frequency
+    applyAutomaticLinks(chunks);
 
     return chunks;
 }
@@ -3559,6 +4128,7 @@ export {
     generateCollectionId,
     buildChunkMetadata,
     regenerateChunkKeywords,
+    applyAutomaticLinks,
 };
 
 /**
