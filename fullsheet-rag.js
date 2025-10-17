@@ -2580,8 +2580,12 @@ function buildQueryContext(messageCount = 3) {
         return '';
     }
 
-    // Get last N messages
-    const recentMessages = chat.slice(-messageCount);
+    // Filter to only non-system messages (matching ST's native lorebook behavior)
+    // This excludes: system messages, narrator messages, and any other is_system=true messages
+    const activeMessages = chat.filter(x => !x.is_system);
+
+    // Get last N active messages
+    const recentMessages = activeMessages.slice(-messageCount);
 
     // Combine message text
     const queryText = recentMessages
@@ -2590,7 +2594,9 @@ function buildQueryContext(messageCount = 3) {
         .join('\n\n');
 
     debugLog('Built query context', {
-        messageCount: recentMessages.length,
+        totalMessages: chat.length,
+        activeMessages: activeMessages.length,
+        selectedMessages: recentMessages.length,
         queryLength: queryText.length,
         preview: queryText.substring(0, 100)
     });

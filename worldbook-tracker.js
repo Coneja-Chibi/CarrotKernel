@@ -1790,13 +1790,20 @@ const init = () => {
                     if (!wasActive && configPanel.classList.contains('ck-config-panel--active')) {
                         setTimeout(() => {
                             const closeConfig = (e) => {
-                                if (!configPanel.contains(e.target) && !trigger.contains(e.target)) {
+                                // Ignore if clicking the trigger itself
+                                if (trigger.contains(e.target)) {
+                                    return;
+                                }
+
+                                if (!configPanel.contains(e.target)) {
                                     configPanel.classList.remove('ck-config-panel--active');
                                     document.removeEventListener('click', closeConfig);
+                                    document.removeEventListener('touchend', closeConfig);
                                 }
                             };
                             document.addEventListener('click', closeConfig);
-                        }, 100);
+                            document.addEventListener('touchend', closeConfig);
+                        }, 200); // Increased from 100ms to 200ms for mobile compatibility
                     }
                     // Vibrate for haptic feedback on mobile (if supported)
                     if (navigator.vibrate) {
@@ -2010,22 +2017,32 @@ const init = () => {
     document.addEventListener('touchcancel', handleDragEnd);
 
     // Click to toggle panel
-    trigger.addEventListener('click', () => {
+    trigger.addEventListener('click', (e) => {
         if (!hasMoved && !repositionMode) {
             const wasActive = panel.classList.contains('ck-panel--active');
             panel.classList.toggle('ck-panel--active');
 
             // Add click-outside handler when opening panel
             if (!wasActive && panel.classList.contains('ck-panel--active')) {
+                // Longer delay for mobile to avoid immediate close due to touch event propagation
                 setTimeout(() => {
                     const closePanel = (e) => {
-                        if (!panel.contains(e.target) && !trigger.contains(e.target) && !configPanel.contains(e.target)) {
+                        // Ignore if clicking the trigger itself (already handled by toggle above)
+                        if (trigger.contains(e.target)) {
+                            return;
+                        }
+
+                        if (!panel.contains(e.target) && !configPanel.contains(e.target)) {
                             panel.classList.remove('ck-panel--active');
                             document.removeEventListener('click', closePanel);
+                            // Also remove touch event listener for mobile
+                            document.removeEventListener('touchend', closePanel);
                         }
                     };
                     document.addEventListener('click', closePanel);
-                }, 100);
+                    // Add touchend listener for better mobile support
+                    document.addEventListener('touchend', closePanel);
+                }, 200); // Increased from 100ms to 200ms for mobile compatibility
             }
         }
         hasMoved = false;
@@ -2040,13 +2057,20 @@ const init = () => {
         if (!wasActive && configPanel.classList.contains('ck-config-panel--active')) {
             setTimeout(() => {
                 const closeConfig = (e) => {
-                    if (!configPanel.contains(e.target) && !trigger.contains(e.target)) {
+                    // Ignore if clicking the trigger itself
+                    if (trigger.contains(e.target)) {
+                        return;
+                    }
+
+                    if (!configPanel.contains(e.target)) {
                         configPanel.classList.remove('ck-config-panel--active');
                         document.removeEventListener('click', closeConfig);
+                        document.removeEventListener('touchend', closeConfig);
                     }
                 };
                 document.addEventListener('click', closeConfig);
-            }, 100);
+                document.addEventListener('touchend', closeConfig);
+            }, 200); // Increased from 100ms to 200ms for mobile compatibility
         }
     });
 
