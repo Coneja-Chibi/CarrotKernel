@@ -35,6 +35,7 @@ async function loadFullsheetRAG() {
             getContextualLibrary: module.getContextualLibrary || (() => ({})),
             getKeywordPriority: module.getKeywordPriority || ((keyword) => 20),
             normalizeKeyword: module.normalizeKeyword || ((word) => (word || '').toLowerCase().trim()),
+            regenerateChunkKeywords: module.regenerateChunkKeywords || (() => Promise.resolve()),
         };
         return fullsheetAPI;
     } catch (error) {
@@ -2486,19 +2487,27 @@ class CarrotPackManager {
 
     // Get detailed info about a specific pack
     async getPackInfo(packName) {
-        console.log(`🎯 PACK MANAGER DEBUG: getPackInfo called for pack: ${packName}`);
+        if (extension_settings[extensionName]?.debugMode) {
+            console.log(`🎯 PACK MANAGER DEBUG: getPackInfo called for pack: ${packName}`);
+        }
 
         try {
             const apiUrl = `https://api.github.com/repos/${this.githubRepo}/contents/${encodeURIComponent(this.packsFolder)}/${encodeURIComponent(packName)}`;
-            console.log(`🎯 PACK MANAGER DEBUG: Pack info API URL: ${apiUrl}`);
+
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log(`🎯 PACK MANAGER DEBUG: Pack info API URL: ${apiUrl}`);
+            }
 
             const response = await this.fetchWithRateLimit(apiUrl);
-            console.log(`🎯 PACK MANAGER DEBUG: Pack info response for ${packName}:`, {
-                status: response.status,
-                statusText: response.statusText,
-                ok: response.ok,
-                rateLimitRemaining: response.headers.get('x-ratelimit-remaining')
-            });
+
+            if (extension_settings[extensionName]?.debugMode) {
+                console.log(`🎯 PACK MANAGER DEBUG: Pack info response for ${packName}:`, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    ok: response.ok,
+                    rateLimitRemaining: response.headers.get('x-ratelimit-remaining')
+                });
+            }
 
             if (!response.ok) {
                 if (response.status === 403) {
@@ -3309,7 +3318,8 @@ const defaultSettings = {
     },
     babyBunnyMode: false,     // 🐰 Baby Bunny Mode - guided automation for sheet processing
     worldBookTrackerEnabled: true,  // WorldBook Tracker toggle
-    autoRescanOnChatLoad: true  // Auto-rescan character repos on chat switch
+    autoRescanOnChatLoad: true,  // Auto-rescan character repos on chat switch
+    bunnymoTagWrapping: false  // Wrap worldbook entries with <BunnymoTags:Entry_Name> when triggered
 };
 
 // Debug logging function - now uses centralized CarrotDebug module
@@ -10338,7 +10348,26 @@ jQuery(async () => {
         if (!window.CARROT_WORLDINFO_LISTENER_REGISTERED) {
             eventSource.on(event_types.WORLD_INFO_ACTIVATED, async (entryList) => {
                 const settings = extension_settings[extensionName];
-            
+
+            // 🏷️ BunnymoTags Wrapping - wrap entries before they're sent to AI
+            if (settings.bunnymoTagWrapping && entryList && entryList.length > 0) {
+                entryList.forEach(entry => {
+                    // Only wrap if entry has content and a title/comment
+                    if (entry.content && (entry.comment || entry.title)) {
+                        const entryName = (entry.comment || entry.title || 'Entry').replace(/[<>]/g, ''); // Remove any existing angle brackets
+                        const originalContent = entry.content;
+                        entry.content = `<BunnymoTags:${entryName}>\n${originalContent}\n</BunnymoTags:${entryName}>`;
+
+                        if (settings.debugMode) {
+                            console.log(`🏷️ [BunnymoTags] Wrapped entry "${entryName}"`, {
+                                before: originalContent.substring(0, 100),
+                                after: entry.content.substring(0, 150)
+                            });
+                        }
+                    }
+                });
+            }
+
             // Log this event only when debug mode is enabled
             if (extension_settings[extensionName]?.debugMode) {
                 console.log('🔥 CARROT DEBUG: WORLD_INFO_ACTIVATED fired with', entryList?.length || 0, 'entries');
@@ -11000,6 +11029,20 @@ function bindSettingsEvents() {
             }
         } else {
             toastr.info('🔄 Auto-rescan disabled');
+        }
+    });
+
+    // BunnymoTags Wrapping toggle
+    $('#carrot_bunnymo_wrapping').prop('checked', settings.bunnymoTagWrapping).on('change', async function() {
+        const newValue = Boolean($(this).prop('checked'));
+        CarrotDebug.setting('bunnymoTagWrapping', settings.bunnymoTagWrapping, newValue);
+        extension_settings[extensionName].bunnymoTagWrapping = newValue;
+        saveSettingsDebounced();
+
+        if (newValue) {
+            toastr.info('🏷️ BunnymoTags Wrapping enabled - worldbook entries will be wrapped with tags');
+        } else {
+            toastr.info('🏷️ BunnymoTags Wrapping disabled');
         }
     });
 
@@ -13991,6 +14034,14 @@ function generateContextSettings(currentSettings, contextMode) {
                 <span class="carrot-toggle-label">🔄 Auto-rescan on chat load</span>
             </label>
             <div class="carrot-help-text">Automatically re-scan character repos when switching chats to restore tag display</div>
+        </div>
+        <div class="carrot-setting-item">
+            <label class="carrot-toggle">
+                <input type="checkbox" id="carrot_context_bunnymo_wrapping" ${currentSettings.bunnymoTagWrapping ? 'checked' : ''}>
+                <span class="carrot-toggle-slider"></span>
+                <span class="carrot-toggle-label">🏷️ BunnymoTags Wrapping</span>
+            </label>
+            <div class="carrot-help-text">Wrap worldbook entries with &lt;BunnymoTags:Entry_Name&gt; tags when triggered</div>
         </div>
     `;
 }
@@ -19955,6 +20006,7 @@ function saveCurrentLoadoutProfile() {
         babyBunnyMode: document.getElementById('carrot_context_baby_bunny')?.checked || false,
         worldBookTrackerEnabled: document.getElementById('carrot_context_worldbook_tracker')?.checked || false,
         autoRescanOnChatLoad: document.getElementById('carrot_context_auto_rescan')?.checked || false,
+        bunnymoTagWrapping: document.getElementById('carrot_context_bunnymo_wrapping')?.checked || false,
         maxCharactersDisplay: parseInt(document.getElementById('carrot_context_max_display')?.value || '6'),
         maxCharactersInject: parseInt(document.getElementById('carrot_context_max_inject')?.value || '6'),
         debugMode: document.getElementById('carrot_context_debug_mode')?.checked || false
@@ -23072,9 +23124,9 @@ Most common categories:<br/>
             const customKeywordSet = new Set(customKeywords.map(normalizeKeywordClient));
             const disabledSet = new Set(ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient));
 
-            // Format regex patterns for display (pattern/flags format)
+            // Format regex patterns for display (/pattern/flags format)
             const regexItems = systemRegex.map(rule =>
-                `${rule.pattern}${rule.flags ? `/${rule.flags}` : ''}`
+                `/${rule.pattern}/${rule.flags || 'i'}`
             );
 
             if (!chunk.customWeights) chunk.customWeights = {};
@@ -23622,82 +23674,34 @@ Most common categories:<br/>
 
         const hash = $(this).data('hash');
         const chunk = modifiedChunks[hash];
-        if (!chunk) return;
+        if (!chunk) {
+            console.error('❌ Cannot regenerate: chunk not found for hash', hash);
+            return;
+        }
 
-        const confirmed = confirm(`Regenerate keywords for "${chunk.metadata?.section || chunk.section || 'this chunk'}"?\n\nThis will:\n• Re-analyze the current chunk text\n• Generate new keywords based on content\n• Keep your custom keywords\n• Reset keyword weights to defaults`);
-        if (!confirmed) return;
-
-        try {
-            // Read CURRENT chunk text from the textarea/formatted display
-            let chunkText = '';
-            const $textArea = $(`.carrot-chunk-text-edit[data-hash="${hash}"]`);
-            const $formattedDisplay = $(`.chunk-formatted-display[data-hash="${hash}"]`);
-
-            if ($textArea.length) {
-                // Read from textarea
-                chunkText = $textArea.val() || '';
-            } else if ($formattedDisplay.length) {
-                // Read from formatted display (convert HTML back to text)
-                chunkText = $formattedDisplay.text() || '';
-            } else {
-                // Fallback to stored text
-                chunkText = chunk.text || '';
+        // Extract character name from collection ID
+        const collectionId = currentEditingCollection;
+        let characterName = null;
+        if (collectionId) {
+            // Collection ID format: "carrotkernel_char_CharacterName" or "carrotkernel_global_CharacterName"
+            const match = collectionId.match(/^carrotkernel_(?:char|global|chat)_(.+)$/);
+            if (match) {
+                characterName = match[1].replace(/_/g, ' ');
             }
+        }
 
-            const sectionTitle = chunk.metadata?.section || chunk.section || '';
-            const topic = chunk.metadata?.topic || chunk.topic || null;
-
-            // Extract character name from collection ID
-            const collectionId = currentEditingCollection;
-            let characterName = null;
-            if (collectionId) {
-                // Collection ID format: "carrotkernel_char_CharacterName" or "carrotkernel_global_CharacterName"
-                const match = collectionId.match(/^carrotkernel_(?:char|global|chat)_(.+)$/);
-                if (match) {
-                    characterName = match[1].replace(/_/g, ' ');
-                }
-            }
-
-            // Call the fullsheet-rag keyword generation function
-            if (typeof fullsheetAPI !== 'undefined' && fullsheetAPI.buildChunkMetadata) {
-                const tags = chunk.tags || [];
-                const newMetadata = fullsheetAPI.buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName);
-
-                // Update chunk with new keywords, but preserve custom keywords
-                const oldCustomKeywords = ensureArrayValue(chunk.customKeywords);
-
-                // Update the stored chunk text with current edited content
-                chunk.text = chunkText;
-
-                chunk.systemKeywords = newMetadata.systemKeywords || [];
-                chunk.defaultSystemKeywords = newMetadata.defaultSystemKeywords || [];
-                chunk.keywords = [...chunk.systemKeywords, ...oldCustomKeywords];
-                chunk.keywordGroups = newMetadata.keywordGroups || [];
-                chunk.defaultKeywordGroups = newMetadata.defaultKeywordGroups || [];
-                chunk.keywordRegex = newMetadata.keywordRegex || [];
-                chunk.defaultKeywordRegex = newMetadata.defaultKeywordRegex || [];
-
-                // Reset custom weights
-                chunk.customWeights = {};
-
-                console.log(`🔄 Refreshed keywords for chunk ${hash}:`, {
-                    chunkTextLength: chunkText.length,
-                    oldKeywords: chunk.keywords?.length || 0,
-                    newKeywords: chunk.systemKeywords?.length || 0,
-                    customKept: oldCustomKeywords.length,
-                    regexPatterns: chunk.keywordRegex?.length || 0
-                });
-
+        // Use shared regenerate function from fullsheet-rag.js
+        await fullsheetRAGPromise; // Ensure module is loaded
+        await fullsheetAPI.regenerateChunkKeywords(
+            chunk,
+            characterName,
+            () => {
+                // On success callback
                 hasUnsavedChanges = true;
                 renderChunks(modifiedChunks, getSearchTerm());
-                toastr.success('Keywords regenerated!');
-            } else {
-                toastr.error('Keyword generation API not available');
-            }
-        } catch (error) {
-            console.error('Failed to refresh keywords:', error);
-            toastr.error('Failed to regenerate keywords: ' + error.message);
-        }
+            },
+            null // No special error handling needed (shared function already shows toast)
+        );
     });
 
 // BABY BUNNY MODE MESSAGE BUTTON (following qvink_memory pattern)
@@ -23914,15 +23918,17 @@ function remove_all_baby_bunny_buttons() {
 console.log('🥕 WB TRACKER DEBUG: Setting up world info trigger debugging...');
 
 document.addEventListener('click', function(e) {
-    // Log ALL clicks to see what's happening
-    console.log('🥕 WB TRACKER DEBUG: Click detected on element:', {
-        tagName: e.target.tagName,
-        className: e.target.className,
-        classList: Array.from(e.target.classList),
-        hasCarrotClass: e.target.classList.contains('fa-carrot'),
-        id: e.target.id,
-        textContent: e.target.textContent?.substring(0, 50)
-    });
+    // Log ALL clicks to see what's happening (only in debug mode)
+    if (extension_settings[extensionName]?.debugMode) {
+        console.log('🥕 WB TRACKER DEBUG: Click detected on element:', {
+            tagName: e.target.tagName,
+            className: e.target.className,
+            classList: Array.from(e.target.classList),
+            hasCarrotClass: e.target.classList.contains('fa-carrot'),
+            id: e.target.id,
+            textContent: e.target.textContent?.substring(0, 50)
+        });
+    }
 
     // Check for carrot icon - either fa-carrot class OR ck-trigger with carrot emoji
     const isCarrotIcon = e.target.classList.contains('fa-carrot') ||

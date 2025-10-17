@@ -8,6 +8,7 @@ import { saveSettingsDebounced } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
 import { parseRegexFromString } from '../../../world-info.js';
 import { highlightRegex } from '../../../utils.js';
+import { regenerateChunkKeywords } from './fullsheet-rag.js';
 
 const extensionName = 'CarrotKernel';
 const CUSTOM_KEYWORD_PRIORITY = 100; // Default weight for custom keywords
@@ -1119,56 +1120,13 @@ function attachChunkHandlers() {
         const chunk = previewChunks.find(c => c.hash === hash);
         if (!chunk) return;
 
-        const confirmed = confirm(`Regenerate keywords for "${chunk.comment || chunk.section || 'this chunk'}"?\n\nThis will:\n• Re-analyze the current chunk text\n• Generate new keywords based on content\n• Keep your custom keywords\n• Reset keyword weights to defaults`);
-        if (!confirmed) return;
-
-        try {
-            // Import keyword generation function
-            const { buildChunkMetadata } = await import('./fullsheet-rag.js');
-
-            // Read CURRENT chunk text from the textarea
-            const $textArea = $(`.chunk-text-edit[data-hash="${hash}"]`);
-            const chunkText = $textArea.length ? $textArea.val() || '' : chunk.text || '';
-
-            const sectionTitle = chunk.section || chunk.comment || '';
-            const topic = chunk.topic || null;
-            const tags = chunk.tags || [];
-
-            // Generate new metadata
-            const newMetadata = buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName);
-
-            // Preserve custom keywords
-            const oldCustomKeywords = ensureArrayValue(chunk.customKeywords);
-
-            // Update the stored chunk text with current edited content
-            chunk.text = chunkText;
-
-            // Update chunk with new keywords
-            chunk.systemKeywords = newMetadata.systemKeywords || [];
-            chunk.defaultSystemKeywords = newMetadata.defaultSystemKeywords || [];
-            chunk.keywords = [...chunk.systemKeywords, ...oldCustomKeywords];
-            chunk.keywordGroups = newMetadata.keywordGroups || [];
-            chunk.defaultKeywordGroups = newMetadata.defaultKeywordGroups || [];
-            chunk.keywordRegex = newMetadata.keywordRegex || [];
-            chunk.defaultKeywordRegex = newMetadata.defaultKeywordRegex || [];
-
-            // Reset custom weights
-            chunk.customWeights = {};
-
-            console.log(`🔄 Refreshed keywords for chunk ${hash}:`, {
-                chunkTextLength: chunkText.length,
-                oldKeywords: chunk.keywords?.length || 0,
-                newKeywords: chunk.systemKeywords?.length || 0,
-                customKept: oldCustomKeywords.length,
-                regexPatterns: chunk.keywordRegex?.length || 0
-            });
-
-            renderChunkPreviews();
-            toastr.success('Keywords regenerated!');
-        } catch (error) {
-            console.error('Failed to refresh keywords:', error);
-            toastr.error('Failed to regenerate keywords: ' + error.message);
-        }
+        // Use shared regenerate function from chunk-common.js
+        await regenerateChunkKeywords(
+            chunk,
+            characterName,
+            () => renderChunkPreviews(), // On success, re-render
+            null // No special error handling needed (shared function already shows toast)
+        );
     });
 
     // Toggle linked chunks drawer

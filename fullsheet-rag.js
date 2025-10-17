@@ -30,6 +30,7 @@ import {
     setExtensionPrompt,
     extension_prompt_types,
     extension_prompt_roles,
+    is_send_press,
 } from '../../../../script.js';
 import { getStringHash } from '../../../utils.js';
 import { extension_settings, getContext } from '../../../extensions.js';
@@ -894,10 +895,23 @@ function extractKeywords(text, sectionTitle = '', topic = '') {
         }
     });
 
-    // Add words that appear 2+ times (balanced threshold)
-    for (const [word, count] of frequency.entries()) {
-        if (count >= 2 && !keywordMap.has(word)) {
-            keywordMap.set(word, word);
+    // For short queries (like chat messages), extract ALL meaningful words
+    // For long content (like fullsheets), use frequency threshold
+    const isShortQuery = text.length < 100; // Short query = less than 100 chars
+
+    if (isShortQuery) {
+        // Short query: add ALL non-stopwords (no frequency requirement)
+        for (const [word] of frequency.entries()) {
+            if (!keywordMap.has(word)) {
+                keywordMap.set(word, word);
+            }
+        }
+    } else {
+        // Long content: add words that appear 2+ times (balanced threshold)
+        for (const [word, count] of frequency.entries()) {
+            if (count >= 2 && !keywordMap.has(word)) {
+                keywordMap.set(word, word);
+            }
         }
     }
 
@@ -1321,14 +1335,12 @@ function buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName 
         autoRegexes: autoRegexes.map(r => ({ pattern: r.pattern, flags: r.flags, source: r.source }))
     });
 
-    // Format regex patterns as strings for display in UI: /pattern/flags
+    // Format regexes as strings in the SAME format as ST lorebook: /pattern/flags
+    // Mix them with regular keywords - ST handles detection automatically via parseRegexFromString
     const regexStrings = autoRegexes.map(r => `/${r.pattern}/${r.flags || 'i'}`);
 
-    console.log('🔍 [buildChunkMetadata] Formatted regex strings:', regexStrings);
-
-    // Combine: Plain keywords + regex patterns (formatted as /pattern/flags)
     const systemKeywords = [
-        ...remainingKeywords,  // Keywords that weren't converted to regex
+        ...remainingKeywords,  // Plain keywords
         ...regexStrings         // Regex patterns as /pattern/flags strings
     ];
 
@@ -2146,6 +2158,110 @@ function deriveKeywordFallback(queryKeywords, queryText, library, selectedHashes
     return limited.map(entry => entry.chunk);
 }
 
+/**
+ * Calculate keyword weight boost for a chunk based on query keywords
+ * This applies custom weights from the visualizer to boost semantic scores
+ *
+ * @param {Object} chunk - Chunk object with keywords metadata
+ * @param {string[]} queryKeywords - Keywords extracted from query
+ * @param {string} queryText - Full query text for regex matching
+ * @param {Object} libraryEntry - Raw library entry with customWeights
+ * @returns {{boost: number, matches: Array}} Total keyword weight boost and matched keywords
+ */
+function calculateKeywordBoost(chunk, queryKeywords, queryText, libraryEntry) {
+    if (!chunk || !libraryEntry) {
+        return { boost: 0, matches: [] };
+    }
+
+    const CUSTOM_KEYWORD_PRIORITY = 100;
+    let boost = 0;
+    const matches = [];
+
+    // Build keyword priority map from query
+    const keywordPriorityMap = new Map();
+    for (const keyword of queryKeywords || []) {
+        const normalized = normalizeKeyword(keyword);
+        const priority = Math.max(getKeywordPriority(keyword), 20);
+        if (!keywordPriorityMap.has(normalized)) {
+            keywordPriorityMap.set(normalized, { priority, originals: new Set([keyword]) });
+        } else {
+            keywordPriorityMap.get(normalized).originals.add(keyword);
+        }
+    }
+
+    // Get chunk's keywords
+    const disabledSet = new Set((libraryEntry.disabledKeywords || []).map(normalizeKeyword));
+    const customKeywords = Array.isArray(libraryEntry.customKeywords) ? libraryEntry.customKeywords : [];
+    const systemKeywords = Array.isArray(libraryEntry.systemKeywords)
+        ? libraryEntry.systemKeywords
+        : Array.isArray(libraryEntry.keywords) ? libraryEntry.keywords : [];
+    const combinedKeywords = [...systemKeywords, ...customKeywords];
+
+    // Calculate keyword match boost
+    combinedKeywords.forEach(keyword => {
+        const normalized = normalizeKeyword(keyword);
+        if (disabledSet.has(normalized)) {
+            return;
+        }
+
+        const mapEntry = keywordPriorityMap.get(normalized);
+        if (mapEntry) {
+            const isCustom = customKeywords.some(custom => normalizeKeyword(custom) === normalized);
+
+            // Check for custom weight override (from visualizer)
+            let effectivePriority;
+            if (libraryEntry.customWeights && libraryEntry.customWeights[normalized] !== undefined) {
+                effectivePriority = libraryEntry.customWeights[normalized];
+            } else if (isCustom) {
+                effectivePriority = Math.max(CUSTOM_KEYWORD_PRIORITY, mapEntry.priority);
+            } else {
+                effectivePriority = Math.max(mapEntry.priority, getKeywordPriority(keyword));
+            }
+
+            boost += effectivePriority;
+            matches.push({ keyword, weight: effectivePriority });
+        }
+    });
+
+    // Apply regex boosts
+    const loweredQueryText = (queryText || '').toLowerCase();
+    const regexEntries = [];
+
+    if (Array.isArray(libraryEntry.keywordRegex)) {
+        for (const entry of libraryEntry.keywordRegex) {
+            if (entry && entry.pattern) {
+                regexEntries.push({ ...entry, source: entry.source || 'preset' });
+            }
+        }
+    }
+
+    if (Array.isArray(libraryEntry.customRegex)) {
+        for (const pattern of libraryEntry.customRegex) {
+            if (!pattern) continue;
+            if (typeof pattern === 'string') {
+                regexEntries.push({ pattern, flags: 'i', priority: CUSTOM_KEYWORD_PRIORITY, source: 'custom' });
+            } else if (pattern.pattern) {
+                regexEntries.push({ ...pattern, source: 'custom', priority: pattern.priority ?? CUSTOM_KEYWORD_PRIORITY });
+            }
+        }
+    }
+
+    for (const entry of regexEntries) {
+        try {
+            const regex = new RegExp(entry.pattern, entry.flags || 'i');
+            if (regex.test(loweredQueryText)) {
+                const regexPriority = entry.priority ?? (entry.source === 'custom' ? CUSTOM_KEYWORD_PRIORITY : 80);
+                boost += regexPriority;
+                matches.push({ regex: entry.pattern, weight: regexPriority });
+            }
+        } catch {
+            // ignore malformed regex
+        }
+    }
+
+    return { boost, matches };
+}
+
 // ============================================================================
 // VECTOR OPERATIONS
 // ============================================================================
@@ -2206,6 +2322,8 @@ async function queryRAG(characterName, queryText) {
 
     const queryKeywords = extractKeywords(queryText);
 
+    console.log('🔑 [CarrotKernel RAG] Extracted keywords from query:', queryKeywords);
+
     // ============================================================================
     // COLLECTION ACTIVATION SYSTEM
     // Determines WHICH collections to query based on activation triggers
@@ -2215,6 +2333,12 @@ async function queryRAG(characterName, queryText) {
     // Detect which collections should be activated based on triggers
     const queryLower = queryText.toLowerCase();
     const queryWords = queryLower.split(/\s+/); // Split into words for whole-word matching
+
+    console.log('🔍 [CarrotKernel RAG] Query analysis:', {
+        queryLower: queryLower.substring(0, 100),
+        wordCount: queryWords.length,
+        firstFewWords: queryWords.slice(0, 10)
+    });
 
     // Get collection metadata (contains activation triggers)
     ensureRagState();
@@ -2236,11 +2360,13 @@ async function queryRAG(characterName, queryText) {
 
         // Legacy collections without metadata won't activate (user needs to set triggers)
         if (!metadata) {
+            console.log(`⚠️ [CarrotKernel RAG] Collection ${collectionId} has no metadata - skipping`);
             continue;
         }
 
         // Check if collection is always active (ignores triggers)
         if (metadata.alwaysActive) {
+            console.log(`✅ [CarrotKernel RAG] Collection ${collectionId} is ALWAYS ACTIVE - activating`);
             activatedCollections.add(collectionId);
             continue;
         }
@@ -2248,19 +2374,32 @@ async function queryRAG(characterName, queryText) {
         // Check if any activation triggers match (case-insensitive)
         const triggers = metadata.keywords || []; // NOTE: Still called 'keywords' in data for backwards compatibility
 
+        console.log(`🔍 [CarrotKernel RAG] Checking collection ${collectionId}:`, {
+            triggers: triggers,
+            triggerCount: triggers.length
+        });
+
         // No triggers = collection won't activate (user must explicitly set triggers or enable "Always Active")
         if (triggers.length === 0) {
+            console.log(`⚠️ [CarrotKernel RAG] Collection ${collectionId} has no triggers - skipping`);
             continue;
         }
 
         // Check if any trigger appears in query
+        let matched = false;
         for (const trigger of triggers) {
             const triggerLower = trigger.toLowerCase().trim();
             // Support both substring and whole-word matching
             if (queryLower.includes(triggerLower)) {
+                console.log(`✅ [CarrotKernel RAG] Collection ${collectionId} activated! Trigger "${trigger}" found in query`);
                 activatedCollections.add(collectionId);
+                matched = true;
                 break;
             }
+        }
+
+        if (!matched) {
+            console.log(`❌ [CarrotKernel RAG] Collection ${collectionId} NOT activated - no triggers matched`);
         }
     }
 
@@ -2532,7 +2671,35 @@ async function queryRAG(characterName, queryText) {
         // We need to limit the TOTAL number of chunks returned across all collections
         let finalResults = filteredByInclusion;
 
-        // Sort by score (highest first) before limiting
+        // Apply keyword weight boosts to all chunks before ranking
+        // This combines semantic similarity scores with custom keyword weights
+        console.log('🎯 [CarrotKernel RAG] Applying keyword weight boosts...');
+        for (const chunk of finalResults) {
+            const libraryEntry = mergedLibrary[chunk.hash];
+            if (!libraryEntry) continue;
+
+            const { boost: keywordBoost, matches } = calculateKeywordBoost(chunk, queryKeywords, queryText, libraryEntry);
+            const semanticScore = chunk.reason?.score ?? 0;
+            const boostedScore = semanticScore + (keywordBoost / 100); // Normalize boost to 0-2 range
+
+            // Store both scores for debugging
+            chunk.reason = {
+                ...chunk.reason,
+                semanticScore: semanticScore,
+                keywordBoost: keywordBoost,
+                keywordMatches: matches,
+                score: boostedScore, // Final score used for ranking
+            };
+
+            if (matches.length > 0) {
+                console.log(`  📊 Chunk ${chunk.hash} (${chunk.header || 'unknown'}): semantic=${semanticScore.toFixed(3)}, keywordBoost=${keywordBoost}, final=${boostedScore.toFixed(3)}`);
+                console.log(`     Matched keywords:`, matches);
+            } else {
+                console.log(`  📊 Chunk ${chunk.hash} (${chunk.header || 'unknown'}): semantic=${semanticScore.toFixed(3)}, no keyword matches, final=${boostedScore.toFixed(3)}`);
+            }
+        }
+
+        // Sort by boosted score (highest first) before limiting
         finalResults.sort((a, b) => {
             const scoreA = a.reason?.score ?? 0;
             const scoreB = b.reason?.score ?? 0;
@@ -2593,13 +2760,26 @@ function buildQueryContext(messageCount = 3) {
         .filter(text => text.length > 0)
         .join('\n\n');
 
-    debugLog('Built query context', {
+    // Enhanced debug logging
+    console.log('🔍 [CarrotKernel RAG] Building query context:', {
         totalMessages: chat.length,
         activeMessages: activeMessages.length,
         selectedMessages: recentMessages.length,
-        queryLength: queryText.length,
-        preview: queryText.substring(0, 100)
+        requestedCount: messageCount,
+        queryLength: queryText.length
     });
+
+    // Log each selected message for debugging
+    recentMessages.forEach((msg, idx) => {
+        console.log(`📝 [CarrotKernel RAG] Message ${idx + 1}/${recentMessages.length}:`, {
+            name: msg.name,
+            is_user: msg.is_user,
+            is_system: msg.is_system,
+            preview: (msg.mes || '').substring(0, 100) + '...'
+        });
+    });
+
+    console.log('📋 [CarrotKernel RAG] Final queryText:', queryText);
 
     return queryText;
 }
@@ -3193,7 +3373,22 @@ async function autoVectorizeMessage(messageId) {
 }
 
 async function carrotKernelRagInterceptor(chatArray, contextSize, abort, type) {
+    console.log('🥕🥕🥕 [CarrotKernel RAG] Interceptor called!', {
+        chatArrayLength: chatArray?.length,
+        contextSize,
+        type,
+        is_send_press,
+        timestamp: new Date().toISOString()
+    });
+
     const settings = getRAGSettings();
+    console.log('⚙️ [CarrotKernel RAG] Settings loaded:', {
+        enabled: settings.enabled,
+        queryContext: settings.queryContext,
+        injectionDepth: settings.injectionDepth,
+        topK: settings.topK
+    });
+
     const roleKey = settings.injectionRole?.toUpperCase?.() || 'SYSTEM';
     const promptRole = extension_prompt_roles?.[roleKey] ?? extension_prompt_roles.SYSTEM;
 
@@ -3201,11 +3396,23 @@ async function carrotKernelRagInterceptor(chatArray, contextSize, abort, type) {
     setExtensionPrompt(RAG_PROMPT_TAG, '', extension_prompt_types.IN_PROMPT, settings.injectionDepth, false, promptRole);
 
     if (!settings.enabled) {
+        console.log('❌ [CarrotKernel RAG] RAG is DISABLED - skipping');
         return false;
     }
 
-    // Only process on actual user-initiated generation (not dry runs, not impersonate, etc)
-    if (!type || type === 'dry' || type === 'quiet' || type === 'impersonate') {
+    // Match ST's native vector behavior: only skip 'quiet' type
+    // Normal generations have type=undefined
+    // 'continue', 'regenerate', 'swipe', 'impersonate' are all valid generation types we should process
+    if (type === 'quiet') {
+        console.log(`⏭️ [CarrotKernel RAG] Skipping quiet generation`);
+        return false;
+    }
+
+    // CRITICAL: Only run RAG during actual user-initiated generation
+    // is_send_press is true when user clicks Send or presses Enter
+    // Deletions, UI updates, etc. have is_send_press=false
+    if (!is_send_press) {
+        console.log(`⏭️ [CarrotKernel RAG] Skipping - not user-initiated (is_send_press=false)`);
         return false;
     }
 
@@ -3351,7 +3558,92 @@ export {
     chunkFullsheet,
     generateCollectionId,
     buildChunkMetadata,
+    regenerateChunkKeywords,
 };
+
+/**
+ * Regenerate keywords for a chunk based on current content
+ * Shared function used by both chunk viewer and baby bunny chunking
+ * @param {Object} chunk - The chunk to regenerate keywords for
+ * @param {string} characterName - Character name for context
+ * @param {Function} onSuccess - Callback on success
+ * @param {Function} onError - Callback on error
+ */
+async function regenerateChunkKeywords(chunk, characterName, onSuccess, onError) {
+    const confirmed = confirm(`Regenerate keywords for "${chunk.comment || chunk.section || 'this chunk'}"?\n\nThis will:\n• Re-analyze the current chunk text\n• Generate new keywords based on content\n• WIPE all custom keywords\n• Reset all keyword weights to defaults`);
+    if (!confirmed) return;
+
+    try {
+        // Read CURRENT chunk text from the textarea (if it exists) or use stored text
+        const hash = chunk.hash;
+        // Try both selectors (baby-bunny uses .chunk-text-edit, chunk viewer uses .carrot-chunk-text-edit)
+        let $textArea = $(`.chunk-text-edit[data-hash="${hash}"]`);
+        if (!$textArea.length) {
+            $textArea = $(`.carrot-chunk-text-edit[data-hash="${hash}"]`);
+        }
+        const chunkText = $textArea.length ? $textArea.val() || '' : chunk.text || '';
+
+        const sectionTitle = chunk.section || chunk.comment || '';
+        const topic = chunk.topic || null;
+        // IMPORTANT: Pass empty tags array when regenerating
+        // We want keywords based ONLY on current chunk text, not inherited tags from full character
+        const tags = [];
+
+        console.log('🔧 [regenerateChunkKeywords] Regenerating keywords for chunk:', {
+            hash,
+            sectionTitle,
+            textLength: chunkText.length,
+            textPreview: chunkText.substring(0, 100)
+        });
+
+        // Generate new metadata
+        const newMetadata = buildChunkMetadata(sectionTitle, topic, chunkText, tags, characterName);
+
+        console.log('📦 [regenerateChunkKeywords] New metadata generated:', {
+            systemKeywords: newMetadata.systemKeywords?.slice(0, 10),
+            totalKeywords: newMetadata.systemKeywords?.length
+        });
+
+        // Update the stored chunk text with current edited content
+        chunk.text = chunkText;
+
+        // COMPLETELY REPLACE all keywords with freshly generated ones
+        chunk.systemKeywords = newMetadata.systemKeywords || [];
+        chunk.defaultSystemKeywords = newMetadata.defaultSystemKeywords || [];
+        chunk.keywords = [...chunk.systemKeywords]; // No custom keywords
+        chunk.customKeywords = []; // Wipe custom keywords
+        chunk.keywordGroups = newMetadata.keywordGroups || [];
+        chunk.defaultKeywordGroups = newMetadata.defaultKeywordGroups || [];
+        chunk.keywordRegex = newMetadata.keywordRegex || [];
+        chunk.defaultKeywordRegex = newMetadata.defaultKeywordRegex || [];
+
+        // Reset ALL weights and customizations
+        chunk.customWeights = {};
+        chunk.customRegex = [];
+        chunk.disabledKeywords = [];
+
+        console.log('✅ [regenerateChunkKeywords] Keywords wiped and regenerated:', {
+            hash,
+            newKeywords: chunk.keywords?.slice(0, 10),
+            totalKeywords: chunk.keywords?.length
+        });
+
+        // Call success callback
+        if (onSuccess) {
+            onSuccess(chunk);
+        }
+
+        toastr.success('Keywords regenerated!');
+    } catch (error) {
+        console.error('[regenerateChunkKeywords] Failed to regenerate keywords:', error);
+        toastr.error('Failed to regenerate keywords: ' + error.message);
+
+        // Call error callback
+        if (onError) {
+            onError(error);
+        }
+    }
+}
 
 
 
