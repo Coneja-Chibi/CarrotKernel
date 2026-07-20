@@ -348,7 +348,7 @@ function navigateToRepository(repoName) {
 
 function navigateToCharacter(characterName, repoName) {
     setCurrentRepoView('character');
-    setSelectedCharacter(characterName);
+    setSelectedCharacter(`${repoName}::${characterName}`);
     setSelectedRepository(repoName);
     renderRepositoryManager();
 }
