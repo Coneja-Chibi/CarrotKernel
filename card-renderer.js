@@ -5,6 +5,28 @@
 
 import { CarrotDebug } from './debugger.js';
 import { generateFullSheet, generateTagSheet, generateQuickSheet } from './sheet-generator.js';
+import { extension_settings } from '../../../extensions.js';
+import { EXTENSION_NAME } from './carrot-state.js';
+
+const extensionName = EXTENSION_NAME;
+
+// Forward declarations - provided by index.js via initializeCardRenderer() to avoid
+// a circular dependency (mirrors the same pattern sheet-generator.js and
+// repository-manager.js already use for their own index.js-owned dependencies).
+let findCharacterByName = null;
+let refreshTabContent = null;
+
+/**
+ * Initialize the card renderer with required dependencies
+ * Called by index.js after it defines findCharacterByName/refreshTabContent
+ * @param {Function} findCharFn - The findCharacterByName function from index.js
+ * @param {Function} refreshTabFn - The refreshTabContent function from index.js
+ */
+export function initializeCardRenderer(findCharFn, refreshTabFn) {
+    findCharacterByName = findCharFn;
+    refreshTabContent = refreshTabFn;
+    CarrotDebug.init('Card renderer initialized with dependencies');
+}
 
 function renderAsCards(activeCharacters) {
     const settings = extension_settings[extensionName];
@@ -16,8 +38,11 @@ function renderAsCards(activeCharacters) {
     // Load CSS styles first (create style element if needed)
     loadCarrotCardStyles();
     
+    // createCharacterCard returns a DOM element, not a string — without .outerHTML
+    // this joins to the literal text "[object HTMLDivElement]" for every card.
     const cardsHTML = charactersToShow
         .map((charName, index) => createCharacterCard(charName, index))
+        .map(el => el.outerHTML)
         .join('');
     
     // Add a header for the system message with character count (EXACT BunnyMoTags format)

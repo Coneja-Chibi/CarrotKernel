@@ -1277,14 +1277,25 @@ const getPositionName = (position) => {
         3: 'Author\'s Note Bottom',
         4: 'At Depth',
         5: 'Extension Module Top',
-        6: 'Extension Module Bottom'
+        6: 'Extension Module Bottom',
+        7: 'Outlet'
     };
     return positions[position] || `Unknown (${position})`;
 };
 
 // 🛡️ SAFER ST WORLDBOOK INTEGRATION - NO GLOBAL PROTOTYPE PATCHING
-const entrySourceTracker = new Map(); // uid -> source info
+// Keyed by `${entry.world}§§§${entry.uid}` (matching updateBadge's key and ST's own
+// WorldInfoBuffer.externalActivations convention) — World Info uids are only unique
+// per lorebook file (getFreeWorldEntryUid restarts from 0 in every world file), so
+// keying by uid alone lets entries from different books collide and overwrite
+// each other's source info.
+const entrySourceTracker = new Map(); // `${world}§§§${uid}` -> source info
 const nativeTriggerReasons = new Map(); // uid -> native ST trigger reason
+
+// Panel control buttons — created once during panel construction, re-appended by
+// updatePanel() after each innerHTML wipe, so they must live at module scope.
+let debugToggle = null;
+let clearHighlightsButton = null;
 
 // 🎯 PRECISE ST NATIVE LOG INTERCEPTION - CAPTURE EXACT TRIGGER REASONS
 const nativeSTTriggerReasons = new Map(); // uid -> {reason, timestamp}
@@ -1355,7 +1366,7 @@ const classifyTriggerReasonFromEntry = (entry, contextData = {}) => {
     }
 
     // Check source tracker for vector entries
-    const sourceInfo = entrySourceTracker.get(entry.uid);
+    const sourceInfo = entrySourceTracker.get(`${entry.world}§§§${entry.uid}`);
     if (sourceInfo && sourceInfo.source === 'WORLDINFO_FORCE_ACTIVATE') {
         return 'vector';
     }
@@ -1709,7 +1720,16 @@ const getMessageSourceIcon = (messageSource) => {
 };
 
 // Get device-specific ID for per-device settings
+let trackerInitialized = false;
+
 const init = () => {
+    // Guard against duplicate DOM elements, MutationObservers, and eventSource
+    // listeners if init() is ever called more than once (e.g. once enable() below
+    // is made self-initialising for the "was never init()'d" case).
+    if (trackerInitialized) {
+        return;
+    }
+    trackerInitialized = true;
 
     const trigger = document.createElement('div');
     trigger.classList.add('ck-trigger');
@@ -2140,8 +2160,22 @@ function disableRepositionMode() {
             }
         });
 
+        // Clears any trigger-word highlight markup in the panel/chat. No dedicated
+        // highlighting pass exists yet elsewhere in this file — this keeps the
+        // clear-highlights button a real, working no-op today (rather than calling
+        // a function that doesn't exist) and will pick up real highlight elements
+        // automatically if a highlighting pass is added later.
+        const clearTriggerHighlights = () => {
+            document.querySelectorAll('.ck-trigger-highlight').forEach(el => {
+                el.classList.remove('ck-trigger-highlight');
+            });
+            panel.querySelectorAll('.ck-entry--highlighted').forEach(el => {
+                el.classList.remove('ck-entry--highlighted');
+            });
+        };
+
         // Add debug toggle button at the top of the panel
-        const debugToggle = document.createElement('div'); {
+        debugToggle = document.createElement('div');
             debugToggle.classList.add('ck-debug-toggle');
             debugToggle.textContent = '🔍';
             debugToggle.title = 'Click to toggle debug mode - shows what triggered each entry';
@@ -2178,7 +2212,7 @@ function disableRepositionMode() {
             }
 
             // Add clear highlights button
-            const clearHighlightsButton = document.createElement('button');
+            clearHighlightsButton = document.createElement('button');
             clearHighlightsButton.classList.add('ck-clear-highlights');
             clearHighlightsButton.style.cssText = `
                 position: absolute;
@@ -2216,7 +2250,8 @@ function disableRepositionMode() {
                 clearHighlightsButton.style.borderColor = 'rgba(231, 76, 60, 0.3)';
             });
 
-        }
+        // Appended by updatePanel() (called below via updatePanel([])), which
+        // re-appends them on every render since panel.innerHTML gets wiped there.
 
         document.body.append(panel);
     }
@@ -2484,9 +2519,17 @@ function disableRepositionMode() {
 
     eventSource.on(event_types.WORLD_INFO_ACTIVATED, async(entryList)=>{
 
-        // Track all entries from this event as standard activation
+        // Track all entries from this event as standard activation. Don't stamp over
+        // an entry that WORLDINFO_FORCE_ACTIVATE already classified as a vector hit
+        // this generation — otherwise classifyTriggerReasonFromEntry's source-tracker
+        // check below can never see 'WORLDINFO_FORCE_ACTIVATE' by the time it runs.
         entryList.forEach(entry => {
-            entrySourceTracker.set(entry.uid, {
+            const key = `${entry.world}§§§${entry.uid}`;
+            const existing = entrySourceTracker.get(key);
+            if (existing && existing.source === 'WORLDINFO_FORCE_ACTIVATE') {
+                return;
+            }
+            entrySourceTracker.set(key, {
                 source: 'WORLD_INFO_ACTIVATED',
                 timestamp: Date.now(),
                 triggerType: 'standard'
@@ -2531,7 +2574,7 @@ function disableRepositionMode() {
 
         // Track all entries from this event as vector activation
         entryList.forEach(entry => {
-            entrySourceTracker.set(entry.uid, {
+            entrySourceTracker.set(`${entry.world}§§§${entry.uid}`, {
                 source: 'WORLDINFO_FORCE_ACTIVATE',
                 timestamp: Date.now(),
                 triggerType: 'vector'
@@ -2553,6 +2596,21 @@ function disableRepositionMode() {
 
     const updatePanel = (entryList, newChat = false) => {
         panel.innerHTML = '';
+
+        // Reset potato-mode styling unconditionally. The potato branch below sets
+        // panel.classList and panel.style.cssText wholesale but never reverts them,
+        // so a single potato-mode round trip otherwise leaves the panel permanently
+        // stuck at the potato layout even after the setting is turned back off.
+        // Removing the class here also trips the MutationObserver below, which
+        // re-applies real geometry via positionPanel() once the DOM settles.
+        panel.classList.remove('ck-potato-mode');
+        panel.style.cssText = '';
+
+        // Re-append the debug toggle and clear-highlights buttons — they're stable,
+        // created once in init(), but panel.innerHTML above wipes them out along
+        // with everything else on every render.
+        if (debugToggle) panel.appendChild(debugToggle);
+        if (clearHighlightsButton) panel.appendChild(clearHighlightsButton);
 
         // Show empty state if no entries
         if (!entryList || entryList.length === 0) {
@@ -2759,9 +2817,19 @@ function disableRepositionMode() {
             sizeControls.appendChild(btn);
         });
 
-        // Set default active state (compact mode)
-        sizeButtons.compact.classList.add('ck-size-toggle--active');
-        panel.classList.add('ck-panel--compact');
+        // Restore whichever size mode the user last selected instead of hard-coding
+        // compact on every rebuild. panel.innerHTML is cleared above, but `panel`
+        // itself is a single element reused across calls, so its own classList
+        // (and dataset) survive rebuilds — read the prior mode off it here.
+        const wasDetailed = panel.dataset.ckSizeModeSet === 'true' && !panel.classList.contains('ck-panel--compact');
+        panel.dataset.ckSizeModeSet = 'true';
+
+        if (wasDetailed) {
+            sizeButtons.detailed.classList.add('ck-size-toggle--active');
+        } else {
+            sizeButtons.compact.classList.add('ck-size-toggle--active');
+            panel.classList.add('ck-panel--compact');
+        }
 
         header.appendChild(icon);
         header.appendChild(title);
@@ -3215,7 +3283,8 @@ function disableRepositionMode() {
                         3: '↓ Author\'s Note Bottom',
                         4: '📍 At Depth Position',
                         5: '↑ Extension Module Top',
-                        6: '↓ Extension Module Bottom'
+                        6: '↓ Extension Module Bottom',
+                        7: '🔌 Outlet'
                     };
                     const positionLabel = positionLabels[entry.position] || `Position ${entry.position}`;
                     debugLines.push(`📍 <strong>Insertion Position:</strong> ${positionLabel} - where content is inserted in prompt`);
@@ -3314,6 +3383,12 @@ let trackerElements = {
 };
 
 const enable = () => {
+    // Self-initialise if the tracker was never init()'d (e.g. the extension started
+    // disabled, so index.js's only init() call site was skipped) — otherwise all four
+    // guards below fail and enable() is a permanent no-op until a full page reload.
+    if (!trackerElements.trigger) {
+        init();
+    }
     if (trackerElements.trigger) {
         trackerElements.trigger.style.display = 'block';
     }

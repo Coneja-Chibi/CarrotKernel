@@ -285,7 +285,9 @@ function createConnectionPopup() {
 
     // Event handlers
     connectionPopup.find('.carrot-connection-close').on('click', () => CarrotLorebookConnector.close());
-    connectionPopup.find('.carrot-connection-overlay').on('click', function(e) {
+    // .carrot-connection-overlay is a root node of connectionPopup, not a descendant —
+    // .find() can never match it, so use .filter() to select it instead.
+    connectionPopup.filter('.carrot-connection-overlay').on('click', function(e) {
         if (e.target === this) {
             CarrotLorebookConnector.close();
         }
@@ -560,7 +562,10 @@ function handleSearch(e) {
 
 function handleStarClick(e) {
     e.stopPropagation();
-    const lorebookName = $(e.target).data('lorebook');
+    // .attr(), not .data() — jQuery coerces digit-only data-lorebook values (e.g. a
+    // lorebook literally named "2024") to Number, which then never matches the
+    // string entries held in the characterRepoBooks/tagLibraries Sets.
+    const lorebookName = $(e.target).attr('data-lorebook');
 
     // Star click should toggle PRIMARY status, not connection
     if (!currentConnections[lorebookName]) {
@@ -602,7 +607,7 @@ function handleStarClick(e) {
 }
 
 function handleScopeChange(e) {
-    const lorebookName = $(e.target).data('lorebook');
+    const lorebookName = $(e.target).attr('data-lorebook');
     const newScope = $(e.target).val();
 
     if (newScope === 'none') {
@@ -624,7 +629,7 @@ function handleScopeChange(e) {
 
 async function handleBadgeClick(e) {
     e.stopPropagation();
-    const lorebookName = $(e.currentTarget).data('lorebook');
+    const lorebookName = $(e.currentTarget).attr('data-lorebook');
     const currentType = $(e.currentTarget).data('type');
 
     // Cycle: repo → taglib → lorebook → repo
@@ -673,7 +678,7 @@ async function handleBadgeClick(e) {
 
 function handleOpenEditor(e) {
     e.stopPropagation();
-    const lorebookName = $(e.currentTarget).data('lorebook');
+    const lorebookName = $(e.currentTarget).attr('data-lorebook');
 
     // Close the CarrotKernel Lorebook Connector modal
     CarrotLorebookConnector.close();
@@ -730,18 +735,23 @@ async function applyConnections() {
     saveCharacterDebounced();
 
     // 2. Save additional character books to world_info.charLore[].extraBooks
+    // ST treats extensions.world (primary) and charLore[].extraBooks (auxiliary) as
+    // disjoint sets — exclude the primary here so it doesn't also show up selected
+    // in ST's native auxiliary multi-select.
+    const extraBooks = characterScopedBooks.filter(book => book !== primaryLorebook);
+
     const charFilename = getCharaFilename(this_chid);
     const charLore = world_info.charLore || [];
     const existingIndex = charLore.findIndex(entry => entry.name === charFilename);
 
-    if (characterScopedBooks.length > 0) {
+    if (extraBooks.length > 0) {
         if (existingIndex !== -1) {
-            charLore[existingIndex].extraBooks = characterScopedBooks;
+            charLore[existingIndex].extraBooks = extraBooks;
         } else {
-            charLore.push({ name: charFilename, extraBooks: characterScopedBooks });
+            charLore.push({ name: charFilename, extraBooks: extraBooks });
         }
     } else if (existingIndex !== -1) {
-        // Remove entry if no books
+        // Remove entry if no books, matching ST's own charSetAuxWorlds behavior
         charLore.splice(existingIndex, 1);
     }
 

@@ -24,12 +24,12 @@
 
 import { saveSettingsDebounced, chat, chat_metadata, characters, this_chid } from '../../../../script.js';
 import { extension_settings, getContext, saveMetadataDebounced } from '../../../extensions.js';
-import { parseRegexFromString, world_info, world_names, loadWorldInfo, createWorldInfoEntry, saveWorldInfo, updateWorldInfoList, selected_world_info } from '../../../world-info.js';
+import { parseRegexFromString, world_info, world_names, loadWorldInfo, createNewWorldInfo, createWorldInfoEntry, saveWorldInfo, updateWorldInfoList, selected_world_info } from '../../../world-info.js';
 import { highlightRegex } from '../../../utils.js';
 import { regenerateChunkKeywords, detectFullsheetInMessage, vectorizeFullsheetFromMessage, chunkFullsheet } from './fullsheet-rag.js';
 import { CarrotDebug } from './debugger.js';
 import { closeTutorial } from './tutorials.js';
-import { EXTENSION_NAME } from './carrot-state.js';
+import { EXTENSION_NAME, characterRepoBooks } from './carrot-state.js';
 
 const extensionName = EXTENSION_NAME;
 const CUSTOM_KEYWORD_PRIORITY = 100; // Default weight for custom keywords
@@ -1286,21 +1286,21 @@ async function showBatchBabyBunnyPopup(charactersData) {
 
             CarrotDebug.ui('🐰 BATCH: Processing', characterConfigs.length, 'enabled characters');
 
-            overlay.remove();
+            // Validate all inputs BEFORE tearing down the popup. Destroying it first
+            // (as before) meant any validation failure discarded the user's entire
+            // configuration with no way to recover, and left the returned promise
+            // permanently unresolved since resolve() was never called on these paths.
+            let singleLorebookName = null;
+            const multipleLorebookNames = [];
 
-            // Process based on mode
             if (mode === 'single-new') {
-                const lorebookName = popup.find('#batch-lorebook-name').val().trim();
-                if (!lorebookName) {
+                singleLorebookName = popup.find('#batch-lorebook-name').val().trim();
+                if (!singleLorebookName) {
                     toastr.error('Please enter a lorebook name');
+                    resolve(false);
                     return;
                 }
-
-                // Create single lorebook for all characters
-                await processBatchToSingleLorebook(characterConfigs, lorebookName, true, scope);
-
             } else if (mode === 'multiple-new') {
-                // Create separate lorebooks for each, using custom names
                 for (let i = 0; i < characterConfigs.length; i++) {
                     const config = characterConfigs[i];
                     const originalIndex = charactersData.indexOf(charactersData.find(c => c.name === config.name));
@@ -1310,21 +1310,37 @@ async function showBatchBabyBunnyPopup(charactersData) {
 
                     if (!lorebookName) {
                         toastr.error(`Please enter a lorebook name for ${config.entryName}`);
+                        resolve(false);
                         return;
                     }
 
-                    await processSingleCharacterArchive(config, lorebookName, true, scope);
+                    multipleLorebookNames.push(lorebookName);
+                }
+            } else if (mode === 'single-existing') {
+                singleLorebookName = popup.find('#batch-existing-lorebook').val();
+                if (!singleLorebookName) {
+                    toastr.error('Please select a lorebook');
+                    resolve(false);
+                    return;
+                }
+            }
+
+            overlay.remove();
+
+            // Process based on mode
+            if (mode === 'single-new') {
+                // Create single lorebook for all characters
+                await processBatchToSingleLorebook(characterConfigs, singleLorebookName, true, scope);
+
+            } else if (mode === 'multiple-new') {
+                // Create separate lorebooks for each, using custom names
+                for (let i = 0; i < characterConfigs.length; i++) {
+                    await processSingleCharacterArchive(characterConfigs[i], multipleLorebookNames[i], true, scope);
                 }
 
             } else if (mode === 'single-existing') {
-                const lorebookName = popup.find('#batch-existing-lorebook').val();
-                if (!lorebookName) {
-                    toastr.error('Please select a lorebook');
-                    return;
-                }
-
                 // Add all to existing lorebook
-                await processBatchToSingleLorebook(characterConfigs, lorebookName, false, scope);
+                await processBatchToSingleLorebook(characterConfigs, singleLorebookName, false, scope);
             }
 
             resolve(true);
@@ -1436,7 +1452,7 @@ async function createNewLorebook(name) {
     try {
         await createNewWorldInfo(name);
         CarrotDebug.ui('🐰 BATCH PROCESSING: Created new lorebook', { name });
-        return { name, entries: [] };
+        return await loadWorldInfo(name);
     } catch (error) {
         CarrotDebug.error('🐰 BATCH PROCESSING ERROR: Failed to create lorebook', error);
         return null;
@@ -1458,7 +1474,10 @@ async function loadExistingLorebook(name) {
 // Helper function: Save lorebook using ST's API
 async function saveLorebook(lorebook, name) {
     try {
-        await saveWorldInfo(name, lorebook);
+        // immediately=true: saveWorldInfo's debounced path shares a single timer, so a
+        // batch loop saving several lorebooks back-to-back would otherwise only ever
+        // persist the last one once the timer finally fires.
+        await saveWorldInfo(name, lorebook, true);
         CarrotDebug.ui('🐰 BATCH PROCESSING: Saved lorebook', { name });
         return true;
     } catch (error) {
@@ -2113,8 +2132,10 @@ async function activateLorebook(lorebookName, activationScope) {
                 // Directly add to selected_world_info array and save
                 if (!selected_world_info.includes(lorebookName)) {
                     selected_world_info.push(lorebookName);
-                    saveSettingsDebounced();
-                    await updateWorldInfoList(); // Update UI to show selection
+                    await updateWorldInfoList(); // Rebuild <option> elements, then let ST's own
+                    // change handler persist the selection into world_info.globalSelect —
+                    // saveSettingsDebounced() alone never writes that field.
+                    $('#world_info').trigger('change');
 
                     CarrotDebug.ui('🐰 ✅ Added to selected_world_info and saved settings');
                     toastr.success(`Lorebook "${lorebookName}" activated globally`);
@@ -2305,28 +2326,24 @@ async function createCharacterArchive(characterName, triggers, lorebookName, tag
             currentWorldInfoStructure: Object.keys(currentWorldInfo)
         });
 
-        // Save the updated lorebook (following NemoLore's exact pattern)
-        await saveWorldInfo(lorebookName, currentWorldInfo);
+        // Save the updated lorebook immediately. saveWorldInfo's debounced path only
+        // populates the in-memory worldInfoCache synchronously and defers the actual
+        // fetch — the old "wait 1s then loadWorldInfo() to verify" approach re-read
+        // that same synchronous cache, so it always "passed" without ever confirming
+        // the write reached the server, and the follow-up updateWorldInfoList() call
+        // could race the not-yet-fired debounced write. immediately=true awaits the
+        // real fetch and emits WORLDINFO_UPDATED, making both problems moot.
+        await saveWorldInfo(lorebookName, currentWorldInfo, true);
 
-        // Step 4.5: Wait a moment and verify the save actually worked
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second for file system
+        const savedEntriesCount = Object.keys(currentWorldInfo.entries || {}).length;
 
-        // Verify the lorebook was actually saved with entries
-        const verificationWorldInfo = await loadWorldInfo(lorebookName);
-        const savedEntriesCount = Object.keys(verificationWorldInfo?.entries || {}).length;
-
-        CarrotDebug.ui('🐰 BABY BUNNY DEBUG: Save verification', {
+        CarrotDebug.ui('🐰 BABY BUNNY DEBUG: Save complete', {
             lorebookName,
             savedEntriesCount,
-            verificationPassed: savedEntriesCount > 0,
-            savedEntries: Object.keys(verificationWorldInfo?.entries || {})
+            savedEntries: Object.keys(currentWorldInfo.entries || {})
         });
 
-        if (savedEntriesCount === 0) {
-            throw new Error('Lorebook was created but entries were not saved properly');
-        }
-
-        // Only update the UI AFTER verification passes
+        // Update the UI now that the save has actually completed
         await updateWorldInfoList();
 
         // Step 5: Register as character repo in CarrotKernel settings
@@ -4097,6 +4114,20 @@ function add_baby_bunny_button_to_message(messageId) {
 function add_baby_bunny_buttons_to_all_existing_messages() {
     CarrotDebug.ui('🐰 Adding Baby Bunny buttons to all existing messages...');
 
+    // Re-prime #message_template so any message cloned from it later (chat switch,
+    // reload) still gets the button, using the same "already exists" guard as
+    // add_baby_bunny_button_to_message().
+    const templateExtraButtons = $("#message_template .mes_buttons .extraMesButtons");
+    if (templateExtraButtons.find(`.${baby_bunny_button_class}`).length === 0) {
+        let templateHtml = `<div title="🐰 Manual Baby Bunny Mode - Process this message as a character sheet" class="mes_button ${baby_bunny_button_class}" tabindex="0">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8.097.298a2.19 2.19 0 0 0-2.145.687a4.03 4.03 0 0 0-.735 3.981c.534 1.742 1.517 4.657 2.264 6.743c.044.12.157.2.284.201h8.094a.31.31 0 0 0 .272-.19c.249-.627.533-1.362.83-2.144a.26.26 0 0 0-.107-.308a5.8 5.8 0 0 1-1.327-1.185a10.4 10.4 0 0 1-2.3-3.851a.1.1 0 0 0-.07-.024a.07.07 0 0 0-.071.06c-.225.912-.77 3.222-1.043 4.443a.31.31 0 0 1-.296.237a.284.284 0 0 1-.285-.237c-.438-2.086-.948-4.432-1.315-5.842C9.602.96 8.654.439 8.097.297m11.755 8.627a1.67 1.67 0 0 0 1.244-2.37a9.36 9.36 0 0 0-3.496-4.16a5.3 5.3 0 0 0-2.133-.532c-.533 0-.983.142-1.125.568c-.439 1.185 1.185 3.875 2.145 4.954a4.18 4.18 0 0 0 3.365 1.54M2.74 14.873c0 .654.531 1.185 1.186 1.185h2.192a.32.32 0 0 1 .225.094a.3.3 0 0 1 .071.237l-.794 5.522a1.6 1.6 0 0 0 .427 1.327c.349.339.817.526 1.303.522h8.177a1.85 1.85 0 0 0 1.303-.521c.356-.345.527-.837.462-1.328l-.794-5.522a.3.3 0 0 1 .071-.237a.32.32 0 0 1 .226-.094h2.488a1.185 1.185 0 1 0 0-2.37H3.878a1.185 1.185 0 0 0-1.137 1.185"/>
+        </svg>
+    </div>`;
+        templateExtraButtons.prepend(templateHtml);
+        CarrotDebug.ui('🐰 Re-primed #message_template with Baby Bunny button');
+    }
+
     const allMessages = $("#chat .mes");
     CarrotDebug.ui(`🐰 Found ${allMessages.length} existing messages to process`);
 
@@ -4116,7 +4147,12 @@ function add_baby_bunny_buttons_to_all_existing_messages() {
 function remove_all_baby_bunny_buttons() {
     CarrotDebug.ui('🐰 Removing all Baby Bunny buttons...');
 
-    const buttons = $(`.${baby_bunny_button_class}`);
+    // Scope removal to #chat only. #message_template is ST's live, cached template
+    // node (not an inert <template>) — a document-wide selector would strip the
+    // button out of it too, and nothing ever re-primes it, so every message cloned
+    // from the template afterward (chat switches, reloads) would permanently lose
+    // the button until a full page reload.
+    const buttons = $(`#chat .${baby_bunny_button_class}`);
     const count = buttons.length;
     buttons.remove();
 

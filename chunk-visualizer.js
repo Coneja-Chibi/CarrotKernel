@@ -863,6 +863,37 @@ function bindChunkVisualizerEvents() {
         renderChunks(modifiedChunks, getSearchTerm());
     });
 
+    // Add Chunk functionality
+    $('#carrot-rag-add-chunk').off('click').on('click', function() {
+        // Create a new chunk with template structure
+        const newHash = `chunk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const newChunk = {
+            text: '',
+            comment: 'New Chunk',
+            section: 'Custom Section',
+            topic: null,
+            tags: [],
+            keywords: [],
+            systemKeywords: [],
+            defaultSystemKeywords: [],
+            keywordGroups: [],
+            defaultKeywordGroups: [],
+            keywordRegex: [],
+            defaultKeywordRegex: [],
+            customKeywords: [],
+            customRegex: [],
+            disabledKeywords: [],
+            customWeights: {},
+            index: Object.keys(modifiedChunks).length,
+            _editing: true, // Open by default
+        };
+
+        modifiedChunks[newHash] = newChunk;
+        hasUnsavedChanges = true;
+        toastr.success('New chunk created! Remember to save when done.');
+        renderChunks(modifiedChunks, getSearchTerm());
+    });
+
     // Toggle chunk expansion
     $container.off('click', '.carrot-chunk-toggle-drawer').on('click', '.carrot-chunk-toggle-drawer', function() {
         const hash = $(this).data('hash');
@@ -1037,6 +1068,66 @@ function bindChunkVisualizerEvents() {
             const link = chunk.chunkLinks.find(l => l.targetHash === targetHash);
             if (link) link.mode = mode;
         });
+
+        hasUnsavedChanges = true;
+        renderChunks(modifiedChunks, getSearchTerm());
+    });
+
+    // System keyword toggle (enable/disable a detected keyword)
+    $container.off('change', '.carrot-system-keyword-toggle').on('change', '.carrot-system-keyword-toggle', function() {
+        const hash = $(this).data('hash');
+        const keyword = $(this).data('keyword');
+        const chunk = modifiedChunks[hash];
+        if (!chunk) return;
+
+        const normalized = normalizeKeywordClient(keyword);
+        chunk.disabledKeywords = ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient);
+
+        if (this.checked) {
+            chunk.disabledKeywords = chunk.disabledKeywords.filter(value => value !== normalized);
+        } else if (!chunk.disabledKeywords.includes(normalized)) {
+            chunk.disabledKeywords.push(normalized);
+        }
+        initializeChunkKeywordMetadata(chunk);
+        hasUnsavedChanges = true;
+        renderChunks(modifiedChunks, getSearchTerm());
+    });
+
+    // Keyword weight input
+    $container.off('change', '.carrot-keyword-weight-input').on('change', '.carrot-keyword-weight-input', function() {
+        const hash = $(this).data('hash');
+        const keyword = $(this).data('keyword');
+        const chunk = modifiedChunks[hash];
+        if (!chunk) return;
+
+        const newWeight = parseInt($(this).val(), 10);
+        const normalized = normalizeKeywordClient(keyword);
+        const defaultPriority = fullsheetAPI.getKeywordPriority ? fullsheetAPI.getKeywordPriority(keyword) : 20;
+
+        if (!chunk.customWeights) {
+            chunk.customWeights = {};
+        }
+
+        // Only store if different from default
+        if (newWeight !== defaultPriority && !isNaN(newWeight)) {
+            chunk.customWeights[normalized] = newWeight;
+        } else {
+            delete chunk.customWeights[normalized];
+        }
+
+        hasUnsavedChanges = true;
+        renderChunks(modifiedChunks, getSearchTerm());
+    });
+
+    // Reset weight to default
+    $container.off('click', '.carrot-reset-weight-btn').on('click', '.carrot-reset-weight-btn', function() {
+        const hash = $(this).data('hash');
+        const keyword = $(this).data('keyword');
+        const chunk = modifiedChunks[hash];
+        if (!chunk || !chunk.customWeights) return;
+
+        const normalized = normalizeKeywordClient(keyword);
+        delete chunk.customWeights[normalized];
 
         hasUnsavedChanges = true;
         renderChunks(modifiedChunks, getSearchTerm());

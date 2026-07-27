@@ -380,6 +380,9 @@ export class CarrotTemplatePromptEditInterface {
             // Get actual functional CarrotKernel macros - use direct reference since we're in the same file
             if (CarrotTemplateManager && CarrotTemplateManager.macroProcessors) {
                 Object.keys(CarrotTemplateManager.macroProcessors).forEach(macro => {
+                    // Helper method for the *_OPTIONS processors, not a standalone
+                    // macro — don't surface it as a bogus {{getBunnyMoPackOptions}} card.
+                    if (macro === 'getBunnyMoPackOptions') return;
                     priorityMacros.push(macro);
                 });
             } else {
@@ -872,6 +875,9 @@ Most common categories:<br/>
         // Get ALL functional macros from CarrotTemplateManager (direct reference)
         if (CarrotTemplateManager && CarrotTemplateManager.macroProcessors) {
             Object.keys(CarrotTemplateManager.macroProcessors).forEach(macro => {
+                // Helper method for the *_OPTIONS processors, not a standalone
+                // macro — don't surface it as a bogus {{getBunnyMoPackOptions}} card.
+                if (macro === 'getBunnyMoPackOptions') return;
                 allMacros.push(macro);
             });
         }
@@ -929,9 +935,11 @@ Most common categories:<br/>
         }
     }
     
-    previewMacro(macro) {
-        // Get the current value from our macro processing system
-        const processedContent = CarrotTemplateManager.processMacros(`{{${macro.name}}}`);
+    async previewMacro(macro) {
+        // Get the current value from our macro processing system. processMacros is
+        // async (it awaits each processor internally), so this must be awaited too —
+        // otherwise the alert renders the literal text "[object Promise]".
+        const processedContent = await CarrotTemplateManager.processMacros(`{{${macro.name}}}`);
         alert(`Macro Preview: ${macro.name}\n\nOutput:\n${processedContent}`);
     }
     
@@ -1404,15 +1412,17 @@ Most common categories:<br/>
         return variables;
     }
     
-    preview_current_template() {
+    async preview_current_template() {
         const content = this.$prompt.val();
         if (!content) {
             toastr.warning('No content to preview');
             return;
         }
-        
-        // Use CarrotKernel's real macro processing system
-        let preview = CarrotTemplateManager.processMacros(content);
+
+        // Use CarrotKernel's real macro processing system. processMacros is async
+        // (it awaits each processor internally), so this must be awaited too —
+        // otherwise the popup renders the literal text "[object Promise]".
+        let preview = await CarrotTemplateManager.processMacros(content);
         
         // Show preview in CarrotKernel popup
         const previewHtml = `
