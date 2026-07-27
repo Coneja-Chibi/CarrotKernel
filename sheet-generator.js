@@ -5,7 +5,7 @@
 
 import { CarrotDebug } from './debugger.js';
 import { saveSettingsDebounced } from '../../../../script.js';
-import { extension_settings, writeExtensionField } from '../../../extensions.js';
+import { extension_settings } from '../../../extensions.js';
 import { loadWorldInfo } from '../../../world-info.js';
 import {
     scannedCharacters,
@@ -47,7 +47,7 @@ async function generateFullSheet(characterName, charData) {
             tags: charData.tags
         };
 
-        return await CarrotTemplateManager.processTemplate(currentTemplate.content, templateData);
+        return await CarrotTemplateManager.processTemplate(currentTemplate, templateData);
     }
     
     // Fallback to default format
@@ -77,7 +77,7 @@ async function generateTagSheet(characterName, charData) {
             tags: charData.tags
         };
 
-        return await CarrotTemplateManager.processTemplate(currentTemplate.content, templateData);
+        return await CarrotTemplateManager.processTemplate(currentTemplate, templateData);
     }
     
     // Fallback to BunnymoTags format
@@ -161,7 +161,7 @@ async function generateQuickSheet(characterName, charData) {
             tags: charData.tags
         };
 
-        return await CarrotTemplateManager.processTemplate(currentTemplate.content, templateData);
+        return await CarrotTemplateManager.processTemplate(currentTemplate, templateData);
     }
     
     // Fallback to default format
@@ -850,14 +850,13 @@ const CarrotTemplateManager = {
 
     saveSettings(immediate = false) {
         if (immediate) {
-            // Force immediate save for critical operations like template saving
-            // First ensure the entire extension settings object is saved
+            // Force immediate save for critical operations like template saving.
+            // writeExtensionField is for per-character data (it looks up
+            // context.characters[characterId]) — 'CarrotKernel' is never a valid
+            // character id, so it was always a silent no-op. Templates are global
+            // extension settings; saveSettingsDebounced() is the real persistence.
             if (typeof saveSettingsDebounced === 'function') {
                 saveSettingsDebounced();
-            }
-            // Also try to force immediate write
-            if (typeof writeExtensionField === 'function') {
-                writeExtensionField(extensionName, 'templates', extension_settings[extensionName]?.templates || {});
             }
         } else {
             saveSettingsDebounced();
@@ -1130,13 +1129,13 @@ const CarrotTemplateManager = {
 
             // Individual pack macros - DERE
             'DERE_OPTIONS': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('DERE', 'tags');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('DERE', 'tags');
                 if (options.length === 0) return 'No DERE options found in selected lorebooks';
                 return `**DERE Pack Options:**\n${options.map(tag => `- ${tag}`).join('\n')}`;
             },
 
             'DERE_OPTIONS_DETAILED': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('DERE', 'tags+content');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('DERE', 'tags+content');
                 if (options.length === 0) return 'No DERE options found in selected lorebooks';
                 let output = '**DERE Pack Options (with descriptions):**\n\n';
                 options.forEach(opt => {
@@ -1147,13 +1146,13 @@ const CarrotTemplateManager = {
 
             // MBTI Pack
             'MBTI_OPTIONS': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('MBTI', 'tags');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('MBTI', 'tags');
                 if (options.length === 0) return 'No MBTI options found in selected lorebooks';
                 return `**MBTI Pack Options:**\n${options.map(tag => `- ${tag}`).join('\n')}`;
             },
 
             'MBTI_OPTIONS_DETAILED': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('MBTI', 'tags+content');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('MBTI', 'tags+content');
                 if (options.length === 0) return 'No MBTI options found in selected lorebooks';
                 let output = '**MBTI Pack Options (with descriptions):**\n\n';
                 options.forEach(opt => {
@@ -1164,13 +1163,13 @@ const CarrotTemplateManager = {
 
             // TRAIT Pack
             'TRAIT_OPTIONS': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('TRAIT', 'tags');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('TRAIT', 'tags');
                 if (options.length === 0) return 'No TRAIT options found in selected lorebooks';
                 return `**TRAIT Pack Options:**\n${options.map(tag => `- ${tag}`).join('\n')}`;
             },
 
             'TRAIT_OPTIONS_DETAILED': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('TRAIT', 'tags+content');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('TRAIT', 'tags+content');
                 if (options.length === 0) return 'No TRAIT options found in selected lorebooks';
                 let output = '**TRAIT Pack Options (with descriptions):**\n\n';
                 options.forEach(opt => {
@@ -1181,13 +1180,13 @@ const CarrotTemplateManager = {
 
             // LINGUISTICS Pack
             'LINGUISTICS_OPTIONS': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('LINGUISTICS', 'tags');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('LINGUISTICS', 'tags');
                 if (options.length === 0) return 'No LINGUISTICS options found in selected lorebooks';
                 return `**LINGUISTICS Pack Options:**\n${options.map(tag => `- ${tag}`).join('\n')}`;
             },
 
             'LINGUISTICS_OPTIONS_DETAILED': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('LINGUISTICS', 'tags+content');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('LINGUISTICS', 'tags+content');
                 if (options.length === 0) return 'No LINGUISTICS options found in selected lorebooks';
                 let output = '**LINGUISTICS Pack Options (with descriptions):**\n\n';
                 options.forEach(opt => {
@@ -1198,13 +1197,13 @@ const CarrotTemplateManager = {
 
             // SPECIES Pack
             'SPECIES_OPTIONS': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('SPECIES', 'tags');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('SPECIES', 'tags');
                 if (options.length === 0) return 'No SPECIES options found in selected lorebooks';
                 return `**SPECIES Pack Options:**\n${options.map(tag => `- ${tag}`).join('\n')}`;
             },
 
             'SPECIES_OPTIONS_DETAILED': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('SPECIES', 'tags+content');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('SPECIES', 'tags+content');
                 if (options.length === 0) return 'No SPECIES options found in selected lorebooks';
                 let output = '**SPECIES Pack Options (with descriptions):**\n\n';
                 options.forEach(opt => {
@@ -1215,13 +1214,13 @@ const CarrotTemplateManager = {
 
             // GENRE Pack
             'GENRE_OPTIONS': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('GENRE', 'tags');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('GENRE', 'tags');
                 if (options.length === 0) return 'No GENRE options found in selected lorebooks';
                 return `**GENRE Pack Options:**\n${options.map(tag => `- ${tag}`).join('\n')}`;
             },
 
             'GENRE_OPTIONS_DETAILED': async () => {
-                const options = await CarrotTemplateManager.macroProcessors['BUNNYMO_PACK_TAGS'].getBunnyMoPackOptions('GENRE', 'tags+content');
+                const options = await CarrotTemplateManager.macroProcessors.getBunnyMoPackOptions('GENRE', 'tags+content');
                 if (options.length === 0) return 'No GENRE options found in selected lorebooks';
                 let output = '**GENRE Pack Options (with descriptions):**\n\n';
                 options.forEach(opt => {
@@ -1484,6 +1483,11 @@ ${stats.totalCharacters === 0 ? '⚠️ No characters found - scan lorebooks fir
         // Replace each macro with processed data
         // CRITICAL: Await all processors since some are async
         for (const [macro, processor] of Object.entries(this.macroProcessors)) {
+            // getBunnyMoPackOptions is a helper method used by the *_OPTIONS
+            // processors above (called with pack-prefix/detail-level args), not a
+            // standalone template macro — skip it here so it isn't surfaced as a
+            // bogus {{getBunnyMoPackOptions}} macro card.
+            if (macro === 'getBunnyMoPackOptions') continue;
             const placeholder = `{{${macro}}}`;
             if (processedContent.includes(placeholder)) {
                 const replacement = await processor();  // ✅ FIXED: Await processor

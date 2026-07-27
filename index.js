@@ -1,4 +1,4 @@
-import { eventSource, event_types, chat, saveSettingsDebounced, chat_metadata, addOneMessage, this_chid, characters, generateQuietPrompt, animation_duration, setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from '../../../../script.js';
+import { eventSource, event_types, chat, saveSettingsDebounced, chat_metadata, addOneMessage, this_chid, characters, generateQuietPrompt, animation_duration, setExtensionPrompt, extension_prompt_types, extension_prompt_roles, messageFormatting, saveChatConditional, saveChatDebounced } from '../../../../script.js';
 import { getTokenCountAsync } from '../../../../scripts/tokenizers.js';
 import { extension_settings, getContext, writeExtensionField, saveMetadataDebounced } from '../../../extensions.js';
 import { loadWorldInfo, world_names, createNewWorldInfo, createWorldInfoEntry, saveWorldInfo, updateWorldInfoList, selected_world_info, world_info, METADATA_KEY, parseRegexFromString } from '../../../world-info.js';
@@ -38,7 +38,7 @@ import {
     clearPendingThinkingBlockData,
     EXTENSION_NAME
 } from './carrot-state.js';
-import { renderAsCards, loadCarrotCardStyles, attachExternalCardsToMessage, ensureBunnyMoAnimations, createExternalCardContainer, createTabbedCharacterCard, createCharacterCard } from './card-renderer.js';
+import { renderAsCards, loadCarrotCardStyles, attachExternalCardsToMessage, ensureBunnyMoAnimations, createExternalCardContainer, createTabbedCharacterCard, createCharacterCard, initializeCardRenderer } from './card-renderer.js';
 import { initializeUIUpdates, updateStatusPanels } from './ui-updates.js';
 import { initializeTutorials, openSystemTutorial, openRepositoryTutorial, openInjectionTutorial, openTemplateEditorTutorial, startTutorial, closeTutorial } from './tutorials.js';
 import { checkForCompletedSheets, initialize_baby_bunny_message_button, add_baby_bunny_button_to_message, add_baby_bunny_buttons_to_all_existing_messages, remove_all_baby_bunny_buttons, showTutorialBabyBunnyPopup, closeBabyBunnyTutorial, baby_bunny_button_class } from './baby-bunny-mode.js';
@@ -99,6 +99,9 @@ async function loadFullsheetRAG() {
                 CarrotDebug.error('updateChunksInLibrary not implemented in fullsheet-rag.js');
                 return Promise.resolve();
             }),
+            apiInsertVectorItems: module.apiInsertVectorItems || (() => Promise.resolve()),
+            deleteEntireCollection: module.deleteEntireCollection || (() => Promise.resolve()),
+            purgeOrphanedVectors: module.purgeOrphanedVectors || (() => Promise.resolve()),
         };
         return fullsheetAPI;
     } catch (error) {
@@ -364,8 +367,17 @@ async function showCopyContextPopup(collectionId, sourceContext) {
             $(this).closest('.copy-context-option').css('border-color', 'var(--SmartThemeQuoteColor, #10b981)');
         });
 
+        // ESC key to cancel
+        const handleCopyContextEscape = (e) => {
+            if (e.key === 'Escape') {
+                popup.find('#copy-context-cancel').click();
+            }
+        };
+        $(document).on('keydown', handleCopyContextEscape);
+
         // Cancel button
         popup.find('#copy-context-cancel').on('click', () => {
+            $(document).off('keydown', handleCopyContextEscape);
             $overlay.removeClass('active');
             setTimeout(() => {
                 $overlay.hide().empty();
@@ -380,18 +392,12 @@ async function showCopyContextPopup(collectionId, sourceContext) {
                 toastr.warning('Please select a destination storage level');
                 return;
             }
+            $(document).off('keydown', handleCopyContextEscape);
             $overlay.removeClass('active');
             setTimeout(() => {
                 $overlay.hide().empty();
             }, 300);
             resolve(selectedLevel);
-        });
-
-        // ESC key to cancel
-        $(document).one('keydown', (e) => {
-            if (e.key === 'Escape') {
-                popup.find('#copy-context-cancel').click();
-            }
         });
     });
 }
@@ -1043,9 +1049,7 @@ export async function wrapLorebookEntries(lorebookName) {
         toastr.success(`Wrapped ${wrappedCount} entries in ${lorebookName}`);
 
         // Reload worldbook list to reflect changes
-        if (typeof loadWorldInfoList === 'function') {
-            loadWorldInfoList();
-        }
+        await updateWorldInfoList();
 
         return true;
     } catch (error) {
@@ -1128,9 +1132,7 @@ export async function unwrapLorebookEntries(lorebookName) {
         toastr.success(`Unwrapped ${unwrappedCount} entries in ${lorebookName}`);
 
         // Reload worldbook list to reflect changes
-        if (typeof loadWorldInfoList === 'function') {
-            loadWorldInfoList();
-        }
+        await updateWorldInfoList();
 
         return true;
     } catch (error) {
@@ -2306,9 +2308,7 @@ function displayCharacterData(injectedCharacters) {
                         }
                         
                         // Save the chat to persist the data
-                        if (typeof saveChatDebounced === 'function') {
-                            saveChatDebounced();
-                        }
+                        saveChatDebounced();
                         
                         CarrotDebug.ui('💾 PERSISTENCE: Character data saved to message.extra', {
                             messageId: messageId,
@@ -2979,7 +2979,7 @@ async function addPersistentTagsToMessage(messageId) {
 
     try {
         // Find the message in chat array
-        const message = chat.find(msg => msg.index === messageId);
+        const message = chat[messageId];
         if (!message || message.is_user) {
             CarrotDebug.inject('❌ Message not found or is user message', {
                 messageId: messageId,
@@ -3040,7 +3040,13 @@ function generatePersistentTagsBlock(characterNames) {
     let content = '<BunnyMoTags>\n';
     
     characterNames.forEach(charName => {
-        const charData = scannedCharacters.get(charName);
+        let charData = null;
+        for (const [key, value] of scannedCharacters) {
+            if (key.endsWith(`::${charName}`)) {
+                charData = value;
+                break;
+            }
+        }
         if (charData && charData.tags) {
             content += `${charName}:\n`;
             
@@ -4530,23 +4536,18 @@ async function executeInstall(path, filename) {
         const entries = data.entries || [];
         
         // Step 3: Install
+        // Delegate to installPackNative(), which uses ST's actual /api/worldinfo/import
+        // contract (a multipart file upload) instead of a raw JSON POST that endpoint rejects.
         progressTextEl.textContent = 'Installing to SillyTavern lorebooks...';
         progressFillEl.style.width = '75%';
-        
+
         const cleanName = filename.replace('.json', '');
-        const saveResponse = await fetch('/api/worldinfo/import', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                name: cleanName,
-                data: data 
-            })
-        });
-        
-        if (!saveResponse.ok) {
-            throw new Error(`Failed to install lorebook: ${saveResponse.status}`);
+        const installed = await installPackNative(downloadUrl, filename);
+
+        if (!installed) {
+            throw new Error('Failed to install lorebook');
         }
-        
+
         // Step 4: Track installation with SHA
         const currentItem = githubBrowser.currentItems.find(item => item.path === path);
         if (currentItem) {
@@ -4594,10 +4595,8 @@ async function executeInstall(path, filename) {
         }, 500);
         
         // Refresh ST's lorebook list
-        if (typeof loadWorldInfoList === 'function') {
-            loadWorldInfoList();
-        }
-        
+        await updateWorldInfoList();
+
     } catch (error) {
         CarrotDebug.error('Installation error:', error);
         
@@ -4635,7 +4634,7 @@ async function executeInstall(path, filename) {
 // Close installation dialog
 }
 function closeInstallDialog() {
-    closePopup();
+    closeCarrotPopup();
     // Return to the browser
     showPackManagerInterface();
 }
@@ -7211,6 +7210,11 @@ function registerEventListeners() {
         initializeSheetGenerator(findCharacterByName);
         CarrotDebug.init('Sheet generator initialized with findCharacterByName');
 
+        // Initialize card renderer with findCharacterByName/refreshTabContent —
+        // same circular-dependency fix as sheet generator above.
+        initializeCardRenderer(findCharacterByName, refreshTabContent);
+        CarrotDebug.init('Card renderer initialized with dependencies');
+
         // Load settings HTML - silent initialization
         const settingsHtml = await $.get(`scripts/extensions/third-party/${extensionName}/settings.html`);
         $('#extensions_settings').append(settingsHtml);
@@ -8145,14 +8149,17 @@ function bindSettingsEvents() {
                 }
             }
 
-            // Update tracked provider to current
-            const current = getCurrentProvider();
-            ragState.lastEmbeddingSource = current.source;
-            ragState.lastEmbeddingModel = current.model;
-            await persistRagSettings();
+            // Only mark the provider as up to date if every collection actually re-vectorized;
+            // otherwise the warning must keep showing since some collections are still on the old provider.
+            if (failCount === 0) {
+                const current = getCurrentProvider();
+                ragState.lastEmbeddingSource = current.source;
+                ragState.lastEmbeddingModel = current.model;
+                await persistRagSettings();
 
-            // Hide warning
-            $('#carrot_rag_provider_warning').slideUp(200);
+                // Hide warning
+                $('#carrot_rag_provider_warning').slideUp(200);
+            }
 
             if (successCount > 0) {
                 toastr.success(`Re-vectorized ${successCount} collection(s) successfully`);
@@ -8429,261 +8436,8 @@ function bindSettingsEvents() {
             return { totalChunks, totalSize, avgSize, sectionCount };
         },
     };
-
-        $('.carrot-system-keyword-toggle').on('change', function() {
-            const hash = $(this).data('hash');
-            const keyword = $(this).data('keyword');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) {
-                return;
-            }
-
-            const normalized = normalizeKeywordClient(keyword);
-            chunk.disabledKeywords = ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient);
-
-            if (this.checked) {
-                chunk.disabledKeywords = chunk.disabledKeywords.filter(value => value !== normalized);
-            } else if (!chunk.disabledKeywords.includes(normalized)) {
-                chunk.disabledKeywords.push(normalized);
-            }
-            updateChunkKeywordCache(chunk);
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
-
-        // Keyword weight input handler
-        $('.carrot-keyword-weight-input').on('change', function() {
-            const hash = $(this).data('hash');
-            const keyword = $(this).data('keyword');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) {
-                return;
-            }
-
-            const newWeight = parseInt($(this).val(), 10);
-            const normalized = normalizeKeywordClient(keyword);
-            const defaultPriority = fullsheetAPI.getKeywordPriority ? fullsheetAPI.getKeywordPriority(keyword) : 20;
-
-            if (!chunk.customWeights) {
-                chunk.customWeights = {};
-            }
-
-            // Only store if different from default
-            if (newWeight !== defaultPriority && !isNaN(newWeight)) {
-                chunk.customWeights[normalized] = newWeight;
-            } else {
-                delete chunk.customWeights[normalized];
-            }
-
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
-
-        // Reset weight button handler
-        $('.carrot-reset-weight-btn').on('click', function() {
-            const hash = $(this).data('hash');
-            const keyword = $(this).data('keyword');
-            const chunk = modifiedChunks[hash];
-            if (!chunk || !chunk.customWeights) {
-                return;
-            }
-
-            const normalized = normalizeKeywordClient(keyword);
-            delete chunk.customWeights[normalized];
-
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
-
-        // Keyword weight display click handler
-        // Keyword toggle button handler (enable/disable)
-        $('.carrot-keyword-toggle-btn').on('click', function() {
-            const hash = $(this).data('hash');
-            const keyword = $(this).data('keyword');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) {
-                return;
-            }
-
-            const normalized = normalizeKeywordClient(keyword);
-            chunk.disabledKeywords = ensureArrayValue(chunk.disabledKeywords).map(normalizeKeywordClient);
-
-            const isDisabled = chunk.disabledKeywords.includes(normalized);
-            if (isDisabled) {
-                chunk.disabledKeywords = chunk.disabledKeywords.filter(value => value !== normalized);
-            } else {
-                chunk.disabledKeywords.push(normalized);
-            }
-
-            updateChunkKeywordCache(chunk);
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
-
-        // Show all keywords button handler
-        $('.carrot-show-all-keywords').on('click', function() {
-            const hash = $(this).data('hash');
-            const hiddenDiv = $(`#hidden-keywords-${hash}`);
-            const $btn = $(this);
-
-            if (hiddenDiv.is(':visible')) {
-                hiddenDiv.slideUp(200);
-                $btn.html('<i class="fa-solid fa-chevron-down"></i> Show more keywords');
-            } else {
-                hiddenDiv.slideDown(200);
-                $btn.html('<i class="fa-solid fa-chevron-up"></i> Show fewer keywords');
-            }
-        });
-
-        // Add linked section button handler
-        $('.carrot-add-linked-section').on('click', function() {
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) {
-                return;
-            }
-
-            // Get all sections from all chunks for selection
-            const allSections = Object.values(modifiedChunks)
-                .map(c => c.section)
-                .filter(s => s && s !== chunk.section);
-            const uniqueSections = [...new Set(allSections)].sort();
-
-            if (uniqueSections.length === 0) {
-                toastr.info('No other sections available to link');
-                return;
-            }
-
-            const sectionName = prompt(
-                `Add linked section:\n\nAvailable sections:\n${uniqueSections.slice(0, 10).join('\n')}${uniqueSections.length > 10 ? '\n...' : ''}\n\nEnter section name:`,
-                uniqueSections[0]
-            );
-
-            if (!sectionName || sectionName.trim() === '') return;
-
-            if (!chunk.linkedSections) {
-                chunk.linkedSections = [];
-            }
-
-            if (!chunk.linkedSections.includes(sectionName.trim())) {
-                chunk.linkedSections.push(sectionName.trim());
-                renderChunks(modifiedChunks, getSearchTerm());
-            }
-        });
-
-        // Remove linked section button handler
-        $('.carrot-remove-linked-section').on('click', function() {
-            const hash = $(this).data('hash');
-            const section = $(this).data('section');
-            const chunk = modifiedChunks[hash];
-            if (!chunk || !chunk.linkedSections) {
-                return;
-            }
-
-            chunk.linkedSections = chunk.linkedSections.filter(s => s !== section);
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
-
-        // Chunk text edit handler
-        $('.carrot-chunk-text-edit').on('input', function() {
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) {
-                return;
-            }
-            chunk.text = $(this).val();
-        });
-
-        // Custom keywords edit handler
-        $('.carrot-custom-keywords').on('input', function() {
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) {
-                return;
-            }
-            const value = $(this).val();
-            chunk.customKeywords = value.split(/[,\n]+/).map(k => k.trim()).filter(Boolean);
-            updateChunkKeywordCache(chunk);
-        });
-
-        // Custom regex edit handler
-        $('.carrot-custom-regex').on('input', function() {
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) {
-                return;
-            }
-            chunk.customRegex = parseRegexList($(this).val());
-        });
-
-        // Reset keywords button handler
-        $('.carrot-reset-keywords').on('click', function() {
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) {
-                return;
-            }
-            chunk.disabledKeywords = [];
-            chunk.customWeights = {};
-            updateChunkKeywordCache(chunk);
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
-
-        // Inclusion group input handler
-        $('.carrot-inclusion-group-input').on('input', function() {
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) return;
-            chunk.inclusionGroup = $(this).val().trim();
-            renderChunks(modifiedChunks, getSearchTerm());
-        });
-
-        // Inclusion prioritize checkbox handler
-        $('.carrot-inclusion-prioritize').on('change', function() {
-            const hash = $(this).data('hash');
-            const chunk = modifiedChunks[hash];
-            if (!chunk) return;
-            chunk.inclusionPrioritize = this.checked;
-        });
     }
-
-    // Chunk link checkbox handler (delegated event)
-    $(document).on('change', '.carrot-chunk-link-checkbox', function() {
-        const hash = $(this).data('hash');
-        const targetHash = $(this).data('target');
-        const chunk = modifiedChunks[hash];
-        if (!chunk) return;
-
-        if (!chunk.chunkLinks) chunk.chunkLinks = [];
-
-        if (this.checked) {
-            // Get selected mode from radio buttons
-            const mode = $(`.carrot-link-mode-radio[data-hash="${hash}"]:checked`).val() || 'soft';
-
-            // Add link if not already present
-            if (!chunk.chunkLinks.some(link => link.targetHash === targetHash)) {
-                chunk.chunkLinks.push({ targetHash, mode });
-            }
-        } else {
-            // Remove link
-            chunk.chunkLinks = chunk.chunkLinks.filter(link => link.targetHash !== targetHash);
-        }
-
-        hasUnsavedChanges = true;
-        renderChunks(modifiedChunks, getSearchTerm());
-    });
-
-    // Link mode radio button handler (delegated event)
-    $(document).on('change', '.carrot-link-mode-radio', function() {
-        const hash = $(this).data('hash');
-        const newMode = $(this).val();
-        const chunk = modifiedChunks[hash];
-        if (!chunk || !chunk.chunkLinks) return;
-
-        // Update mode for all existing links of this chunk
-        chunk.chunkLinks.forEach(link => {
-            link.mode = newMode;
-        });
-
-        hasUnsavedChanges = true;
-        renderChunks(modifiedChunks, getSearchTerm());
-    });
+    // end bindActualEvents()
 
     // Inline drawer toggle for linked chunks section - Let ST's native handler manage this
     // No custom handler needed since we're using ST's standard inline-drawer structure
@@ -8840,37 +8594,9 @@ function bindSettingsEvents() {
         }
     });
 
-    // Add Chunk functionality
-    $('#carrot-rag-add-chunk').on('click', function() {
-        // Create a new chunk with template structure
-        const newHash = `chunk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        const newChunk = {
-            text: '',
-            comment: 'New Chunk',
-            section: 'Custom Section',
-            topic: null,
-            tags: [],
-            keywords: [],
-            systemKeywords: [],
-            defaultSystemKeywords: [],
-            keywordGroups: [],
-            defaultKeywordGroups: [],
-            keywordRegex: [],
-            defaultKeywordRegex: [],
-            customKeywords: [],
-            customRegex: [],
-            disabledKeywords: [],
-            customWeights: {},
-            index: Object.keys(modifiedChunks).length,
-            _editing: true, // Open by default
-        };
+    // Add Chunk functionality moved to chunk-visualizer.js's bindChunkVisualizerEvents(),
+    // where modifiedChunks/renderChunks/getSearchTerm are actually in scope.
 
-        modifiedChunks[newHash] = newChunk;
-        toastr.success('New chunk created! Remember to save when done.');
-        renderChunks(modifiedChunks, getSearchTerm());
-    });
-
-    
     // Helper for the viewer to get data for a specific level
     // FIXED: Now only returns the CURRENT character/chat's library, not ALL characters/chats
     function getFullLibraryForLevel(level) {
@@ -9469,6 +9195,8 @@ function bindSettingsEvents() {
         if (!window.CarrotPackManager) {
             CarrotDebug.error('❌ PACK MANAGER ERROR: window.CarrotPackManager not found!');
             $('#carrot-pack-status').html('<p>❌ Pack Manager not initialized. Please refresh the page.</p>');
+            packScanInProgress = false;
+            button.removeClass('clicked');
             return;
         }
 
@@ -9477,6 +9205,8 @@ function bindSettingsEvents() {
         if (typeof window.CarrotPackManager.scanRemotePacks !== 'function') {
             CarrotDebug.error('❌ PACK MANAGER ERROR: scanRemotePacks method not found!');
             $('#carrot-pack-status').html('<p>❌ Pack Manager scanRemotePacks method missing. Extension may be corrupted.</p>');
+            packScanInProgress = false;
+            button.removeClass('clicked');
             return;
         }
 
@@ -9663,12 +9393,15 @@ function bindSettingsEvents() {
         $('<style>.chat_lorebook_button { display: none !important; }</style>').appendTo('head');
     }
 
-    // Override "Link to World Info" dropdown option to use CarrotKernel connector
-    $(document).on('change', '#char-management-dropdown', function(e) {
-        const selectedValue = $(this).val();
-        if (selectedValue === 'default') return;
-
-        if (selectedValue === 'set_character_world') {
+    // Override "Link to World Info" dropdown option to use CarrotKernel connector.
+    // Match on the option's id, not its value — "Link to World Info" has no `value`
+    // attribute, so .val() falls back to the (now emoji-relabeled) option text and
+    // can never equal 'set_character_world'. Bind directly on the element (not
+    // delegated on document) so this fires alongside ST's own directly-bound handler
+    // rather than arriving late in the bubble phase.
+    $('#char-management-dropdown').on('change', function(e) {
+        const target = $(this.selectedOptions).attr('id');
+        if (target === 'set_character_world') {
             e.preventDefault();
             e.stopPropagation();
             CarrotLorebookConnector.open();
@@ -10124,7 +9857,7 @@ document.addEventListener('click', function(e) {
                 CarrotDebug.ui('Trying CarrotKernel.showPopup with proper parameters...');
                 try {
                     // Call showPopup with title and content parameters
-                    window.CarrotKernel.showCarrotPopup('WorldBook Tracker', '<div class="worldbook-tracker">Loading tracker...</div>');
+                    window.CarrotKernel.showPopup('WorldBook Tracker', '<div class="worldbook-tracker">Loading tracker...</div>');
                     CarrotDebug.ui('showPopup called successfully');
                 } catch (error) {
                     CarrotDebug.error('showPopup failed:', error);
@@ -10147,7 +9880,7 @@ document.addEventListener('click', function(e) {
                 CarrotDebug.ui('Trying to generate and show tracker HTML...');
                 try {
                     const trackerHTML = window.CarrotKernel.generateTrackerHTML();
-                    window.CarrotKernel.showCarrotPopup('WorldBook Tracker', trackerHTML);
+                    window.CarrotKernel.showPopup('WorldBook Tracker', trackerHTML);
                     CarrotDebug.ui('Tracker HTML generated and shown');
                 } catch (error) {
                     CarrotDebug.error('Tracker HTML generation failed:', error);

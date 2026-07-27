@@ -474,7 +474,7 @@ async function apiDeleteVectorHashes(collectionId, hashes) {
         throw new Error(`Failed to delete vectors from ${collectionId}. Status: ${response.status}. Message: ${errorText}`);
     }
 
-    return await response.json();
+    return true;
 }
 
 /**
@@ -498,7 +498,7 @@ async function apiDeleteCollection(collectionId) {
         throw new Error(`Failed to purge collection ${collectionId}. Status: ${response.status}. Message: ${errorText}`);
     }
 
-    return await response.json();
+    return true;
 }
 
 /**
@@ -523,6 +523,13 @@ async function updateChunksInLibrary(collectionId, chunks) {
 
     const chunksToRevectorize = [];
     const updatedHashes = [];
+
+    // Determine which chunks were deleted (present in library, absent from the submitted set)
+    // so they can be removed from the library and purged from the vector DB below.
+    const removedHashes = Object.keys(library[collectionId]).filter(hash => !(hash in chunks));
+    for (const hash of removedHashes) {
+        delete library[collectionId][hash];
+    }
 
     // Process each modified chunk
     for (const [hash, chunkData] of Object.entries(chunks)) {
@@ -568,6 +575,17 @@ async function updateChunksInLibrary(collectionId, chunks) {
     // Save updated library to extension_settings
     saveSettingsDebounced();
     CarrotDebug.ui(`✅ Updated ${updatedHashes.length} chunks in library`);
+
+    // Purge deleted chunks' vectors from the vector DB
+    if (removedHashes.length > 0) {
+        CarrotDebug.ui(`🗑️  Purging ${removedHashes.length} deleted chunks from vector DB...`);
+        try {
+            await purgeOrphanedVectors(collectionId, removedHashes.map(Number));
+        } catch (error) {
+            CarrotDebug.error('❌ Failed to purge deleted chunks:', error);
+            toastr.error(`Failed to purge deleted chunks: ${error.message}`);
+        }
+    }
 
     // Re-vectorize chunks with changed text
     if (chunksToRevectorize.length > 0) {
@@ -627,6 +645,7 @@ function getRAGSettings() {
         keywordFallback: ragState.keywordFallback ?? true,
         keywordFallbackPriority: ragState.keywordFallbackPriority ?? false,
         keywordFallbackLimit: ragState.keywordFallbackLimit ?? 2,
+        disabledCollections: ragState.disabledCollections ?? [],
     };
 }
 
@@ -2146,8 +2165,8 @@ function buildChunkText(section, topic, tags, body) {
  */
 function stripTagSynthesis(content) {
     // Check if TAG SYNTHESIS exclusion is enabled
-    const settings = getRAGSettings();
-    if (!settings.excludeTagSynthesis) {
+    const excludeTagSynthesis = extension_settings[extensionName]?.excludeTagSynthesis;
+    if (!excludeTagSynthesis) {
         return content; // Don't strip if setting is disabled
     }
 
@@ -2649,6 +2668,10 @@ function libraryEntryToChunk(hash, data, additional = {}) {
         customKeywords,
         customRegex,
         disabledKeywords,
+        disabled: data.disabled ?? false,
+        chunkLinks: ensureArray(data.chunkLinks),
+        inclusionGroup: data.inclusionGroup ?? '',
+        inclusionPrioritize: !!data.inclusionPrioritize,
         index: data.index ?? additional.index ?? 0,
     }, additional);
 }
@@ -3094,9 +3117,10 @@ async function queryRAG(characterName, queryText) {
             continue;
         }
 
-        // Filter to only activated collections (based on keywords/alwaysActive)
+        // Filter to only activated collections (based on keywords/alwaysActive),
+        // excluding any collection the user has explicitly disabled
         let collectionsInLibrary = Object.keys(library).filter(collectionId => {
-            return activatedCollections.has(collectionId);
+            return activatedCollections.has(collectionId) && !settings.disabledCollections?.includes(collectionId);
         });
         debugLog(`Checking ${libName} library:`, {
             hasLibrary: true,
@@ -3498,7 +3522,7 @@ async function injectRAGResults(characterName, results) {
                 headerParts.push('linked');
             }
 
-            const lines = ['### ' + headerParts.join(' � ')];
+            const lines = ['### ' + headerParts.join(' — ')];
 
             if (chunk.tags?.length) {
                 lines.push('Tags: ' + chunk.tags.join(', '));
@@ -3525,9 +3549,9 @@ async function injectRAGResults(characterName, results) {
             }
 
             lines.push(chunk.text.trim());
-            return lines.join('\\n');
+            return lines.join('\n');
         })
-        .join('\\n\\n');
+        .join('\n\n');
 
     setExtensionPrompt(
         RAG_PROMPT_TAG,
@@ -3645,7 +3669,7 @@ function addRAGButtonToMessage(messageId) {
     }
 
     // Get message data
-    const message = chat.find(msg => msg.index === messageId);
+    const message = chat[messageId];
     if (!message || !message.mes) {
         return;
     }
@@ -3817,7 +3841,7 @@ async function vectorizeFullsheetFromMessage(characterName, content) {
         // Step 2: Get existing hashes
         CarrotDebug.ui('\n🔍 STEP 2: Checking for existing chunks in vector DB...');
         const savedHashes = await apiGetSavedHashes(collectionId);
-        const savedHashSet = new Set(savedHashes.map(h => h.hash));
+        const savedHashSet = new Set(savedHashes);
         CarrotDebug.ui(`✅ STEP 2 COMPLETE: Found ${savedHashes.length} existing hashes`);
         if (savedHashes.length > 0) {
             CarrotDebug.ui(`   Existing hashes:`, Array.from(savedHashSet));
@@ -3858,7 +3882,8 @@ async function vectorizeFullsheetFromMessage(characterName, content) {
         chunks.forEach(chunk => {
             library[collectionId][chunk.hash] = {
                 text: chunk.text,
-                ...chunk.metadata
+                ...chunk.metadata,
+                chunkLinks: chunk.chunkLinks,
             };
         });
 
@@ -3894,12 +3919,13 @@ async function vectorizeFullsheetFromMessage(characterName, content) {
         CarrotDebug.ui('\n🏷️  STEP 6: Tracking embedding provider...');
         const vectorSettings = getVectorSettings();
         // ragState already declared above, just reuse it
+        const currentEmbeddingModel = getVectorsRequestBody({}).model || null;
         ragState.lastEmbeddingSource = vectorSettings.source;
-        ragState.lastEmbeddingModel = vectorSettings.model || null;
+        ragState.lastEmbeddingModel = currentEmbeddingModel;
         saveSettingsDebounced();
         CarrotDebug.ui(`✅ STEP 6 COMPLETE: Tracked embedding provider`);
         CarrotDebug.ui(`   Source: ${vectorSettings.source}`);
-        CarrotDebug.ui(`   Model: ${vectorSettings.model || 'default'}`);
+        CarrotDebug.ui(`   Model: ${currentEmbeddingModel || 'default'}`);
 
         CarrotDebug.ui('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         CarrotDebug.ui(`✅ VECTORIZATION SUCCESSFUL: ${characterName}`);
@@ -3964,9 +3990,11 @@ function removeAllRAGButtons() {
 function initializeRAG() {
     debugLog('Initializing CarrotKernel RAG system');
 
-    // Register RAG interceptor for generation events
-    eventSource.on(event_types.GENERATION_STARTED, carrotKernelRagInterceptor_CK);
-    debugLog('✅ RAG interceptor registered for GENERATION_STARTED');
+    // RAG interceptor is registered via manifest.json's generate_interceptor
+    // (carrotKernelRagInterceptor_CK), which supplies the correct (chat, contextSize,
+    // abort, type) signature. Do not also register it as a GENERATION_STARTED
+    // listener here — that event passes a different argument shape and would
+    // double-run the interceptor on every generation.
 
     // Hook into message events for button detection
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
@@ -4005,7 +4033,7 @@ function initializeRAG() {
  * @param {number} messageId - Message ID
  */
 async function autoVectorizeMessage(messageId) {
-    const message = chat.find(msg => msg.index === messageId);
+    const message = chat[messageId];
     if (!message || !message.mes || message.is_user) {
         return;
     }

@@ -4,7 +4,11 @@
 // Extracted from index.js for better modularity
 // =============================================================================
 
+import { saveSettingsDebounced } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
+import { escapeHtml } from '../../../utils.js';
+import { CarrotDebug } from './debugger.js';
+import { CarrotTemplateManager } from './sheet-generator.js';
 import { EXTENSION_NAME } from './carrot-state.js';
 import {
     currentRepoView,
@@ -31,6 +35,30 @@ export function initializeRepositoryManager(showPopupFn, closePopupFn, scanFn, u
     closeCarrotPopup = closePopupFn;
     scanSelectedLorebooks = scanFn;
     updateStatusPanels = updatePanelsFn;
+    bindRepositoryManagerEvents();
+}
+
+// Delegated click handlers for the repository browser, bound once on the persistent
+// popup container. Replaces inline onclick="...('${name}')" handlers, whose
+// interpolated values (repo/character names, tag categories/values) come from
+// parsed lorebook content and were previously escaped only for single quotes —
+// never for `"` or `<` — letting a crafted pack name/tag break out of the
+// attribute or inject markup.
+function bindRepositoryManagerEvents() {
+    const $container = $('#carrot-popup-container');
+
+    $container.off('click', '.carrot-repo-file-item[data-repo-item]').on('click', '.carrot-repo-file-item[data-repo-item]', function() {
+        selectRepository($(this).attr('data-repo'));
+    });
+    $container.off('dblclick', '.carrot-repo-file-item[data-repo-item]').on('dblclick', '.carrot-repo-file-item[data-repo-item]', function() {
+        navigateToRepository($(this).attr('data-repo'));
+    });
+    $container.off('click', '.carrot-repo-file-item[data-char-item]').on('click', '.carrot-repo-file-item[data-char-item]', function() {
+        navigateToCharacter($(this).attr('data-char-name'), $(this).attr('data-repo'));
+    });
+    $container.off('click', '.carrot-repo-breadcrumb-item[data-repo-nav]').on('click', '.carrot-repo-breadcrumb-item[data-repo-nav]', function() {
+        navigateToRepository($(this).attr('data-repo'));
+    });
 }
 
 // Repository manager main entry point
@@ -219,7 +247,7 @@ function renderRepositoryBreadcrumb() {
             </span>
             <i class="fa-solid fa-chevron-right carrot-repo-breadcrumb-sep"></i>
             <span class="carrot-repo-breadcrumb-item carrot-repo-breadcrumb-active">
-                ${selectedRepository}
+                ${escapeHtml(selectedRepository)}
             </span>
         `;
     } else if (currentRepoView === 'character') {
@@ -228,12 +256,12 @@ function renderRepositoryBreadcrumb() {
                 <i class="fa-solid fa-folder"></i> Repositories
             </span>
             <i class="fa-solid fa-chevron-right carrot-repo-breadcrumb-sep"></i>
-            <span class="carrot-repo-breadcrumb-item carrot-clickable" onclick="navigateToRepository('${selectedRepository}')">
-                ${selectedRepository}
+            <span class="carrot-repo-breadcrumb-item carrot-clickable" data-repo-nav data-repo="${escapeHtml(selectedRepository)}">
+                ${escapeHtml(selectedRepository)}
             </span>
             <i class="fa-solid fa-chevron-right carrot-repo-breadcrumb-sep"></i>
             <span class="carrot-repo-breadcrumb-item carrot-repo-breadcrumb-active">
-                ${selectedCharacter}
+                ${escapeHtml(selectedCharacter)}
             </span>
         `;
     }
@@ -267,7 +295,7 @@ function renderRepositoryPreview() {
         let characterListHTML = characters.slice(0, 10).map(c => {
             const tagCount = c.tags ? (c.tags instanceof Map ? c.tags.size : Object.keys(c.tags).length) : 0;
             const isActive = c.isActive ? '🟢 ' : '';
-            return `<li>${isActive}<strong>${c.name || 'Unknown'}</strong> - ${tagCount} tags</li>`;
+            return `<li>${isActive}<strong>${escapeHtml(c.name || 'Unknown')}</strong> - ${tagCount} tags</li>`;
         }).join('');
 
         if (characters.length > 10) {
@@ -276,7 +304,7 @@ function renderRepositoryPreview() {
 
         return `
             <div class="carrot-repo-preview-info">
-                <h4><i class="fa-solid fa-folder"></i> ${selectedRepository}</h4>
+                <h4><i class="fa-solid fa-folder"></i> ${escapeHtml(selectedRepository)}</h4>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px;">
                     <div>
                         <div style="font-size: 24px; font-weight: 600; color: var(--SmartThemeEmColor);">${characters.length}</div>
@@ -382,14 +410,13 @@ function renderRepositoryList() {
         const characters = Array.from(scannedCharacters.values()).filter(c => c.source === repoName);
         html += `
             <div class="carrot-repo-file-item carrot-clickable"
-                 onclick="CarrotKernel.selectRepository('${repoName.replace(/'/g, "\\'")}')"
-                 ondblclick="CarrotKernel.navigateToRepository('${repoName.replace(/'/g, "\\'")}')"
-                 data-repo="${repoName}">
+                 data-repo-item
+                 data-repo="${escapeHtml(repoName)}">
                 <div class="carrot-repo-file-icon">
                     <i class="fa-solid fa-folder"></i>
                 </div>
                 <div class="carrot-repo-file-info">
-                    <div class="carrot-repo-file-name">${repoName}</div>
+                    <div class="carrot-repo-file-name">${escapeHtml(repoName)}</div>
                     <div class="carrot-repo-file-meta">${characters.length} ${characters.length === 1 ? 'character' : 'characters'}</div>
                 </div>
             </div>
@@ -419,13 +446,13 @@ function renderCharacterList() {
         const tagCount = char.tags ? (char.tags instanceof Map ? char.tags.size : Object.keys(char.tags).length) : 0;
         const isActive = char.isActive;
         html += `
-            <div class="carrot-repo-file-item carrot-clickable" onclick="CarrotKernel.navigateToCharacter('${char.name.replace(/'/g, "\\'")}', '${selectedRepository.replace(/'/g, "\\'")}')">
+            <div class="carrot-repo-file-item carrot-clickable" data-char-item data-char-name="${escapeHtml(char.name || '')}" data-repo="${escapeHtml(selectedRepository)}">
                 <div class="carrot-repo-file-icon">
                     <i class="fa-solid fa-user"></i>
                 </div>
                 <div class="carrot-repo-file-info">
                     <div class="carrot-repo-file-name">
-                        ${isActive ? '<span class="carrot-repo-status-active">🟢</span> ' : ''}${char.name || 'Unknown'}
+                        ${isActive ? '<span class="carrot-repo-status-active">🟢</span> ' : ''}${escapeHtml(char.name || 'Unknown')}
                     </div>
                     <div class="carrot-repo-file-meta">${tagCount} ${tagCount === 1 ? 'tag' : 'tags'}</div>
                 </div>
@@ -453,7 +480,7 @@ function renderCharacterDetails() {
     // Character header with stats
     let html = `
         <div class="carrot-repo-summary">
-            <p><i class="fa-solid fa-user"></i> ${char.name || 'Unknown'} • ${tags.length} ${tags.length === 1 ? 'category' : 'categories'}</p>
+            <p><i class="fa-solid fa-user"></i> ${escapeHtml(char.name || 'Unknown')} • ${tags.length} ${tags.length === 1 ? 'category' : 'categories'}</p>
         </div>
         <div style="margin: 16px 0; padding: 16px; background: rgba(0,0,0,0.2); border-radius: 8px;">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
@@ -468,7 +495,7 @@ function renderCharacterDetails() {
             </div>
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
                 <div style="font-size: 11px; opacity: 0.7;">Source Repository</div>
-                <div style="font-size: 13px; font-weight: 500;">${char.source}</div>
+                <div style="font-size: 13px; font-weight: 500;">${escapeHtml(char.source || '')}</div>
             </div>
         </div>
     `;
@@ -484,12 +511,12 @@ function renderCharacterDetails() {
                     <i class="fa-solid fa-tag"></i>
                 </div>
                 <div class="carrot-repo-file-info">
-                    <div class="carrot-repo-file-name">${category}</div>
+                    <div class="carrot-repo-file-name">${escapeHtml(category)}</div>
                     <div class="carrot-repo-file-meta">${valueCount} ${valueCount === 1 ? 'tag' : 'tags'}</div>
                 </div>
             </div>
             <div style="padding: 8px 16px 16px 56px; display: flex; flex-wrap: wrap; gap: 6px;">
-                ${valuesArray.map(val => `<span style="display: inline-block; padding: 4px 10px; background: rgba(102, 126, 234, 0.2); border: 1px solid rgba(102, 126, 234, 0.4); border-radius: 12px; font-size: 12px; color: #a5b4fc;">${val}</span>`).join('')}
+                ${valuesArray.map(val => `<span style="display: inline-block; padding: 4px 10px; background: rgba(102, 126, 234, 0.2); border: 1px solid rgba(102, 126, 234, 0.4); border-radius: 12px; font-size: 12px; color: #a5b4fc;">${escapeHtml(String(val))}</span>`).join('')}
             </div>
         `;
     });
@@ -657,13 +684,13 @@ function showCharacterDetails(characterName) {
     const tags = char.tags instanceof Map ? Array.from(char.tags.entries()) : Object.entries(char.tags || {});
     let tagsHTML = '';
     tags.forEach(([key, value]) => {
-        tagsHTML += `<div class="carrot-tag-item"><strong>${key}:</strong> ${value}</div>`;
+        tagsHTML += `<div class="carrot-tag-item"><strong>${escapeHtml(key)}:</strong> ${escapeHtml(String(value))}</div>`;
     });
 
     const detailsHTML = `
         <div style="padding: 20px; max-width: 800px;">
-            <h2 style="margin-bottom: 16px;">🎭 ${characterName}</h2>
-            <p><strong>Source:</strong> ${char.source}</p>
+            <h2 style="margin-bottom: 16px;">🎭 ${escapeHtml(characterName)}</h2>
+            <p><strong>Source:</strong> ${escapeHtml(char.source || '')}</p>
             <h3 style="margin-top: 24px; margin-bottom: 12px;">Tags (${tags.length})</h3>
             <div style="display: grid; gap: 8px;">
                 ${tagsHTML}

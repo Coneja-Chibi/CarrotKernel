@@ -3,8 +3,9 @@
 // Manages BunnyMo pack installation, updates, and synchronization
 // =============================================================================
 
-import { saveSettingsDebounced } from '../../../../script.js';
+import { saveSettingsDebounced, getRequestHeaders } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
+import { updateWorldInfoList } from '../../../world-info.js';
 import { CarrotDebug } from './debugger.js';
 import { EXTENSION_NAME } from './carrot-state.js';
 
@@ -85,9 +86,16 @@ export class CarrotPackManager {
             this.rateLimitInfo.remaining = this.rateLimitInfo.limit; // Assume reset
         }
 
-        // If we're close to the limit, wait
+        // If we're close to the limit, wait — but only briefly. GitHub's
+        // unauthenticated limit resets hourly; silently sleeping until then made
+        // the scan appear to hang for up to 60 minutes with no user feedback.
         if (this.rateLimitInfo.remaining <= 5) {
             const waitTime = Math.max(0, this.rateLimitInfo.resetTime - now);
+            const MAX_WAIT_MS = 30000;
+            if (waitTime > MAX_WAIT_MS) {
+                const minutes = Math.ceil(waitTime / 60000);
+                throw new Error(`GitHub API rate limit reached — try again in ~${minutes} minute${minutes === 1 ? '' : 's'}`);
+            }
             if (waitTime > 0) {
                 CarrotDebug.repo(`⏳ Rate limit approaching, waiting ${Math.ceil(waitTime/1000)}s...`);
                 await this.delay(waitTime);
@@ -433,12 +441,15 @@ export class CarrotPackManager {
             // Install as ST lorebook
             const filename = `${packInfo.displayName.replace(/[^a-zA-Z0-9]/g, '_')}.json`;
             
-            const saveResponse = await fetch('/api/worldinfo/import', {
+            // /api/worldinfo/import only accepts multipart file uploads; /edit accepts
+            // exactly the { name, data } JSON shape already built here, plus it needs
+            // the CSRF token that getRequestHeaders() supplies.
+            const saveResponse = await fetch('/api/worldinfo/edit', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: filename, data: packData })
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ name: filename.replace(/\.json$/i, ''), data: packData })
             });
-            
+
             if (!saveResponse.ok) {
                 throw new Error(`Failed to save lorebook: ${saveResponse.status}`);
             }
@@ -459,14 +470,12 @@ export class CarrotPackManager {
                 size: packInfo.size,
                 type: packInfo.type
             };
-            
+
             this.localPacks.set(packId, extension_settings[extensionName].installedPacks[packId]);
             saveSettingsDebounced();
-            
+
             // Refresh ST's lorebook list
-            if (typeof loadWorldInfoList === 'function') {
-                loadWorldInfoList();
-            }
+            await updateWorldInfoList();
 
             // Auto-scan newly installed pack for characters
             if (typeof window.CarrotKernel?.scanSelectedLorebooks === 'function') {
@@ -673,14 +682,14 @@ export class CarrotPackManager {
             // Install as native ST lorebook using ST's API
             const filename = `${packInfo.displayName.replace(/[^a-zA-Z0-9]/g, '_')}.json`;
             
-            // Use ST's native save lorebook functionality
-            const saveResponse = await fetch('/api/worldinfo/import', {
+            // Use ST's native save lorebook functionality. /api/worldinfo/import only
+            // accepts multipart file uploads; /edit accepts this { name, data } JSON
+            // body directly and just needs the CSRF token from getRequestHeaders().
+            const saveResponse = await fetch('/api/worldinfo/edit', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: getRequestHeaders(),
                 body: JSON.stringify({
-                    name: filename,
+                    name: filename.replace(/\.json$/i, ''),
                     data: packData
                 })
             });
@@ -709,14 +718,12 @@ export class CarrotPackManager {
             };
             
             this.localPacks.set(packName, extension_settings[extensionName].installedPacks[packName]);
-            
+
             // Save settings
             saveSettingsDebounced();
-            
+
             // Refresh ST's lorebook list
-            if (typeof loadWorldInfoList === 'function') {
-                loadWorldInfoList();
-            }
+            await updateWorldInfoList();
 
             // Auto-scan newly installed pack for characters
             if (typeof window.CarrotKernel?.scanSelectedLorebooks === 'function') {
@@ -779,7 +786,7 @@ export class CarrotPackManager {
             extendedTimeOut: 0,
             closeButton: true,
             onclick: () => {
-                this.openPackManager();
+                window.CarrotKernel?.openPackManager();
             }
         });
     }
@@ -841,36 +848,34 @@ export class CarrotPackManager {
             
             const packData = await response.json();
             
-            // Update the lorebook file using ST's API
-            const updateResponse = await fetch('/api/worldinfo/import', {
+            // Update the lorebook file using ST's API. /api/worldinfo/import only
+            // accepts multipart file uploads; /edit accepts this JSON body directly
+            // (it always overwrites by filename — there's no server-side "overwrite"
+            // flag to pass) and needs the CSRF token from getRequestHeaders().
+            const updateResponse = await fetch('/api/worldinfo/edit', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: getRequestHeaders(),
                 body: JSON.stringify({
-                    name: localPack.filename,
-                    data: packData,
-                    overwrite: true
+                    name: String(localPack.filename).replace(/\.json$/i, ''),
+                    data: packData
                 })
             });
-            
+
             if (!updateResponse.ok) {
                 throw new Error(`Failed to update lorebook: ${updateResponse.status}`);
             }
-            
+
             // Update our metadata
             localPack.version = remotePack.lastModified;
             localPack.updatedDate = Date.now();
             localPack.updateAvailable = false;
             delete localPack.newVersion;
-            
+
             extension_settings[extensionName].installedPacks[packName] = localPack;
             saveSettingsDebounced();
-            
+
             // Refresh ST's lorebook list
-            if (typeof loadWorldInfoList === 'function') {
-                loadWorldInfoList();
-            }
+            await updateWorldInfoList();
             
             CarrotDebug.repo(`✅ Pack updated successfully: ${localPack.displayName}`);
             return true;
@@ -922,16 +927,17 @@ export class CarrotPackManager {
     // Load locally installed packs
     loadLocalPacks() {
         const settings = extension_settings[extensionName] || {};
-        const packs = settings.packs || {};
-        
+        // Every install path writes to installedPacks (and never sets an `installed`
+        // flag) — this used to read the never-written `packs` key, so installed
+        // packs were forgotten on every page load.
+        const packs = settings.installedPacks || {};
+
         this.localPacks.clear();
-        
+
         for (const [packName, packData] of Object.entries(packs)) {
-            if (packData.installed) {
-                this.localPacks.set(packName, packData);
-            }
+            this.localPacks.set(packName, packData);
         }
-        
+
         CarrotDebug.repo(`📁 Loaded ${this.localPacks.size} local packs`);
     }
 }
