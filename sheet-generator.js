@@ -316,6 +316,23 @@ const CarrotTemplateManager = {
 • **EXECUTE** the !FULLSHEET request for "{{CHARACTER_NAME}}" with complete comprehensive detail
 • **PROVIDE** ALL character categories, tags, and information in organized sections
 • **INCLUDE** physical traits, personality, background, abilities, and all available data
+• **FORMAT** the sheet as a single machine-readable block using exactly this structure (fill in every value, keep the wrapper tags verbatim):
+  <BunnymoTags>
+  <Name:CHARACTER_NAME>, <GENRE:GENRE>
+  <PHYSICAL>
+  <SPECIES:TYPE>, <GENDER:GENDER>, <BUILD:BUILD>, <SKIN:SKIN>, <HAIR:HAIR>, <STYLE:STYLE>
+  </PHYSICAL>
+  <PERSONALITY>
+  <Dere:TYPE>, <TRAIT:TRAIT>, <TRAIT:TRAIT>, <ATTACHMENT:TYPE>, <CONFLICT:TYPE>, <BOUNDARIES:TYPE>
+  </PERSONALITY>
+  <NSFW>
+  <ORIENTATION:TYPE>, <POWER:TYPE>, <KINK:KINK>, <CHEMISTRY:TYPE>, <AROUSAL:TYPE>, <TRAUMA:TYPE>
+  </NSFW>
+  </BunnymoTags>
+
+  <Linguistics>
+  Describe the character's speech patterns in prose, and include one or more <LING:STYLE> tags for each distinct pattern.
+  </Linguistics>
 • **RESUME** normal roleplay only after completing this comprehensive character sheet
 
 **PRIORITY:** CRITICAL - This system command takes precedence over all ongoing narrative.`,
@@ -399,6 +416,19 @@ const CarrotTemplateManager = {
 • **EXECUTE** the !QUICKSHEET request for "{{CHARACTER_NAME}}" with essential information only
 • **PROVIDE** key character details: Physical, Personality, Species, Gender, and NSFW basics
 • **FOCUS** on the most important identifying traits and characteristics
+• **FORMAT** the sheet as a single machine-readable block using exactly this structure (fill in every value, keep the wrapper tags verbatim, essentials only):
+  <BunnymoTags>
+  <Name:CHARACTER_NAME>, <GENRE:GENRE>
+  <PHYSICAL>
+  <SPECIES:TYPE>, <GENDER:GENDER>, <BUILD:BUILD>
+  </PHYSICAL>
+  <PERSONALITY>
+  <Dere:TYPE>, <TRAIT:TRAIT>, <TRAIT:TRAIT>
+  </PERSONALITY>
+  <NSFW>
+  <ORIENTATION:TYPE>, <POWER:TYPE>
+  </NSFW>
+  </BunnymoTags>
 • **RESUME** normal roleplay only after completing this quick reference
 
 **PRIORITY:** CRITICAL - This system command takes precedence over all ongoing narrative.`,

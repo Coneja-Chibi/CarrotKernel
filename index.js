@@ -792,7 +792,9 @@ function extractBunnyMoCharacters(entry, lorebookName) {
     const entryKey = entry.key || entry.keys || entry.comment || 'unknown';
 
     // Look for <BunnymoTags> blocks (character sheets)
-    const bunnyMoMatches = content.match(/<BunnymoTags>(.*?)<\/BunnymoTags>/gs);
+    // Case-insensitive: lorebooks in the wild use both <BunnymoTags> and <BunnyMoTags>
+    // (see the same fix already applied in the injection-detection path below).
+    const bunnyMoMatches = content.match(/<BunnymoTags>(.*?)<\/BunnymoTags>/gis);
 
     if (!bunnyMoMatches) {
         // No BunnymoTags block - silently skip, this entry is for other purposes
@@ -800,7 +802,7 @@ function extractBunnyMoCharacters(entry, lorebookName) {
     }
 
     bunnyMoMatches.forEach((match, index) => {
-        const tagContent = match.replace(/<\/?BunnymoTags>/g, '');
+        const tagContent = match.replace(/<\/?BunnymoTags>/gi, '');
         const result = parseBunnyMoTagBlock(tagContent, lorebookName, entryKey);
 
         if (result.success) {
@@ -6865,7 +6867,6 @@ function registerEventListeners() {
 
     // 3. WORLD_INFO_ACTIVATED listener - Process activated entries and populate scannedCharacters
     if (!window.CARROT_WORLDINFO_LISTENER_REGISTERED) {
-        // Wrapper function that checks for sheet commands first, then processes normal entries
         carrotEventHandlers.worldInfoActivated = async function(entryList) {
             console.log('🌍 WORLD_INFO_ACTIVATED EVENT START');
             console.log('🌍 entryList:', entryList);
@@ -6879,73 +6880,13 @@ function registerEventListeners() {
                 return;
             }
 
-            // Get the most recent user message to check what command they actually typed
-            const context = getContext();
-            const lastMessage = context?.chat?.[context.chat.length - 1];
-            const lastMessageText = lastMessage?.mes || '';
-
-            // Check what sheet command was in the user's message (if any)
-            let commandFromMessage = null;
-            const commandPatterns = [
-                { command: '!updatesheet', type: 'updatesheet' },  // Check longest first
-                { command: '!quicksheet', type: 'quicksheet' },
-                { command: '!fullsheet', type: 'fullsheet' },
-                { command: '!tagsheet', type: 'tagsheet' },
-                { command: '!memsheet', type: 'memsheet' },
-                { command: '!physheet', type: 'physheet' }
-            ];
-
-            for (const { command, type } of commandPatterns) {
-                if (lastMessageText.toLowerCase().includes(command)) {
-                    commandFromMessage = type;
-                    CarrotDebug.inject(`Detected ${command} in user message`);
-                    break;
-                }
-            }
-
-            // If a sheet command was found in the message, process it
-            if (commandFromMessage) {
-                // Find the matching sheet command entry
-                const sheetCommandEntry = entryList.find(entry => {
-                    const key = entry.key || entry.keys || entry.title || entry.comment || '';
-                    const keyStr = (typeof key === 'string') ? key.toLowerCase() :
-                                  (Array.isArray(key)) ? key.join(' ').toLowerCase() :
-                                  String(key).toLowerCase();
-
-                    // Match the specific command found in the message
-                    return keyStr && keyStr.includes(`!${commandFromMessage}`);
-                });
-
-                if (sheetCommandEntry) {
-                    CarrotDebug.inject('Sheet command entry detected:', {
-                        type: commandFromMessage,
-                        entry: sheetCommandEntry
-                    });
-
-                    // Process the sheet command
-                    const pendingCommand = {
-                        type: commandFromMessage,
-                        entry: sheetCommandEntry
-                    };
-
-                    try {
-                        const success = await processSheetCommand(pendingCommand);
-                        if (success) {
-                            CarrotDebug.inject('✅ Sheet command processed successfully', pendingCommand);
-                        } else {
-                            CarrotDebug.error('❌ Sheet command processing failed', pendingCommand);
-                        }
-                    } catch (error) {
-                        CarrotDebug.error('❌ Error processing sheet command:', error);
-                    }
-
-                    // Skip normal character processing when sheet command is executed
-                    CarrotDebug.inject('Sheet command executed, skipping normal processing');
-                    return;
-                }
-            }
-
-            // No sheet command found, proceed with normal processing
+            // Sheet commands (!fullsheet etc.) used to be detected here, gated on a
+            // matching World Info entry being present in entryList. That can't work:
+            // ST only emits WORLD_INFO_ACTIVATED when at least one WI entry actually
+            // matched (see getWorldInfoPrompt in world-info.js), so a plain
+            // "!fullsheet Alice" with no other lorebook keywords in the message never
+            // reached this code at all. Detection now lives in the MESSAGE_SENT
+            // listener below, which always fires on every user message.
             console.log('🌍 Processing normal lorebook entries...');
             await processActivatedLorebookEntries(entryList);
             console.log('🌍 WORLD_INFO_ACTIVATED EVENT COMPLETE');
@@ -6955,7 +6896,64 @@ function registerEventListeners() {
         // Register the handler
         eventSource.on(event_types.WORLD_INFO_ACTIVATED, carrotEventHandlers.worldInfoActivated);
         window.CARROT_WORLDINFO_LISTENER_REGISTERED = true;
-        CarrotDebug.init('✓ WORLD_INFO_ACTIVATED listener registered (with sheet command detection)');
+        CarrotDebug.init('✓ WORLD_INFO_ACTIVATED listener registered');
+    }
+
+    // 3b. MESSAGE_SENT listener - Detect sheet commands (!fullsheet, !tagsheet, etc.)
+    // directly from the message the user just sent. Unlike WORLD_INFO_ACTIVATED,
+    // MESSAGE_SENT fires unconditionally on every user message (see sendMessageAsUser
+    // in script.js), so this is the correct place to catch a typed command that has
+    // no other lorebook keyword riding along with it.
+    if (!window.CARROT_SHEET_COMMAND_LISTENER_REGISTERED) {
+        carrotEventHandlers.messageSentSheetCommand = async function(messageId) {
+            const settings = extension_settings[extensionName];
+            if (!settings?.enabled) {
+                return;
+            }
+
+            const sentMessage = chat[messageId];
+            const messageText = sentMessage?.mes || '';
+
+            const commandPatterns = [
+                { command: '!updatesheet', type: 'updatesheet' },  // Check longest first
+                { command: '!quicksheet', type: 'quicksheet' },
+                { command: '!fullsheet', type: 'fullsheet' },
+                { command: '!tagsheet', type: 'tagsheet' },
+                { command: '!memsheet', type: 'memsheet' },
+                { command: '!physheet', type: 'physheet' }
+            ];
+
+            let commandFromMessage = null;
+            for (const { command, type } of commandPatterns) {
+                if (messageText.toLowerCase().includes(command)) {
+                    commandFromMessage = type;
+                    CarrotDebug.inject(`Detected ${command} in user message`);
+                    break;
+                }
+            }
+
+            if (!commandFromMessage) {
+                return;
+            }
+
+            // processSheetCommand only uses `type` - it picks an injection template
+            // and runs /inject; it never reads an `entry`, so no WI entry lookup is
+            // needed to act on a typed command.
+            try {
+                const success = await processSheetCommand({ type: commandFromMessage });
+                if (success) {
+                    CarrotDebug.inject('✅ Sheet command processed successfully', { type: commandFromMessage });
+                } else {
+                    CarrotDebug.error('❌ Sheet command processing failed', { type: commandFromMessage });
+                }
+            } catch (error) {
+                CarrotDebug.error('❌ Error processing sheet command:', error);
+            }
+        };
+
+        eventSource.on(event_types.MESSAGE_SENT, carrotEventHandlers.messageSentSheetCommand);
+        window.CARROT_SHEET_COMMAND_LISTENER_REGISTERED = true;
+        CarrotDebug.init('✓ MESSAGE_SENT sheet-command listener registered');
     }
 
     // NOTE: MESSAGE_DELETED and MESSAGE_SWIPED handlers removed
